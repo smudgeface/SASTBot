@@ -146,7 +146,6 @@ export default function ScansPage() {
                 <TableHead>Trigger</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead>Duration</TableHead>
-                <TableHead>Error</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -181,9 +180,6 @@ export default function ScansPage() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {formatDuration(scan.started_at, scan.finished_at)}
-                  </TableCell>
-                  <TableCell className="text-destructive text-xs">
-                    {scan.error ?? ""}
                   </TableCell>
                 </TableRow>
               ))}
