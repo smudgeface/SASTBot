@@ -94,5 +94,28 @@ GitHub repo creation (`smudgeface/SASTBot`) and first deploy to Dokploy. Build-s
 **Outstanding for M2 close**
 Configuring the Dokploy application itself (Compose app pointing at `smudgeface/SASTBot`, env var wiring for `MASTER_KEY`, webhook ID copied into `~/.../DEPLOY_HOMELAB.md`) is a user-side step. Once the webhook is set, `DOKPLOY_WEBHOOK_URL=... python -m scripts.deploy` is the full deploy workflow.
 
+**Next — M2.5 (below), then M3**
+
+---
+
+## M2.5 — Git auth for real + cache controls + credential UX (2026-04-22)
+
+**Context**
+Review of M2 flagged two gaps before M3 could build on top: (a) credentials were storage-shaped as `{kind, label, value}` regardless of kind — good enough for HTTPS tokens, broken for HTTPS basic (needs username+password) and SSH (needs private key + optional passphrase + known_hosts); (b) the Credentials admin page was list-and-delete only — no standalone create, rename, rotate, or "Used by" visibility. On top of that, the user asked for an opt-in "retain clone between scans" feature to trade disk for scan speed on big repos, with a manual purge escape hatch.
+
+**What shipped**
+- **Kind-aware credentials (backend).** Zod discriminated union on `kind` with five shapes; `credentials.metadata` JSONB column for non-secret kind-specific fields (username for https_basic, known_hosts for ssh_key). Secrets go through AES-GCM as before; ssh_key secrets (private key + optional passphrase) are JSON-wrapped before encryption so the plaintext column always holds just bytes.
+- **Credential routes.** `POST /admin/credentials` (standalone create), `PATCH /admin/credentials/:id` (rename label), `POST /admin/credentials/:id/rotate` (replace secret value, preserving id so all references stay linked), and `GET /admin/credentials` now returns per-row `references` (repos + settings) + `reference_count` so the UI can show "Used by" and disable Delete when in use.
+- **Credentials UI.** Rebuilt the page: standalone "+ Add credential" button (kind-aware form), per-row menu with Rename / Rotate / Delete, "Used by" column with repo-name badges, metadata surfaced (`user: alice` shown under label for https_basic; "host-key pinned" for ssh_key). A shared `CredentialFormFields` component is reused by the Repos dialog so adding a new credential inline when registering a repo works for all three git-auth kinds.
+- **Git clone service.** `backend/src/services/gitClone.ts` shells out to `git` with standard env vars — `GIT_ASKPASS` for HTTPS kinds (helper script prints username/password on prompt), `GIT_SSH_COMMAND` with a tmp-file key + optional `UserKnownHostsFile` for ssh_key. Secrets never hit the URL or command line. The Dockerfile picked up `git` and `openssh-client`.
+- **Retain-clone cache.** New `repos.retain_clone` (bool, default false) + `repos.last_cloned_at` (timestamp). New persistent volume `sastbot_repo_cache` mounted into both backend and worker at `/app/clones`. `services/repoCache.ts` runs `cloneOrRefresh`: with retain off, a fresh tmpdir clone per scan; with retain on, `git fetch --prune` + `git reset --hard origin/<branch>` against the cached working tree, falling back to a fresh clone on corruption. Worker now actually invokes this instead of the sleep stub — scan pipeline is end-to-end against real git remotes. "Retain the clone between scans" checkbox on the repo form; "Purge cache" row action that's disabled until a cached copy exists. `POST /admin/repos/:id/purge-cache` nukes the directory + clears `last_cloned_at`.
+- **Integration test.** `scripts/integration_gitea.py` brings up a Gitea container (via `docker/compose/docker-compose.gitea.yml` overlay), provisions an admin user + token + SSH key + three sample repos, then drives the SASTBot API to create one credential of each kind, register one repo per credential, trigger a scan, and assert all three finish as `success`. Proves all three auth methods actually clone against a real git server — not just against `file://`. Runs on demand: `python -m scripts.integration_gitea` (not in the default CI lane).
+
+**What we learned**
+- The Gitea image ships with its own OpenSSH daemon bound to port 22 for git-over-SSH; enabling Gitea's *embedded* Go SSH server on the same port crashes the container with `bind: address already in use`. Leaving the embedded one off and relying on the built-in SSH daemon is the right default.
+- Prisma's discriminated-union validator works as expected; the trickier part was matching TypeScript narrowing — the spread-to-narrow trick doesn't preserve the discriminant, so the service's `encodeSecret` takes the plain union instead of a manually-widened one.
+- SSH passphrase-protected keys would need ssh-agent or `SSH_ASKPASS` to auto-unlock. M2.5 explicitly rejects them with a clear error message rather than failing mysteriously; real support lands with M3 or later.
+- SASTBot's unique `(org_id, url)` constraint on repos means integration tests have to provision one upstream repo per credential kind, rather than pointing three SASTBot repos at the same URL.
+
 **Next — M3: SCA vertical slice**
-Real git clone using the stored credentials. cdxgen (Node, in-process) produces a CycloneDX 1.7 SBOM. Persist components + versions + PURLs + licenses. Call OSV.dev for CVE matches. Findings UI (list + detail). SBOM download as JSON. Verify against a repo with known-vulnerable deps.
+Real git clone using the stored credentials (now live — M3 will consume the cached working dir from `cloneOrRefresh`). cdxgen (Node, in-process) produces a CycloneDX 1.7 SBOM. Persist components + versions + PURLs + licenses. Call OSV.dev for CVE matches. Findings UI (list + detail). SBOM download as JSON. Verify against a repo with known-vulnerable deps.
