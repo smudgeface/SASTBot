@@ -1,0 +1,58 @@
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node / Frontend
+node_modules/
+.pnpm-store/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docker / local volumes
+docker/compose/volumes/
+
+# Logs
+*.log
+logs/
+
+# Generated types (kept committed for reviewability; uncomment to skip)
+# frontend/src/api/schema.d.ts
+
+# Runtime clone cache (future, worker repo clones)
+.sastbot-clones/
+
+# Personal / homelab-specific docs that shouldn't leak to work repo
+docs/DEPLOY_HOMELAB.md
+
+# Personal screenshots + original brief — local reference only, not part of the public repo
+Screencaps/
+SASTBot Initial Prompt.txt

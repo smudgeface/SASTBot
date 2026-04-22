@@ -1,0 +1,144 @@
+// SASTBot Prisma schema.
+// Models mirror the Python/SQLAlchemy M1 design so the API contract stays
+// identical for the existing React frontend.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Org {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  users       User[]
+  repos       Repo[]
+  credentials Credential[]
+  scanRuns    ScanRun[]
+  appSettings AppSettings[]
+
+  @@map("orgs")
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  orgId        String?   @map("org_id") @db.Uuid
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         String // "admin" | "user"
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
+
+  org      Org?      @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  sessions Session[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  userAgent String?  @map("user_agent")
+  ipAddress String?  @map("ip_address")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Credential {
+  id         String   @id @default(uuid()) @db.Uuid
+  orgId      String?  @map("org_id") @db.Uuid
+  kind       String
+  label      String
+  ciphertext Bytes
+  nonce      Bytes
+  tag        Bytes // GCM auth tag (stored separately; see security/crypto.ts)
+  keyVersion Int      @default(1) @map("key_version")
+  createdBy  String?  @map("created_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  org          Org?          @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  reposUsing   Repo[]        @relation("RepoCredential")
+  jiraSettings AppSettings[] @relation("JiraCredential")
+  llmSettings  AppSettings[] @relation("LlmCredential")
+
+  @@map("credentials")
+}
+
+model Repo {
+  id            String   @id @default(uuid()) @db.Uuid
+  orgId         String?  @map("org_id") @db.Uuid
+  name          String
+  url           String
+  protocol      String // "ssh" | "https"
+  credentialId  String?  @map("credential_id") @db.Uuid
+  defaultBranch String   @default("main") @map("default_branch")
+  scanPaths     Json     @default("[\"/\"]") @map("scan_paths")
+  analysisTypes Json     @default("[\"sca\"]") @map("analysis_types")
+  scheduleCron  String?  @map("schedule_cron")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  credential Credential? @relation("RepoCredential", fields: [credentialId], references: [id], onDelete: SetNull)
+  scanRuns   ScanRun[]
+
+  @@unique([orgId, url], name: "uq_repos_org_url")
+  @@map("repos")
+}
+
+model AppSettings {
+  id               String   @id @default(uuid()) @db.Uuid
+  orgId            String?  @unique @map("org_id") @db.Uuid
+  jiraBaseUrl      String?  @map("jira_base_url")
+  jiraCredentialId String?  @map("jira_credential_id") @db.Uuid
+  llmBaseUrl       String?  @map("llm_base_url")
+  llmApiFormat     String?  @map("llm_api_format")
+  llmModel         String?  @map("llm_model")
+  llmCredentialId  String?  @map("llm_credential_id") @db.Uuid
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org            Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  jiraCredential Credential? @relation("JiraCredential", fields: [jiraCredentialId], references: [id], onDelete: SetNull)
+  llmCredential  Credential? @relation("LlmCredential", fields: [llmCredentialId], references: [id], onDelete: SetNull)
+
+  @@map("app_settings")
+}
+
+model ScanRun {
+  id                String    @id @default(uuid()) @db.Uuid
+  orgId             String?   @map("org_id") @db.Uuid
+  repoId            String    @map("repo_id") @db.Uuid
+  status            String // "pending" | "running" | "success" | "failed"
+  triggeredBy       String    @map("triggered_by") // "user" | "api" | "schedule"
+  triggeredByUserId String?   @map("triggered_by_user_id") @db.Uuid
+  startedAt         DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt        DateTime? @map("finished_at") @db.Timestamptz(6)
+  error             String?
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  org  Org? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@map("scan_runs")
+}
+
+model Canary {
+  id         String @id @default(uuid()) @db.Uuid
+  ciphertext Bytes
+  nonce      Bytes
+  tag        Bytes
+  keyVersion Int    @default(1) @map("key_version")
+
+  @@map("encryption_canary")
+}
