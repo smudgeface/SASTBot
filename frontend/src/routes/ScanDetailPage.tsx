@@ -6,11 +6,12 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  FileCode2,
   Package,
   ShieldAlert,
 } from "lucide-react";
 
-import { useScanDetail, useScanFindings } from "@/api/queries/scans";
+import { useScanDetail, useScanFindings, useSbomJson } from "@/api/queries/scans";
 import { useRepos } from "@/api/queries/repos";
 import type { FindingSeverity, ScanFinding } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
@@ -158,11 +159,22 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
 // Page
 // ---------------------------------------------------------------------------
 
+function downloadBlob(text: string, filename: string) {
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function ScanDetailPage() {
   const { id } = useParams<{ id: string }>();
   const scan = useScanDetail(id);
   const findings = useScanFindings(id);
   const repos = useRepos();
+  const sbom = useSbomJson(id);
 
   const repoName = repos.data?.find((r) => r.id === scan.data?.repo_id)?.name;
   const sorted = sortFindings(findings.data ?? []);
@@ -212,11 +224,25 @@ export default function ScanDetailPage() {
           </p>
         </div>
         {isTerminal && s.status === "success" ? (
-          <Button asChild variant="outline" size="sm" className="gap-1.5">
-            <a href={`/scans/${id}/sbom`} download>
+          <div className="flex gap-2">
+            <Button asChild variant="outline" size="sm" className="gap-1.5">
+              <Link to={`/scans/${id}/sbom`}>
+                <FileCode2 className="h-4 w-4" /> View SBOM
+              </Link>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={!sbom.data}
+              onClick={() => {
+                const repoName = repos.data?.find((r) => r.id === s.repo_id)?.name ?? "scan";
+                downloadBlob(sbom.data!, `sbom-${repoName}-${(id ?? "").slice(0, 8)}.cdx.json`);
+              }}
+            >
               <Download className="h-4 w-4" /> Download SBOM
-            </a>
-          </Button>
+            </Button>
+          </div>
         ) : null}
       </div>
 

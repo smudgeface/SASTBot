@@ -135,10 +135,11 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const filename = `sbom-${(run.repo as { name: string }).name}-${params.id.slice(0, 8)}.cdx.json`;
+      const pretty = JSON.stringify(run.sbomJson, null, 2);
       return reply
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/json; charset=utf-8")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
-        .send(run.sbomJson);
+        .send(pretty);
     },
   );
 
