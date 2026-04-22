@@ -200,19 +200,24 @@ model SbomComponent {
 }
 
 model ScanFinding {
-  id                String   @id @default(uuid()) @db.Uuid
-  scanRunId         String   @map("scan_run_id") @db.Uuid
-  componentId       String   @map("component_id") @db.Uuid
-  osvId             String   @map("osv_id")
-  cveId             String?  @map("cve_id")
-  severity          String   @default("unknown")
-  cvssScore         Float?   @map("cvss_score")
-  cvssVector        String?  @map("cvss_vector")
+  id                String    @id @default(uuid()) @db.Uuid
+  scanRunId         String    @map("scan_run_id") @db.Uuid
+  componentId       String    @map("component_id") @db.Uuid
+  // "cve" for OSV/NVD findings; "deprecated" for npm deprecated flag;
+  // "eol" for endoflife.date cycle findings.
+  findingType       String    @default("cve") @map("finding_type")
+  osvId             String    @map("osv_id")
+  cveId             String?   @map("cve_id")
+  severity          String    @default("unknown")
+  cvssScore         Float?    @map("cvss_score")
+  cvssVector        String?   @map("cvss_vector")
   summary           String?
   aliases           String[]
-  activelyExploited Boolean  @default(false) @map("actively_exploited")
-  detailJson        Json?    @map("detail_json")
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  activelyExploited Boolean   @default(false) @map("actively_exploited")
+  // ISO-8601 date when this component version reaches end-of-life (eol findings only).
+  eolDate           DateTime? @map("eol_date") @db.Timestamptz(6)
+  detailJson        Json?     @map("detail_json")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   scanRun   ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
   component SbomComponent @relation(fields: [componentId], references: [id], onDelete: Cascade)

@@ -329,12 +329,16 @@ export const SbomComponentOutSchema = z.object({
 });
 export type SbomComponentOut = z.infer<typeof SbomComponentOutSchema>;
 
+export const FindingTypeSchema = z.enum(["cve", "eol", "deprecated"]);
+export type FindingType = z.infer<typeof FindingTypeSchema>;
+
 export const ScanFindingOutSchema = z.object({
   id: UuidSchema,
   scan_run_id: UuidSchema,
   component_id: UuidSchema,
   component_name: z.string(),
   component_version: z.string().nullable(),
+  finding_type: FindingTypeSchema,
   osv_id: z.string(),
   cve_id: z.string().nullable(),
   severity: SeveritySchema,
@@ -343,6 +347,7 @@ export const ScanFindingOutSchema = z.object({
   summary: z.string().nullable(),
   aliases: z.array(z.string()),
   actively_exploited: z.boolean(),
+  eol_date: IsoDateTimeSchema.nullable(),
   created_at: IsoDateTimeSchema,
 });
 export type ScanFindingOut = z.infer<typeof ScanFindingOutSchema>;

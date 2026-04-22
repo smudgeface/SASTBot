@@ -13,6 +13,7 @@ import type {
   AppSettingsOut,
   CredentialOut,
   CredentialReferences,
+  FindingType,
   RepoOut,
   SbomComponentOut,
   ScanFindingOut,
@@ -217,6 +218,14 @@ export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
   };
 }
 
+const ALLOWED_FINDING_TYPES: ReadonlyArray<FindingType> = ["cve", "eol", "deprecated"];
+
+function toFindingType(value: string): FindingType {
+  return (ALLOWED_FINDING_TYPES as ReadonlyArray<string>).includes(value)
+    ? (value as FindingType)
+    : "cve";
+}
+
 export function scanFindingToOut(
   f: ScanFinding & { component: Pick<SbomComponent, "name" | "version"> },
 ): ScanFindingOut {
@@ -226,6 +235,7 @@ export function scanFindingToOut(
     component_id: f.componentId,
     component_name: f.component.name,
     component_version: f.component.version,
+    finding_type: toFindingType(f.findingType),
     osv_id: f.osvId,
     cve_id: f.cveId,
     severity: toSeverity(f.severity),
@@ -234,6 +244,7 @@ export function scanFindingToOut(
     summary: f.summary,
     aliases: f.aliases,
     actively_exploited: f.activelyExploited,
+    eol_date: f.eolDate ? f.eolDate.toISOString() : null,
     created_at: f.createdAt.toISOString(),
   };
 }

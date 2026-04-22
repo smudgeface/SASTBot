@@ -11,6 +11,7 @@ import { SCAN_QUEUE_NAME, type ScanJobData } from "./queue/scanQueue.js";
 import { cloneOrRefresh } from "./services/repoCache.js";
 import { persistComponents, runCdxgen } from "./services/sbomService.js";
 import { queryAndPersistFindings } from "./services/osvService.js";
+import { checkAndPersistEolFindings } from "./services/eolService.js";
 
 const config = loadConfig();
 const logger = pino({ level: config.logLevel, name: "sastbot-worker" });
@@ -81,10 +82,17 @@ const worker = new Worker<ScanJobData>(
 
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");
-      const findings = await queryAndPersistFindings(scanRunId, components, prisma);
-      log.info({ findings: findings.length }, "[worker] findings persisted");
+      const cveFindings = await queryAndPersistFindings(scanRunId, components, prisma);
+      log.info({ findings: cveFindings.length }, "[worker] CVE findings persisted");
 
-      // ── Step 5: update severity summary counters ─────────────────────────
+      // ── Step 5: EOL / deprecation check ─────────────────────────────────
+      log.info("[worker] checking EOL / deprecation");
+      const eolFindings = await checkAndPersistEolFindings(scanRunId, components, prisma);
+      log.info({ eolFindings: eolFindings.length }, "[worker] EOL findings persisted");
+
+      const findings = [...cveFindings, ...eolFindings];
+
+      // ── Step 6: update severity summary counters ─────────────────────────
       const counts = { critical: 0, high: 0, medium: 0, low: 0 };
       for (const f of findings) {
         if (f.severity === "critical") counts.critical++;
