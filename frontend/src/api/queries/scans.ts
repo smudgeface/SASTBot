@@ -23,6 +23,19 @@ export function useScans() {
   });
 }
 
+export function useSbomJson(scanId: string | undefined) {
+  return useQuery<string>({
+    queryKey: [...scansKey, scanId, "sbom"],
+    queryFn: async () => {
+      // apiFetch parses the JSON body; re-stringify pretty-printed for the editor.
+      const data = await apiFetch<unknown>(`/scans/${scanId}/sbom`);
+      return JSON.stringify(data, null, 2);
+    },
+    enabled: !!scanId,
+    staleTime: Infinity, // SBOM for a completed scan never changes
+  });
+}
+
 export function useScanDetail(scanId: string | undefined) {
   return useQuery<Scan>({
     queryKey: [...scansKey, scanId],
