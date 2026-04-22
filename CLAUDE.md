@@ -160,6 +160,38 @@ docker compose -f docker/compose/docker-compose.yml down -v          # stop AND 
 - When running commands that touch Docker, use `docker compose -f docker/compose/docker-compose.yml …` — there's no compose file at the repo root by design.
 - The `backend/` and `worker` compose services share the same image; they differ only by `command`.
 
+### Model selection and context management
+
+SASTBot is a long-running project. Use Claude models deliberately to keep costs reasonable.
+
+**Model tiers:**
+
+| Model | When to use |
+|-------|-------------|
+| **Opus** | Architecture decisions, milestone planning, novel debugging, security-sensitive code review, the first pass on a milestone where choices compound. Use it for judgment, not bulk. |
+| **Sonnet** | The default for implementation work once direction is set: writing routes, services, Zod schemas, UI forms, wiring tests. ~5× cheaper than Opus with equivalent coding quality. |
+| **Haiku** | Trivial edits, renames, doc tweaks, running existing scripts, formatting. |
+
+Switch with `/model claude-sonnet-4-6` (or `haiku` / `opus`).
+
+**Rule of thumb:** when the conversation shifts from *"what should we do"* to *"do this"*, drop down a tier.
+
+**Sub-agents:** when spawning an `Agent`, pass `model: "sonnet"` explicitly unless the task is genuinely novel design — sub-agents otherwise inherit the parent's model and Opus sub-agents are expensive for mechanical work.
+
+**Context management — when to `/clear`:**
+
+- Clear at natural milestone boundaries (after a commit + push, once PROGRESS.md is updated).
+- Before clearing, ensure the next session can re-orient in ~3 tool calls: `git log --oneline -10`, `cat docs/PROGRESS.md`, check MEMORY.md.
+- Do **not** clear mid-debug or with uncommitted state.
+- After a clear, open on Sonnet; switch to Opus only for the plan phase.
+
+**Habits that keep costs low:**
+
+- Commit + push frequently. Every commit is a clean resumption point.
+- Keep `docs/PROGRESS.md` current — it is the written-down compression of context that survives a session clear.
+- Prefer `curl`-level verification over Chrome DevTools QA when there are no UI changes; snapshots and screenshots are token-heavy.
+- Avoid long pauses mid-session: the Anthropic prompt cache TTL is 5 minutes. A break under 5 min keeps the cache warm (cheap resume); over 5 min forces a full re-read.
+
 ## Environment variables
 
 See `.env.example` for the authoritative list. Required:
