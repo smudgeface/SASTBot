@@ -276,6 +276,9 @@ export const ScanRunOutSchema = z.object({
   id: UuidSchema,
   org_id: UuidSchema.nullable(),
   repo_id: UuidSchema,
+  scope_id: UuidSchema,
+  /** Relative path within the repo this scan targeted (e.g. "/" or "services/api"). */
+  scope_path: z.string(),
   status: ScanStatusSchema,
   triggered_by: ScanTriggeredBySchema,
   triggered_by_user_id: UuidSchema.nullable(),
@@ -292,6 +295,20 @@ export const ScanRunOutSchema = z.object({
 export type ScanRunOut = z.infer<typeof ScanRunOutSchema>;
 
 export const ScanRunListSchema = z.array(ScanRunOutSchema);
+
+// ---------------------------------------------------------------------------
+// ScanScope
+// ---------------------------------------------------------------------------
+
+export const ScanScopeOutSchema = z.object({
+  id: UuidSchema,
+  repo_id: UuidSchema,
+  path: z.string(),
+  display_name: z.string().nullable(),
+  is_active: z.boolean(),
+  created_at: IsoDateTimeSchema,
+});
+export type ScanScopeOut = z.infer<typeof ScanScopeOutSchema>;
 
 // ---------------------------------------------------------------------------
 // SCA — SBOM components and findings (M3)

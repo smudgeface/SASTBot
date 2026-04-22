@@ -193,6 +193,9 @@ export interface Scan {
   id: string;
   org_id: string | null;
   repo_id: string;
+  scope_id: string;
+  /** Relative path within the repo this scan targeted (e.g. "/" or "services/api"). */
+  scope_path: string;
   status: ScanStatus;
   triggered_by: ScanTrigger;
   triggered_by_user_id: string | null;

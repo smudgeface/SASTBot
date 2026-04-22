@@ -157,6 +157,11 @@ export default function ScansPage() {
                 >
                   <TableCell className="font-medium">
                     {repoNameById.get(scan.repo_id) ?? scan.repo_id}
+                    {scan.scope_path && scan.scope_path !== "/" ? (
+                      <span className="ml-1 text-xs text-muted-foreground font-mono">
+                        {scan.scope_path}
+                      </span>
+                    ) : null}
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={scan.status} />

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/api/client";
-import type { Scan, ScanFinding } from "@/api/types";
+import type { Scan, SbomComponent, ScanFinding } from "@/api/types";
 
 export const scansKey = ["scans"] as const;
 
@@ -20,6 +20,15 @@ export function useScans() {
       const live = data.some((s) => s.status === "pending" || s.status === "running");
       return live ? 2000 : false;
     },
+  });
+}
+
+export function useScanComponents(scanId: string | undefined) {
+  return useQuery<SbomComponent[]>({
+    queryKey: [...scansKey, scanId, "components"],
+    queryFn: () => apiFetch<SbomComponent[]>(`/scans/${scanId}/components`),
+    enabled: !!scanId,
+    staleTime: Infinity,
   });
 }
 
@@ -67,14 +76,13 @@ export function useScanFindings(
   });
 }
 
-/** Trigger a scan for a given repo. Backend returns the freshly-created
- *  scan_runs row (status "pending"); we invalidate the scans list so the
- *  UI picks it up immediately. */
+/** Trigger a scan for a given repo (one run per active scope).
+ *  Invalidates the scans list so the new pending rows appear immediately. */
 export function useTriggerScan() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (repoId: string) =>
-      apiFetch<Scan>(`/admin/repos/${repoId}/scan`, { method: "POST" }),
+      apiFetch<Scan[]>(`/admin/repos/${repoId}/scan`, { method: "POST" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: scansKey });
     },

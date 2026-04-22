@@ -6,6 +6,9 @@ export const SCAN_QUEUE_NAME = "scans";
 
 export interface ScanJobData {
   scanRunId: string;
+  scopeId: string;
+  /** Relative path within the repo clone to scan. "/" means root. */
+  scopePath: string;
 }
 
 let queue: Queue<ScanJobData> | null = null;
