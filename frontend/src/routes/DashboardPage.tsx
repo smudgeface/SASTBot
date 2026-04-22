@@ -1,11 +1,23 @@
 import { GitBranch, ShieldCheck, Zap } from "lucide-react";
 
 import { useRepos } from "@/api/queries/repos";
+import { useScans } from "@/api/queries/scans";
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export default function DashboardPage() {
   const repos = useRepos();
+  const scans = useScans();
+
   const repoCount = repos.data?.length ?? 0;
+
+  const scansThisWeek = (() => {
+    if (!scans.data) return null;
+    const cutoff = Date.now() - ONE_WEEK_MS;
+    return scans.data.filter((s) => new Date(s.created_at).getTime() >= cutoff).length;
+  })();
 
   return (
     <div className="space-y-6">
@@ -26,8 +38,8 @@ export default function DashboardPage() {
         <SummaryCard
           icon={Zap}
           title="Scans this week"
-          value="—"
-          hint="Available in M3"
+          value={scans.isLoading || scansThisWeek === null ? "—" : String(scansThisWeek)}
+          hint={scans.isError ? "Unable to load" : "In the last 7 days"}
         />
         <SummaryCard
           icon={ShieldCheck}

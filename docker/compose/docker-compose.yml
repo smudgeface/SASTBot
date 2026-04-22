@@ -64,9 +64,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # M1: `prisma db push` syncs the schema directly (no migration files committed yet).
-    # Switch to `prisma migrate deploy` once we capture the initial migration in M2.
-    command: ["sh", "-c", "pnpm prisma db push --accept-data-loss && pnpm dev"]
+    # Apply any committed Prisma migrations then start the dev server.
+    command: ["sh", "-c", "pnpm prisma migrate deploy && pnpm dev"]
     restart: unless-stopped
 
   worker:

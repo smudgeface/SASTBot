@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import { MoreHorizontal, Pencil, Play, Plus, Trash2 } from "lucide-react";
 
 import { useCredentials } from "@/api/queries/credentials";
 import { useCreateRepo, useDeleteRepo, useRepos, useUpdateRepo } from "@/api/queries/repos";
+import { useTriggerScan } from "@/api/queries/scans";
 import type { AnalysisType, Repo, RepoProtocol, RepoUpsertInput } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,11 +45,25 @@ import { useToast } from "@/components/ui/use-toast";
 export default function ReposPage() {
   const repos = useRepos();
   const deleteRepo = useDeleteRepo();
+  const triggerScan = useTriggerScan();
   const { toast } = useToast();
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Repo | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Repo | null>(null);
+
+  const onScanNow = async (repo: Repo) => {
+    try {
+      await triggerScan.mutateAsync(repo.id);
+      toast({ title: "Scan queued", description: repo.name });
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Failed to queue scan",
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  };
 
   const openCreate = () => {
     setEditing(null);
@@ -151,6 +166,9 @@ export default function ReposPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onSelect={() => onScanNow(repo)}>
+                          <Play className="h-4 w-4" /> Scan now
+                        </DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => openEdit(repo)}>
                           <Pencil className="h-4 w-4" /> Edit
                         </DropdownMenuItem>
