@@ -1,5 +1,6 @@
 import { FileSearch } from "lucide-react";
 import { useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useRepos } from "@/api/queries/repos";
 import { useScans } from "@/api/queries/scans";
@@ -15,6 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { severityChipClass } from "@/lib/format";
 
 const STATUS_STYLE: Record<ScanStatus, string> = {
   pending: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
@@ -28,6 +30,43 @@ function StatusBadge({ status }: { status: ScanStatus }) {
     <Badge variant="secondary" className={cn("uppercase", STATUS_STYLE[status])}>
       {status}
     </Badge>
+  );
+}
+
+function FindingsSummary({
+  critical,
+  high,
+  medium,
+  low,
+}: {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+}) {
+  const total = critical + high + medium + low;
+  if (total === 0) return <span className="text-muted-foreground text-xs">—</span>;
+
+  const chips: { label: string; count: number; sev: string }[] = [];
+  if (critical > 0) chips.push({ label: "C", count: critical, sev: "critical" });
+  if (high > 0) chips.push({ label: "H", count: high, sev: "high" });
+  if (medium > 0) chips.push({ label: "M", count: medium, sev: "medium" });
+  if (low > 0) chips.push({ label: "L", count: low, sev: "low" });
+
+  return (
+    <span className="inline-flex gap-1">
+      {chips.map(({ label, count, sev }) => (
+        <span
+          key={label}
+          className={cn(
+            "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold",
+            severityChipClass(sev),
+          )}
+        >
+          {label}:{count}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -48,10 +87,10 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
 }
 
 export default function ScansPage() {
+  const navigate = useNavigate();
   const scans = useScans();
   const repos = useRepos();
 
-  // Repo name lookup so the table reads nicely instead of UUIDs.
   const repoNameById = useMemo(() => {
     const m = new Map<string, string>();
     repos.data?.forEach((r) => m.set(r.id, r.name));
@@ -65,7 +104,7 @@ export default function ScansPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Scan Results</h1>
-        <p className="text-sm text-muted-foreground">All scans run across your repositories.</p>
+        <p className="text-sm text-muted-foreground">All scans run across your repositories. Click a row to view findings.</p>
       </div>
 
       {scans.isLoading ? (
@@ -95,6 +134,8 @@ export default function ScansPage() {
               <TableRow>
                 <TableHead>Repository</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Findings</TableHead>
+                <TableHead>Components</TableHead>
                 <TableHead>Trigger</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead>Duration</TableHead>
@@ -103,12 +144,27 @@ export default function ScansPage() {
             </TableHeader>
             <TableBody>
               {items.map((scan) => (
-                <TableRow key={scan.id}>
+                <TableRow
+                  key={scan.id}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => navigate(`/scans/${scan.id}`)}
+                >
                   <TableCell className="font-medium">
                     {repoNameById.get(scan.repo_id) ?? scan.repo_id}
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={scan.status} />
+                  </TableCell>
+                  <TableCell>
+                    <FindingsSummary
+                      critical={scan.critical_count}
+                      high={scan.high_count}
+                      medium={scan.medium_count}
+                      low={scan.low_count}
+                    />
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm">
+                    {scan.component_count > 0 ? scan.component_count : "—"}
                   </TableCell>
                   <TableCell className="text-muted-foreground uppercase text-xs">
                     {scan.triggered_by}

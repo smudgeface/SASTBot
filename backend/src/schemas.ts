@@ -61,10 +61,15 @@ export const LogoutOutSchema = z.object({ ok: z.boolean() });
 
 const NameSchema = z.string().min(1).max(255);
 
+/** Optional ISO-8601 expiry timestamp. When set, the UI surfaces it and
+ *  future automated rotation reminders can query for near-expiry rows. */
+const ExpiresAtSchema = z.string().datetime({ offset: true }).nullable().optional();
+
 export const HttpsTokenCreateSchema = z.object({
   kind: z.literal("https_token"),
   name: NameSchema,
   value: z.string().min(1),
+  expires_at: ExpiresAtSchema,
 });
 
 export const HttpsBasicCreateSchema = z.object({
@@ -72,6 +77,7 @@ export const HttpsBasicCreateSchema = z.object({
   name: NameSchema,
   username: z.string().min(1).max(255),
   password: z.string().min(1),
+  expires_at: ExpiresAtSchema,
 });
 
 export const SshKeyCreateSchema = z.object({
@@ -86,18 +92,21 @@ export const SshKeyCreateSchema = z.object({
    * host key. If omitted, the scan worker will auto-fetch and trust.
    */
   known_hosts: z.string().min(1).nullable().optional(),
+  expires_at: ExpiresAtSchema,
 });
 
 export const JiraTokenCreateSchema = z.object({
   kind: z.literal("jira_token"),
   name: NameSchema,
   value: z.string().min(1),
+  expires_at: ExpiresAtSchema,
 });
 
 export const LlmKeyCreateSchema = z.object({
   kind: z.literal("llm_api_key"),
   name: NameSchema,
   value: z.string().min(1),
+  expires_at: ExpiresAtSchema,
 });
 
 export const CredentialCreateSchema = z.discriminatedUnion("kind", [
@@ -125,9 +134,11 @@ export const CredentialRotateSchema = z.discriminatedUnion("kind", [
 export type CredentialRotate = z.infer<typeof CredentialRotateSchema>;
 
 /** Shape for renaming a credential (name-only edit — the secret value is
- *  immutable; use the rotate endpoint to replace it). */
+ *  immutable; use the rotate endpoint to replace it). Also accepts an
+ *  updated expiry date. */
 export const CredentialRenameSchema = z.object({
   name: NameSchema,
+  expires_at: ExpiresAtSchema,
 });
 export type CredentialRename = z.infer<typeof CredentialRenameSchema>;
 
@@ -157,6 +168,7 @@ export const CredentialOutSchema = z.object({
   metadata: CredentialMetadataSchema,
   references: CredentialReferencesSchema,
   reference_count: z.number().int().nonnegative(),
+  expires_at: IsoDateTimeSchema.nullable(),
   created_at: IsoDateTimeSchema,
 });
 export type CredentialOut = z.infer<typeof CredentialOutSchema>;
@@ -270,11 +282,60 @@ export const ScanRunOutSchema = z.object({
   started_at: IsoDateTimeSchema.nullable(),
   finished_at: IsoDateTimeSchema.nullable(),
   error: z.string().nullable(),
+  component_count: z.number().int().nonnegative(),
+  critical_count: z.number().int().nonnegative(),
+  high_count: z.number().int().nonnegative(),
+  medium_count: z.number().int().nonnegative(),
+  low_count: z.number().int().nonnegative(),
   created_at: IsoDateTimeSchema,
 });
 export type ScanRunOut = z.infer<typeof ScanRunOutSchema>;
 
 export const ScanRunListSchema = z.array(ScanRunOutSchema);
+
+// ---------------------------------------------------------------------------
+// SCA — SBOM components and findings (M3)
+// ---------------------------------------------------------------------------
+
+export const SeveritySchema = z.enum(["critical", "high", "medium", "low", "unknown"]);
+export type Severity = z.infer<typeof SeveritySchema>;
+
+export const SbomComponentOutSchema = z.object({
+  id: UuidSchema,
+  scan_run_id: UuidSchema,
+  name: z.string(),
+  version: z.string().nullable(),
+  purl: z.string(),
+  ecosystem: z.string().nullable(),
+  licenses: z.array(z.string()),
+  component_type: z.string(),
+});
+export type SbomComponentOut = z.infer<typeof SbomComponentOutSchema>;
+
+export const ScanFindingOutSchema = z.object({
+  id: UuidSchema,
+  scan_run_id: UuidSchema,
+  component_id: UuidSchema,
+  component_name: z.string(),
+  component_version: z.string().nullable(),
+  osv_id: z.string(),
+  cve_id: z.string().nullable(),
+  severity: SeveritySchema,
+  cvss_score: z.number().nullable(),
+  cvss_vector: z.string().nullable(),
+  summary: z.string().nullable(),
+  aliases: z.array(z.string()),
+  actively_exploited: z.boolean(),
+  created_at: IsoDateTimeSchema,
+});
+export type ScanFindingOut = z.infer<typeof ScanFindingOutSchema>;
+
+export const ScanFindingListSchema = z.array(ScanFindingOutSchema);
+
+export const FindingsQuerySchema = z.object({
+  severity: SeveritySchema.optional(),
+  package: z.string().optional(),
+});
 
 // ---------------------------------------------------------------------------
 // Common params

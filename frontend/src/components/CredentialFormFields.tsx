@@ -33,6 +33,7 @@ export interface CredentialFormState {
   private_key: string; // ssh_key
   passphrase: string; // ssh_key
   known_hosts: string; // ssh_key
+  expires_at: string; // ISO date string (YYYY-MM-DD) or empty string
 }
 
 export function emptyCredentialForm(kind: CredentialKind = "https_token"): CredentialFormState {
@@ -45,6 +46,7 @@ export function emptyCredentialForm(kind: CredentialKind = "https_token"): Crede
     private_key: "",
     passphrase: "",
     known_hosts: "",
+    expires_at: "",
   };
 }
 
@@ -56,13 +58,17 @@ export function buildCredentialCreate(
   const name = state.name.trim();
   if (!name) return { ok: false, error: "Name is required" };
 
+  const expires_at = state.expires_at
+    ? new Date(state.expires_at).toISOString()
+    : undefined;
+
   switch (state.kind) {
     case "https_token":
     case "jira_token":
     case "llm_api_key": {
       const value = state.value.trim();
       if (!value) return { ok: false, error: "Value is required" };
-      return { ok: true, input: { kind: state.kind, name, value } };
+      return { ok: true, input: { kind: state.kind, name, value, expires_at } };
     }
     case "https_basic": {
       const username = state.username.trim();
@@ -71,7 +77,7 @@ export function buildCredentialCreate(
       if (!password) return { ok: false, error: "Password is required" };
       return {
         ok: true,
-        input: { kind: "https_basic", name, username, password },
+        input: { kind: "https_basic", name, username, password, expires_at },
       };
     }
     case "ssh_key": {
@@ -85,6 +91,7 @@ export function buildCredentialCreate(
           private_key,
           passphrase: state.passphrase ? state.passphrase : null,
           known_hosts: state.known_hosts ? state.known_hosts : null,
+          expires_at,
         },
       };
     }
@@ -278,6 +285,22 @@ export function CredentialFormFields({
           />
         </div>
       ) : null}
+
+      <div className="space-y-1.5">
+        <Label htmlFor={`${idPrefix}-expires`}>
+          Expires <span className="text-muted-foreground font-normal">(optional)</span>
+        </Label>
+        <Input
+          id={`${idPrefix}-expires`}
+          type="date"
+          value={state.expires_at}
+          onChange={(e) => patch({ expires_at: e.target.value })}
+          className="w-48"
+        />
+        <p className="text-xs text-muted-foreground">
+          Set for rotation reminders. Leave blank for no expiry.
+        </p>
+      </div>
     </div>
   );
 }

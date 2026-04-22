@@ -59,6 +59,7 @@ export interface Credential {
   metadata: CredentialMetadata | null;
   references: CredentialReferences;
   reference_count: number;
+  expires_at: string | null;
   created_at: string;
 }
 
@@ -66,6 +67,7 @@ export interface Credential {
 
 interface NamedBase {
   name: string;
+  expires_at?: string | null;
 }
 
 export interface HttpsTokenCreate extends NamedBase {
@@ -197,5 +199,44 @@ export interface Scan {
   started_at: string | null;
   finished_at: string | null;
   error: string | null;
+  component_count: number;
+  critical_count: number;
+  high_count: number;
+  medium_count: number;
+  low_count: number;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// SCA — SBOM components and findings (M3)
+// ---------------------------------------------------------------------------
+
+export type FindingSeverity = "critical" | "high" | "medium" | "low" | "unknown";
+
+export interface SbomComponent {
+  id: string;
+  scan_run_id: string;
+  name: string;
+  version: string | null;
+  purl: string;
+  ecosystem: string | null;
+  licenses: string[];
+  component_type: string;
+}
+
+export interface ScanFinding {
+  id: string;
+  scan_run_id: string;
+  component_id: string;
+  component_name: string;
+  component_version: string | null;
+  osv_id: string;
+  cve_id: string | null;
+  severity: FindingSeverity;
+  cvss_score: number | null;
+  cvss_vector: string | null;
+  summary: string | null;
+  aliases: string[];
+  actively_exploited: boolean;
   created_at: string;
 }

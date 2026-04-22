@@ -44,7 +44,32 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
+import { cn } from "@/lib/utils";
 import { formatDate, truncate } from "@/lib/format";
+
+function ExpiresCell({ expiresAt }: { expiresAt: string | null }) {
+  if (!expiresAt) return <span className="text-xs text-muted-foreground">—</span>;
+  const msLeft = new Date(expiresAt).getTime() - Date.now();
+  const daysLeft = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+  const warning = daysLeft <= 30;
+  const expired = daysLeft <= 0;
+  return (
+    <span
+      className={cn(
+        "text-sm",
+        expired
+          ? "text-destructive font-medium"
+          : warning
+            ? "text-orange-600 dark:text-orange-400 font-medium"
+            : "text-muted-foreground",
+      )}
+      title={expiresAt}
+    >
+      {formatDate(expiresAt)}
+      {expired ? " (expired)" : warning ? ` (${daysLeft}d)` : ""}
+    </span>
+  );
+}
 
 export default function CredentialsPage() {
   const credentials = useCredentials();
@@ -97,6 +122,7 @@ export default function CredentialsPage() {
                 <TableHead>Name</TableHead>
                 <TableHead>Kind</TableHead>
                 <TableHead>Used by</TableHead>
+                <TableHead>Expires</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
@@ -126,6 +152,9 @@ export default function CredentialsPage() {
                   </TableCell>
                   <TableCell>
                     <UsedByCell refs={c.references} />
+                  </TableCell>
+                  <TableCell>
+                    <ExpiresCell expiresAt={c.expires_at} />
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {formatDate(c.created_at)}

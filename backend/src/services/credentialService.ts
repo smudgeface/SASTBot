@@ -170,6 +170,7 @@ export async function createCredential(
       tag: blob.tag,
       keyVersion: 1,
       metadata: encoded.metadata,
+      expiresAt: input.expires_at ? new Date(input.expires_at) : null,
       createdBy: createdBy ?? null,
     },
   });
@@ -200,13 +201,18 @@ export async function getCredential(
 export async function renameCredential(
   credentialId: string,
   orgId: string | null,
-  name: string,
+  body: { name: string; expires_at?: string | null },
   client: Tx = prisma,
 ): Promise<Credential> {
   await getCredential(credentialId, orgId, client);
   return client.credential.update({
     where: { id: credentialId },
-    data: { name },
+    data: {
+      name: body.name,
+      ...(body.expires_at !== undefined
+        ? { expiresAt: body.expires_at ? new Date(body.expires_at) : null }
+        : {}),
+    },
   });
 }
 
