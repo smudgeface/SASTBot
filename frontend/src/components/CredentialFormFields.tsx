@@ -16,17 +16,17 @@ import {
 
 /**
  * Local-first form state for building a CredentialCreateInput. Callers
- * store this object and pass it through `buildCreateInput()` on submit to
- * get a validated payload (or null when required fields are missing).
+ * store this object and pass it through `buildCredentialCreate()` on submit
+ * to get a validated payload (or null when required fields are missing).
  *
  * Why one flat state instead of per-kind discriminated state? In practice
  * users switch kind mid-edit (they picked wrong, want basic auth instead)
- * and we want to preserve any overlapping fields (label stays). Flat ==
+ * and we want to preserve any overlapping fields (name stays). Flat ==
  * fewer surprises.
  */
 export interface CredentialFormState {
   kind: CredentialKind;
-  label: string;
+  name: string;
   value: string; // used by https_token / jira_token / llm_api_key
   username: string; // https_basic
   password: string; // https_basic
@@ -38,7 +38,7 @@ export interface CredentialFormState {
 export function emptyCredentialForm(kind: CredentialKind = "https_token"): CredentialFormState {
   return {
     kind,
-    label: "",
+    name: "",
     value: "",
     username: "",
     password: "",
@@ -53,8 +53,8 @@ export function emptyCredentialForm(kind: CredentialKind = "https_token"): Crede
 export function buildCredentialCreate(
   state: CredentialFormState,
 ): { ok: true; input: CredentialCreateInput } | { ok: false; error: string } {
-  const label = state.label.trim();
-  if (!label) return { ok: false, error: "Label is required" };
+  const name = state.name.trim();
+  if (!name) return { ok: false, error: "Name is required" };
 
   switch (state.kind) {
     case "https_token":
@@ -62,7 +62,7 @@ export function buildCredentialCreate(
     case "llm_api_key": {
       const value = state.value.trim();
       if (!value) return { ok: false, error: "Value is required" };
-      return { ok: true, input: { kind: state.kind, label, value } };
+      return { ok: true, input: { kind: state.kind, name, value } };
     }
     case "https_basic": {
       const username = state.username.trim();
@@ -71,7 +71,7 @@ export function buildCredentialCreate(
       if (!password) return { ok: false, error: "Password is required" };
       return {
         ok: true,
-        input: { kind: "https_basic", label, username, password },
+        input: { kind: "https_basic", name, username, password },
       };
     }
     case "ssh_key": {
@@ -81,7 +81,7 @@ export function buildCredentialCreate(
         ok: true,
         input: {
           kind: "ssh_key",
-          label,
+          name,
           private_key,
           passphrase: state.passphrase ? state.passphrase : null,
           known_hosts: state.known_hosts ? state.known_hosts : null,
@@ -91,7 +91,7 @@ export function buildCredentialCreate(
   }
 }
 
-/** Same as buildCredentialCreate, but omits the label for the rotate flow. */
+/** Same as buildCredentialCreate, but omits the name for the rotate flow. */
 export function buildCredentialRotate(
   state: CredentialFormState,
 ): { ok: true; input: CredentialRotateInput } | { ok: false; error: string } {
@@ -131,9 +131,9 @@ export interface CredentialFormFieldsProps {
   idPrefix: string;
   state: CredentialFormState;
   onChange: (next: CredentialFormState) => void;
-  /** Show the Kind selector + Label input. Off for rotate (kind locked,
-   *  label already exists). */
-  showKindAndLabel?: boolean;
+  /** Show the Kind selector + Name input. Off for rotate (kind locked,
+   *  name already exists). */
+  showKindAndName?: boolean;
   /** Limit the kinds exposed in the selector. Useful in the Settings page
    *  (Jira cred shouldn't offer ssh_key) and the RepoFormDialog
    *  (only git-auth kinds). */
@@ -152,14 +152,14 @@ export function CredentialFormFields({
   idPrefix,
   state,
   onChange,
-  showKindAndLabel = true,
+  showKindAndName = true,
   allowedKinds = DEFAULT_KINDS,
 }: CredentialFormFieldsProps) {
   const patch = (p: Partial<CredentialFormState>) => onChange({ ...state, ...p });
 
   return (
     <div className="space-y-4">
-      {showKindAndLabel ? (
+      {showKindAndName ? (
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor={`${idPrefix}-kind`}>Kind</Label>
@@ -180,11 +180,11 @@ export function CredentialFormFields({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-label`}>Label</Label>
+            <Label htmlFor={`${idPrefix}-name`}>Name</Label>
             <Input
-              id={`${idPrefix}-label`}
-              value={state.label}
-              onChange={(e) => patch({ label: e.target.value })}
+              id={`${idPrefix}-name`}
+              value={state.name}
+              onChange={(e) => patch({ name: e.target.value })}
               placeholder="e.g. github-read-token"
             />
           </div>

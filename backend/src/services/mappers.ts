@@ -97,7 +97,7 @@ export function credentialToOut(
   return {
     id: cred.id,
     kind: cred.kind,
-    label: cred.label,
+    name: cred.name,
     metadata: credentialMetadataToOut(cred.kind, cred.metadata),
     references,
     reference_count:

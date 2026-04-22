@@ -59,7 +59,7 @@ model Credential {
   id         String   @id @default(uuid()) @db.Uuid
   orgId      String?  @map("org_id") @db.Uuid
   kind       String
-  label      String
+  name       String
   ciphertext Bytes
   nonce      Bytes
   tag        Bytes // GCM auth tag (stored separately; see security/crypto.ts)

@@ -35,7 +35,7 @@ export default function SettingsPage() {
   const [jiraBaseUrl, setJiraBaseUrl] = useState("");
   const [jiraCredChoice, setJiraCredChoice] = useState<CredentialChoice>("existing");
   const [jiraCredId, setJiraCredId] = useState<string>("");
-  const [jiraNewLabel, setJiraNewLabel] = useState("");
+  const [jiraNewName, setJiraNewName] = useState("");
   const [jiraNewValue, setJiraNewValue] = useState("");
 
   // LLM section state
@@ -44,7 +44,7 @@ export default function SettingsPage() {
   const [llmModel, setLlmModel] = useState(LLM_DEFAULTS.model);
   const [llmCredChoice, setLlmCredChoice] = useState<CredentialChoice>("existing");
   const [llmCredId, setLlmCredId] = useState<string>("");
-  const [llmNewLabel, setLlmNewLabel] = useState("");
+  const [llmNewName, setLlmNewName] = useState("");
   const [llmNewValue, setLlmNewValue] = useState("");
 
   // When the settings query completes, hydrate the form.
@@ -67,20 +67,20 @@ export default function SettingsPage() {
 
   const buildJiraCred = (): AdminSettingsUpdate["jira_credential"] => {
     if (jiraCredChoice !== "new") return null;
-    if (!jiraNewLabel.trim() || !jiraNewValue.trim()) return null;
+    if (!jiraNewName.trim() || !jiraNewValue.trim()) return null;
     return {
       kind: "jira_token",
-      label: jiraNewLabel.trim(),
+      name: jiraNewName.trim(),
       value: jiraNewValue,
     };
   };
 
   const buildLlmCred = (): AdminSettingsUpdate["llm_credential"] => {
     if (llmCredChoice !== "new") return null;
-    if (!llmNewLabel.trim() || !llmNewValue.trim()) return null;
+    if (!llmNewName.trim() || !llmNewValue.trim()) return null;
     return {
       kind: "llm_api_key",
-      label: llmNewLabel.trim(),
+      name: llmNewName.trim(),
       value: llmNewValue,
     };
   };
@@ -102,9 +102,9 @@ export default function SettingsPage() {
       await updateSettings.mutateAsync(payload);
       toast({ title: "Settings saved" });
       // Clear fresh credential fields after save to avoid re-submitting.
-      setJiraNewLabel("");
+      setJiraNewName("");
       setJiraNewValue("");
-      setLlmNewLabel("");
+      setLlmNewName("");
       setLlmNewValue("");
     } catch (err) {
       toast({
@@ -148,8 +148,8 @@ export default function SettingsPage() {
               credentialId={jiraCredId}
               setCredentialId={setJiraCredId}
               options={jiraOptions}
-              newLabel={jiraNewLabel}
-              setNewLabel={setJiraNewLabel}
+              newName={jiraNewName}
+              setNewName={setJiraNewName}
               newValue={jiraNewValue}
               setNewValue={setJiraNewValue}
               valuePlaceholder="Jira API token"
@@ -212,8 +212,8 @@ export default function SettingsPage() {
               credentialId={llmCredId}
               setCredentialId={setLlmCredId}
               options={llmOptions}
-              newLabel={llmNewLabel}
-              setNewLabel={setLlmNewLabel}
+              newName={llmNewName}
+              setNewName={setLlmNewName}
               newValue={llmNewValue}
               setNewValue={setLlmNewValue}
               valuePlaceholder="API key"
@@ -242,9 +242,9 @@ interface CredentialPickerProps {
   setChoice: (c: CredentialChoice) => void;
   credentialId: string;
   setCredentialId: (id: string) => void;
-  options: { id: string; label: string; kind: string }[];
-  newLabel: string;
-  setNewLabel: (v: string) => void;
+  options: { id: string; name: string; kind: string }[];
+  newName: string;
+  setNewName: (v: string) => void;
   newValue: string;
   setNewValue: (v: string) => void;
   valuePlaceholder: string;
@@ -258,8 +258,8 @@ function CredentialPicker({
   credentialId,
   setCredentialId,
   options,
-  newLabel,
-  setNewLabel,
+  newName,
+  setNewName,
   newValue,
   setNewValue,
   valuePlaceholder,
@@ -304,7 +304,7 @@ function CredentialPicker({
             ) : null}
             {options.map((c) => (
               <SelectItem key={c.id} value={c.id}>
-                {c.label} — <span className="text-muted-foreground">{c.kind}</span>
+                {c.name} — <span className="text-muted-foreground">{c.kind}</span>
               </SelectItem>
             ))}
           </SelectContent>
@@ -316,11 +316,11 @@ function CredentialPicker({
             <Input value={kindLabel} disabled />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-new-label`}>Label</Label>
+            <Label htmlFor={`${idPrefix}-new-name`}>Name</Label>
             <Input
-              id={`${idPrefix}-new-label`}
-              value={newLabel}
-              onChange={(e) => setNewLabel(e.target.value)}
+              id={`${idPrefix}-new-name`}
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
             />
           </div>
           <div className="space-y-1.5 sm:col-span-2">

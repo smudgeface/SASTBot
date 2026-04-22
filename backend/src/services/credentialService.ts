@@ -46,7 +46,7 @@ interface EncodedSecret {
 /**
  * Turn a Create or Rotate payload into (plaintext-to-encrypt, metadata-to-store).
  * Accepts the union of both since they share the kind-discriminated secret
- * fields; Create also has a `label` which we ignore here (the caller sets it).
+ * fields; Create also has a `name` which we ignore here (the caller sets it).
  */
 type SecretInput = CredentialCreate | CredentialRotate;
 
@@ -164,7 +164,7 @@ export async function createCredential(
     data: {
       orgId: orgId ?? null,
       kind: input.kind,
-      label: input.label,
+      name: input.name,
       ciphertext: blob.ciphertext,
       nonce: blob.nonce,
       tag: blob.tag,
@@ -200,13 +200,13 @@ export async function getCredential(
 export async function renameCredential(
   credentialId: string,
   orgId: string | null,
-  label: string,
+  name: string,
   client: Tx = prisma,
 ): Promise<Credential> {
   await getCredential(credentialId, orgId, client);
   return client.credential.update({
     where: { id: credentialId },
-    data: { label },
+    data: { name },
   });
 }
 

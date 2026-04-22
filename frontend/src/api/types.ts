@@ -55,7 +55,7 @@ export interface CredentialReferences {
 export interface Credential {
   id: string;
   kind: CredentialKind;
-  label: string;
+  name: string;
   metadata: CredentialMetadata | null;
   references: CredentialReferences;
   reference_count: number;
@@ -64,30 +64,30 @@ export interface Credential {
 
 // -------- Create payloads (discriminated union on `kind`) --------
 
-interface LabeledBase {
-  label: string;
+interface NamedBase {
+  name: string;
 }
 
-export interface HttpsTokenCreate extends LabeledBase {
+export interface HttpsTokenCreate extends NamedBase {
   kind: "https_token";
   value: string;
 }
-export interface HttpsBasicCreate extends LabeledBase {
+export interface HttpsBasicCreate extends NamedBase {
   kind: "https_basic";
   username: string;
   password: string;
 }
-export interface SshKeyCreate extends LabeledBase {
+export interface SshKeyCreate extends NamedBase {
   kind: "ssh_key";
   private_key: string;
   passphrase?: string | null;
   known_hosts?: string | null;
 }
-export interface JiraTokenCreate extends LabeledBase {
+export interface JiraTokenCreate extends NamedBase {
   kind: "jira_token";
   value: string;
 }
-export interface LlmKeyCreate extends LabeledBase {
+export interface LlmKeyCreate extends NamedBase {
   kind: "llm_api_key";
   value: string;
 }
@@ -99,19 +99,19 @@ export type CredentialCreateInput =
   | JiraTokenCreate
   | LlmKeyCreate;
 
-/** Rotate = same shape as Create minus the label (kind is locked). */
+/** Rotate = same shape as Create minus the name (kind is locked). */
 export type CredentialRotateInput =
-  | Omit<HttpsTokenCreate, "label">
-  | Omit<HttpsBasicCreate, "label">
-  | Omit<SshKeyCreate, "label">
-  | Omit<JiraTokenCreate, "label">
-  | Omit<LlmKeyCreate, "label">;
+  | Omit<HttpsTokenCreate, "name">
+  | Omit<HttpsBasicCreate, "name">
+  | Omit<SshKeyCreate, "name">
+  | Omit<JiraTokenCreate, "name">
+  | Omit<LlmKeyCreate, "name">;
 
 /** Legacy simple-shape alias used in places where the kind is always
  *  `https_token`/`jira_token`/`llm_api_key`. */
 export interface NewCredentialInput {
   kind: CredentialKind;
-  label: string;
+  name: string;
   value: string;
 }
 
