@@ -253,7 +253,7 @@ export default function ScanDetailPage() {
                 s.status === "success" ? "text-emerald-600 dark:text-emerald-400" : "",
               )}
             >
-              {s.status}
+              {s.status === "success" ? "complete" : s.status}
             </span>
           </p>
         </div>

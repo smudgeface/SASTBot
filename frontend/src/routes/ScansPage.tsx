@@ -25,10 +25,17 @@ const STATUS_STYLE: Record<ScanStatus, string> = {
   failed: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200",
 };
 
+const STATUS_LABEL: Record<ScanStatus, string> = {
+  pending: "pending",
+  running: "running",
+  success: "complete",
+  failed: "failed",
+};
+
 function StatusBadge({ status }: { status: ScanStatus }) {
   return (
     <Badge variant="secondary" className={cn("uppercase", STATUS_STYLE[status])}>
-      {status}
+      {STATUS_LABEL[status]}
     </Badge>
   );
 }
