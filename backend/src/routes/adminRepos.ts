@@ -9,8 +9,9 @@ import {
   RepoListSchema,
   RepoOutSchema,
   RepoUpdateSchema,
+  ScanRunOutSchema,
 } from "../schemas.js";
-import { repoToOut } from "../services/mappers.js";
+import { repoToOut, scanRunToOut } from "../services/mappers.js";
 import {
   RepoConflictError,
   RepoNotFoundError,
@@ -20,6 +21,7 @@ import {
   listRepos,
   updateRepo,
 } from "../services/repoService.js";
+import { triggerScan } from "../services/scanService.js";
 
 const adminReposRoutes: FastifyPluginAsync = async (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
@@ -136,6 +138,42 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
         }
         if (err instanceof RepoConflictError) {
           return reply.code(409).send({ detail: err.message });
+        }
+        throw err;
+      }
+    },
+  );
+
+  typed.post(
+    "/admin/repos/:id/scan",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["admin", "repos"],
+        summary: "Trigger a scan for this repo",
+        description:
+          "Creates a scan_runs row in `pending` and enqueues a BullMQ job. M1/M2 handler is a 2-second stub; M3 fills in the real SCA work.",
+        params: IdParamsSchema,
+        response: {
+          202: ScanRunOutSchema,
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        const run = await triggerScan({
+          repoId: req.params.id,
+          orgId: req.user?.orgId ?? null,
+          triggeredByUserId: req.user?.id ?? null,
+          triggeredBy: "user",
+        });
+        return reply.code(202).send(scanRunToOut(run));
+      } catch (err) {
+        if (err instanceof RepoNotFoundError) {
+          return reply.code(404).send({ detail: "Repo not found" });
         }
         throw err;
       }

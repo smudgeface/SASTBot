@@ -87,9 +87,18 @@ export interface AdminSettingsUpdate {
   llm_credential?: NewCredentialInput | null;
 }
 
+export type ScanStatus = "pending" | "running" | "success" | "failed";
+export type ScanTrigger = "user" | "api" | "schedule";
+
 export interface Scan {
   id: string;
+  org_id: string | null;
   repo_id: string;
-  status: string;
+  status: ScanStatus;
+  triggered_by: ScanTrigger;
+  triggered_by_user_id: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
   created_at: string;
 }
