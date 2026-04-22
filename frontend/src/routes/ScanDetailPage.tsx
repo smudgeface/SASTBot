@@ -11,9 +11,10 @@ import {
   ShieldAlert,
 } from "lucide-react";
 
-import { useScanDetail, useScanFindings, useSbomJson } from "@/api/queries/scans";
+import { useScanDetail, useScanComponents, useScanFindings, useSbomJson } from "@/api/queries/scans";
 import { useRepos } from "@/api/queries/repos";
-import type { FindingSeverity, ScanFinding } from "@/api/types";
+import type { FindingSeverity, SbomComponent, ScanFinding } from "@/api/types";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -190,6 +191,120 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
 }
 
 // ---------------------------------------------------------------------------
+// Components tab
+// ---------------------------------------------------------------------------
+
+function LicensePill({ license }: { license: string }) {
+  return (
+    <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-mono bg-muted text-muted-foreground">
+      {license}
+    </span>
+  );
+}
+
+function ComponentsTab({
+  components,
+  findings,
+  isLoading,
+}: {
+  components: SbomComponent[];
+  findings: ScanFinding[];
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-sm text-muted-foreground">Loading…</CardContent>
+      </Card>
+    );
+  }
+  if (components.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-6 flex items-center gap-3 text-sm text-muted-foreground">
+          <Package className="h-4 w-4 shrink-0" />
+          No components found in this scan.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Index findings by component id for O(1) lookup.
+  const findingsByComponent = new Map<string, ScanFinding[]>();
+  for (const f of findings) {
+    const list = findingsByComponent.get(f.component_id) ?? [];
+    list.push(f);
+    findingsByComponent.set(f.component_id, list);
+  }
+
+  return (
+    <Card>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Package</TableHead>
+            <TableHead>Version</TableHead>
+            <TableHead>Ecosystem</TableHead>
+            <TableHead>Licenses</TableHead>
+            <TableHead>Vulnerabilities</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {components.map((c) => {
+            const vulns = findingsByComponent.get(c.id) ?? [];
+            // Sort by severity for display.
+            const sorted = [...vulns].sort(
+              (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
+            );
+            return (
+              <TableRow key={c.id}>
+                <TableCell className="font-medium font-mono text-sm">{c.name}</TableCell>
+                <TableCell className="text-sm text-muted-foreground font-mono">
+                  {c.version ?? "—"}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground uppercase text-xs">
+                  {c.ecosystem ?? "—"}
+                </TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap gap-1">
+                    {c.licenses.length > 0
+                      ? c.licenses.map((l) => <LicensePill key={l} license={l} />)
+                      : <span className="text-xs text-muted-foreground">—</span>}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  {sorted.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {sorted.map((f) => (
+                        <a
+                          key={f.id}
+                          href={vulnUrl(f.cve_id ?? f.osv_id)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={cn(
+                            "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase hover:opacity-80",
+                            severityChipClass(f.severity),
+                          )}
+                          title={f.summary ?? f.cve_id ?? f.osv_id}
+                        >
+                          {f.cve_id ?? f.osv_id}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -207,6 +322,7 @@ export default function ScanDetailPage() {
   const { id } = useParams<{ id: string }>();
   const scan = useScanDetail(id);
   const findings = useScanFindings(id);
+  const components = useScanComponents(id);
   const repos = useRepos();
   const sbom = useSbomJson(id);
 
@@ -241,6 +357,11 @@ export default function ScanDetailPage() {
           </Link>
           <h1 className="text-xl font-semibold tracking-tight">
             {repoName ?? s.repo_id}
+            {s.scope_path && s.scope_path !== "/" ? (
+              <span className="ml-2 text-base font-normal text-muted-foreground font-mono">
+                {s.scope_path}
+              </span>
+            ) : null}
           </h1>
           <p className="text-sm text-muted-foreground">
             {formatDate(s.started_at ?? s.created_at)}
@@ -301,56 +422,75 @@ export default function ScanDetailPage() {
         </div>
       ) : null}
 
-      {/* Findings table */}
+      {/* Tabbed content: Findings + Components */}
       {isTerminal && s.status === "success" ? (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <ShieldAlert className="h-4 w-4 text-muted-foreground" />
-            <h2 className="font-medium">
+        <Tabs defaultValue="findings">
+          <TabsList>
+            <TabsTrigger value="findings" className="gap-1.5">
+              <ShieldAlert className="h-3.5 w-3.5" />
               Findings
               {sorted.length > 0 ? (
-                <span className="ml-1 text-muted-foreground font-normal text-sm">
-                  ({sorted.length})
+                <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono">
+                  {sorted.length}
                 </span>
               ) : null}
-            </h2>
-          </div>
+            </TabsTrigger>
+            <TabsTrigger value="components" className="gap-1.5">
+              <Package className="h-3.5 w-3.5" />
+              Components
+              {s.component_count > 0 ? (
+                <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono">
+                  {s.component_count}
+                </span>
+              ) : null}
+            </TabsTrigger>
+          </TabsList>
 
-          {findings.isLoading ? (
-            <Card>
-              <CardContent className="p-6 text-sm text-muted-foreground">
-                Loading findings…
-              </CardContent>
-            </Card>
-          ) : sorted.length === 0 ? (
-            <Card>
-              <CardContent className="p-6 flex items-center gap-3 text-sm text-muted-foreground">
-                <Package className="h-4 w-4 shrink-0" />
-                No vulnerabilities found in this scan.
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-4" />
-                    <TableHead className="w-28">Severity</TableHead>
-                    <TableHead>Package</TableHead>
-                    <TableHead>CVE / ID</TableHead>
-                    <TableHead className="w-16">CVSS</TableHead>
-                    <TableHead>Summary</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sorted.map((f) => (
-                    <FindingRow key={f.id} finding={f} />
-                  ))}
-                </TableBody>
-              </Table>
-            </Card>
-          )}
-        </div>
+          <TabsContent value="findings" className="mt-4">
+            {findings.isLoading ? (
+              <Card>
+                <CardContent className="p-6 text-sm text-muted-foreground">
+                  Loading findings…
+                </CardContent>
+              </Card>
+            ) : sorted.length === 0 ? (
+              <Card>
+                <CardContent className="p-6 flex items-center gap-3 text-sm text-muted-foreground">
+                  <Package className="h-4 w-4 shrink-0" />
+                  No vulnerabilities found in this scan.
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-4" />
+                      <TableHead className="w-28">Severity</TableHead>
+                      <TableHead>Package</TableHead>
+                      <TableHead>CVE / ID</TableHead>
+                      <TableHead className="w-16">CVSS</TableHead>
+                      <TableHead>Summary</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sorted.map((f) => (
+                      <FindingRow key={f.id} finding={f} />
+                    ))}
+                  </TableBody>
+                </Table>
+              </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="components" className="mt-4">
+            <ComponentsTab
+              components={components.data ?? []}
+              findings={findings.data ?? []}
+              isLoading={components.isLoading}
+            />
+          </TabsContent>
+        </Tabs>
       ) : null}
 
       {/* Running / pending state */}

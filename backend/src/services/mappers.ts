@@ -5,6 +5,7 @@ import type {
   SbomComponent,
   ScanFinding,
   ScanRun,
+  ScanScope,
   User,
 } from "@prisma/client";
 
@@ -16,6 +17,7 @@ import type {
   SbomComponentOut,
   ScanFindingOut,
   ScanRunOut,
+  ScanScopeOut,
   Severity,
   UserOut,
 } from "../schemas.js";
@@ -167,11 +169,15 @@ function toSeverity(value: string): Severity {
     : "unknown";
 }
 
-export function scanRunToOut(s: ScanRun): ScanRunOut {
+export function scanRunToOut(
+  s: ScanRun & { scope?: Pick<ScanScope, "path"> | null },
+): ScanRunOut {
   return {
     id: s.id,
     org_id: s.orgId,
     repo_id: s.repoId,
+    scope_id: s.scopeId,
+    scope_path: s.scope?.path ?? "/",
     status: toStatus(s.status),
     triggered_by: toTriggeredBy(s.triggeredBy),
     triggered_by_user_id: s.triggeredByUserId,
@@ -183,6 +189,17 @@ export function scanRunToOut(s: ScanRun): ScanRunOut {
     high_count: s.highCount,
     medium_count: s.mediumCount,
     low_count: s.lowCount,
+    created_at: s.createdAt.toISOString(),
+  };
+}
+
+export function scanScopeToOut(s: ScanScope): ScanScopeOut {
+  return {
+    id: s.id,
+    repo_id: s.repoId,
+    path: s.path,
+    display_name: s.displayName,
+    is_active: s.isActive,
     created_at: s.createdAt.toISOString(),
   };
 }

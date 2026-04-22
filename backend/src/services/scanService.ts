@@ -1,10 +1,5 @@
-/**
- * Scan lifecycle — creating scan_runs rows and enqueueing BullMQ jobs.
- *
- * The worker (src/worker.ts) picks up the jobs and transitions the row
- * through pending → running → success/failed. M1/M2 uses a stub handler;
- * M3 fills in the real SCA work.
- */
+import type { ScanRun } from "@prisma/client";
+
 import { prisma } from "../db.js";
 import { RepoNotFoundError } from "./repoService.js";
 import { getScanQueue } from "../queue/scanQueue.js";
@@ -13,40 +8,54 @@ export interface TriggerScanInput {
   repoId: string;
   orgId: string | null;
   triggeredByUserId: string | null;
-  /** "user" | "api" | "schedule" — matches the ScanRunOut contract. */
   triggeredBy: "user" | "api" | "schedule";
 }
 
-/** Verify the repo exists + belongs to this org, then create a pending
- *  scan_runs row and enqueue it on the BullMQ `scans` queue. */
-export async function triggerScan(input: TriggerScanInput) {
+/**
+ * Trigger one ScanRun per active ScanScope on the repo.
+ * Returns the array of created runs (usually just one for single-path repos).
+ */
+export async function triggerScan(input: TriggerScanInput): Promise<ScanRun[]> {
   const repo = await prisma.repo.findFirst({
     where: { id: input.repoId, orgId: input.orgId ?? null },
     select: { id: true, orgId: true },
   });
-  if (!repo) {
-    throw new RepoNotFoundError();
-  }
+  if (!repo) throw new RepoNotFoundError();
 
-  const run = await prisma.scanRun.create({
-    data: {
-      orgId: repo.orgId,
-      repoId: repo.id,
-      status: "pending",
-      triggeredBy: input.triggeredBy,
-      triggeredByUserId: input.triggeredByUserId,
-    },
+  const scopes = await prisma.scanScope.findMany({
+    where: { repoId: repo.id, isActive: true },
+    orderBy: { path: "asc" },
   });
 
-  await getScanQueue().add(
-    "scan",
-    { scanRunId: run.id },
-    {
-      // Keep the queue tidy — BullMQ's default retains jobs forever.
-      removeOnComplete: { count: 100 },
-      removeOnFail: { count: 200 },
-    },
-  );
+  if (scopes.length === 0) {
+    // Safety net: repo has no scopes (shouldn't happen after migration, but
+    // guard against it so a scan trigger doesn't silently do nothing).
+    throw new Error("Repo has no active scan scopes — re-save the repo to fix this.");
+  }
 
-  return run;
+  const runs: ScanRun[] = [];
+  const queue = getScanQueue();
+
+  for (const scope of scopes) {
+    const run = await prisma.scanRun.create({
+      data: {
+        orgId: repo.orgId,
+        repoId: repo.id,
+        scopeId: scope.id,
+        status: "pending",
+        triggeredBy: input.triggeredBy,
+        triggeredByUserId: input.triggeredByUserId,
+      },
+    });
+
+    await queue.add(
+      "scan",
+      { scanRunId: run.id, scopeId: scope.id, scopePath: scope.path },
+      { removeOnComplete: { count: 100 }, removeOnFail: { count: 200 } },
+    );
+
+    runs.push(run);
+  }
+
+  return runs;
 }

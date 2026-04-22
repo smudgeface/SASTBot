@@ -20,6 +20,7 @@ model Org {
   repos       Repo[]
   credentials Credential[]
   scanRuns    ScanRun[]
+  scanScopes  ScanScope[]
   appSettings AppSettings[]
 
   @@map("orgs")
@@ -81,6 +82,25 @@ model Credential {
   @@map("credentials")
 }
 
+model ScanScope {
+  id          String   @id @default(uuid()) @db.Uuid
+  orgId       String?  @map("org_id") @db.Uuid
+  repoId      String   @map("repo_id") @db.Uuid
+  // Relative path within the repo to scan (e.g. "/" or "services/api").
+  // Combined with the repo URL this forms the canonical unit of analysis.
+  path        String   @default("/")
+  displayName String?  @map("display_name")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  org      Org?      @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  repo     Repo      @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  scanRuns ScanRun[]
+
+  @@unique([repoId, path], name: "uq_scan_scopes_repo_path")
+  @@map("scan_scopes")
+}
+
 model Repo {
   id            String    @id @default(uuid()) @db.Uuid
   orgId         String?   @map("org_id") @db.Uuid
@@ -105,6 +125,7 @@ model Repo {
   org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
   credential Credential? @relation("RepoCredential", fields: [credentialId], references: [id], onDelete: SetNull)
   scanRuns   ScanRun[]
+  scopes     ScanScope[]
 
   @@unique([orgId, url], name: "uq_repos_org_url")
   @@map("repos")
@@ -132,6 +153,9 @@ model ScanRun {
   id                String    @id @default(uuid()) @db.Uuid
   orgId             String?   @map("org_id") @db.Uuid
   repoId            String    @map("repo_id") @db.Uuid
+  // Scope is the canonical unit — (repo, path). repoId is kept as a
+  // denorm for cheap filtering without a join.
+  scopeId           String    @map("scope_id") @db.Uuid
   status            String // "pending" | "running" | "success" | "failed"
   triggeredBy       String    @map("triggered_by") // "user" | "api" | "schedule"
   triggeredByUserId String?   @map("triggered_by_user_id") @db.Uuid
@@ -151,6 +175,7 @@ model ScanRun {
 
   org        Org?           @relation(fields: [orgId], references: [id], onDelete: SetNull)
   repo       Repo           @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  scope      ScanScope      @relation(fields: [scopeId], references: [id], onDelete: Cascade)
   components SbomComponent[]
   findings   ScanFinding[]
 

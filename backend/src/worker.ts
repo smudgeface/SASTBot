@@ -1,4 +1,5 @@
 import { rm } from "node:fs/promises";
+import { join } from "node:path";
 
 import { Worker } from "bullmq";
 import { pino } from "pino";
@@ -17,7 +18,7 @@ const logger = pino({ level: config.logLevel, name: "sastbot-worker" });
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {
-    const { scanRunId } = job.data;
+    const { scanRunId, scopePath = "/" } = job.data;
     const log = logger.child({ scanRunId });
 
     const run = await prisma.scanRun.findUnique({
@@ -52,8 +53,14 @@ const worker = new Worker<ScanJobData>(
       );
 
       // ── Step 2: cdxgen → CycloneDX 1.7 SBOM ────────────────────────────
-      log.info("[worker] running cdxgen");
-      const sbomDoc = await runCdxgen(clone.workingDir);
+      // scanDir is the scope sub-path within the clone (e.g. "services/api").
+      // For the root scope ("/") we scan the full clone.
+      const scanDir =
+        scopePath === "/" || scopePath === ""
+          ? clone.workingDir
+          : join(clone.workingDir, scopePath);
+      log.info({ scanDir, scopePath }, "[worker] running cdxgen");
+      const sbomDoc = await runCdxgen(scanDir);
       const componentCount = sbomDoc.components?.length ?? 0;
       log.info({ componentCount }, "[worker] cdxgen done");
 

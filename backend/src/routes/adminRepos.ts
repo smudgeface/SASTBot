@@ -1,7 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
-
 import {
   ErrorSchema,
   IdParamsSchema,
@@ -9,9 +8,10 @@ import {
   RepoListSchema,
   RepoOutSchema,
   RepoUpdateSchema,
-  ScanRunOutSchema,
+  ScanRunListSchema,
+  ScanScopeOutSchema,
 } from "../schemas.js";
-import { repoToOut, scanRunToOut } from "../services/mappers.js";
+import { repoToOut, scanRunToOut, scanScopeToOut } from "../services/mappers.js";
 import {
   RepoConflictError,
   RepoNotFoundError,
@@ -19,6 +19,7 @@ import {
   deleteRepo,
   getRepo,
   listRepos,
+  listScopesForRepo,
   updateRepo,
 } from "../services/repoService.js";
 import { purge as purgeRepoCache } from "../services/repoCache.js";
@@ -179,18 +180,16 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  typed.post(
-    "/admin/repos/:id/scan",
+  typed.get(
+    "/admin/repos/:id/scopes",
     {
       preHandler: [app.requireAdmin],
       schema: {
         tags: ["admin", "repos"],
-        summary: "Trigger a scan for this repo",
-        description:
-          "Creates a scan_runs row in `pending` and enqueues a BullMQ job. M1/M2 handler is a 2-second stub; M3 fills in the real SCA work.",
+        summary: "List active scan scopes for a repo",
         params: IdParamsSchema,
         response: {
-          202: ScanRunOutSchema,
+          200: z.array(ScanScopeOutSchema),
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
@@ -199,13 +198,45 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
     },
     async (req, reply) => {
       try {
-        const run = await triggerScan({
+        await getRepo(req.params.id, req.user?.orgId ?? null);
+        const scopes = await listScopesForRepo(req.params.id, req.user?.orgId ?? null);
+        return scopes.map(scanScopeToOut);
+      } catch (err) {
+        if (err instanceof RepoNotFoundError) {
+          return reply.code(404).send({ detail: "Repo not found" });
+        }
+        throw err;
+      }
+    },
+  );
+
+  typed.post(
+    "/admin/repos/:id/scan",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["admin", "repos"],
+        summary: "Trigger a scan for all active scopes of this repo",
+        description:
+          "Creates one scan_runs row per active ScanScope and enqueues a BullMQ job for each.",
+        params: IdParamsSchema,
+        response: {
+          202: ScanRunListSchema,
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        const runs = await triggerScan({
           repoId: req.params.id,
           orgId: req.user?.orgId ?? null,
           triggeredByUserId: req.user?.id ?? null,
           triggeredBy: "user",
         });
-        return reply.code(202).send(scanRunToOut(run));
+        return reply.code(202).send(runs.map(scanRunToOut));
       } catch (err) {
         if (err instanceof RepoNotFoundError) {
           return reply.code(404).send({ detail: "Repo not found" });

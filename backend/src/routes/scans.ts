@@ -33,6 +33,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       const orgId = req.user?.orgId ?? null;
       const runs = await prisma.scanRun.findMany({
         where: { orgId: orgId ?? null },
+        include: { scope: { select: { path: true } } },
         orderBy: { createdAt: "desc" },
       });
       return runs.map(scanRunToOut);
@@ -58,6 +59,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       const orgId = req.user?.orgId ?? null;
       const run = await prisma.scanRun.findFirst({
         where: { id: req.params.id, orgId: orgId ?? null },
+        include: { scope: { select: { path: true } } },
       });
       if (!run) {
         return reply.code(404).send({ detail: "Scan run not found" });
