@@ -28,13 +28,7 @@ export async function updateSettings(
     let jiraCredentialId: string | null | undefined;
     if (input.jira_credential) {
       const cred = await createCredential(
-        {
-          orgId,
-          kind: input.jira_credential.kind,
-          label: input.jira_credential.label,
-          value: input.jira_credential.value,
-          createdBy,
-        },
+        { orgId, input: input.jira_credential, createdBy },
         tx,
       );
       jiraCredentialId = cred.id;
@@ -45,13 +39,7 @@ export async function updateSettings(
     let llmCredentialId: string | null | undefined;
     if (input.llm_credential) {
       const cred = await createCredential(
-        {
-          orgId,
-          kind: input.llm_credential.kind,
-          label: input.llm_credential.label,
-          value: input.llm_credential.value,
-          createdBy,
-        },
+        { orgId, input: input.llm_credential, createdBy },
         tx,
       );
       llmCredentialId = cred.id;

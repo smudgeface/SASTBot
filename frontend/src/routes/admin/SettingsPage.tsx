@@ -2,11 +2,7 @@ import { useEffect, useState } from "react";
 
 import { useCredentials } from "@/api/queries/credentials";
 import { useSettings, useUpdateSettings } from "@/api/queries/settings";
-import type {
-  AdminSettingsUpdate,
-  LlmApiFormat,
-  NewCredentialInput,
-} from "@/api/types";
+import type { AdminSettingsUpdate, LlmApiFormat } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Textarea } from "@/components/ui/input";
@@ -69,15 +65,24 @@ export default function SettingsPage() {
   const jiraOptions = credentials.data?.filter((c) => c.kind.startsWith("jira")) ?? [];
   const llmOptions = credentials.data?.filter((c) => c.kind === "llm_api_key") ?? [];
 
-  const buildNewCred = (
-    choice: CredentialChoice,
-    kind: string,
-    label: string,
-    value: string,
-  ): NewCredentialInput | null => {
-    if (choice !== "new") return null;
-    if (!label.trim() || !value.trim()) return null;
-    return { kind, label: label.trim(), value };
+  const buildJiraCred = (): AdminSettingsUpdate["jira_credential"] => {
+    if (jiraCredChoice !== "new") return null;
+    if (!jiraNewLabel.trim() || !jiraNewValue.trim()) return null;
+    return {
+      kind: "jira_token",
+      label: jiraNewLabel.trim(),
+      value: jiraNewValue,
+    };
+  };
+
+  const buildLlmCred = (): AdminSettingsUpdate["llm_credential"] => {
+    if (llmCredChoice !== "new") return null;
+    if (!llmNewLabel.trim() || !llmNewValue.trim()) return null;
+    return {
+      kind: "llm_api_key",
+      label: llmNewLabel.trim(),
+      value: llmNewValue,
+    };
   };
 
   const onSave = async (e: React.FormEvent) => {
@@ -85,12 +90,12 @@ export default function SettingsPage() {
     const payload: AdminSettingsUpdate = {
       jira_base_url: jiraBaseUrl.trim() || null,
       jira_credential_id: jiraCredChoice === "existing" ? jiraCredId || null : null,
-      jira_credential: buildNewCred(jiraCredChoice, "jira_token", jiraNewLabel, jiraNewValue),
+      jira_credential: buildJiraCred(),
       llm_base_url: llmBaseUrl.trim() || null,
       llm_api_format: llmApiFormat,
       llm_model: llmModel.trim() || null,
       llm_credential_id: llmCredChoice === "existing" ? llmCredId || null : null,
-      llm_credential: buildNewCred(llmCredChoice, "llm_api_key", llmNewLabel, llmNewValue),
+      llm_credential: buildLlmCred(),
     };
 
     try {

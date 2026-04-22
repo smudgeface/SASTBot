@@ -271,6 +271,8 @@ export interface paths {
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
                             is_active: boolean;
+                            retain_clone: boolean;
+                            last_cloned_at: string | null;
                             created_at: string;
                         }[];
                     };
@@ -332,13 +334,39 @@ export interface paths {
                         schedule_cron?: string | null;
                         /** @default true */
                         is_active?: boolean;
+                        /** @default false */
+                        retain_clone?: boolean;
                         /** Format: uuid */
                         credential_id?: string | null;
-                        credential?: {
-                            kind: string;
+                        credential?: ({
+                            /** @enum {string} */
+                            kind: "https_token";
                             label: string;
                             value: string;
-                        } | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "https_basic";
+                            label: string;
+                            username: string;
+                            password: string;
+                        } | {
+                            /** @enum {string} */
+                            kind: "ssh_key";
+                            label: string;
+                            private_key: string;
+                            passphrase?: string | null;
+                            known_hosts?: string | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "jira_token";
+                            label: string;
+                            value: string;
+                        } | {
+                            /** @enum {string} */
+                            kind: "llm_api_key";
+                            label: string;
+                            value: string;
+                        }) | null;
                     };
                 };
             };
@@ -365,6 +393,8 @@ export interface paths {
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
                             is_active: boolean;
+                            retain_clone: boolean;
+                            last_cloned_at: string | null;
                             created_at: string;
                         };
                     };
@@ -451,6 +481,8 @@ export interface paths {
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
                             is_active: boolean;
+                            retain_clone: boolean;
+                            last_cloned_at: string | null;
                             created_at: string;
                         };
                     };
@@ -512,13 +544,38 @@ export interface paths {
                         analysis_types?: ("sca" | "sast")[];
                         schedule_cron?: string | null;
                         is_active?: boolean;
+                        retain_clone?: boolean;
                         /** Format: uuid */
                         credential_id?: string | null;
-                        credential?: {
-                            kind: string;
+                        credential?: ({
+                            /** @enum {string} */
+                            kind: "https_token";
                             label: string;
                             value: string;
-                        } | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "https_basic";
+                            label: string;
+                            username: string;
+                            password: string;
+                        } | {
+                            /** @enum {string} */
+                            kind: "ssh_key";
+                            label: string;
+                            private_key: string;
+                            passphrase?: string | null;
+                            known_hosts?: string | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "jira_token";
+                            label: string;
+                            value: string;
+                        } | {
+                            /** @enum {string} */
+                            kind: "llm_api_key";
+                            label: string;
+                            value: string;
+                        }) | null;
                     };
                 };
             };
@@ -545,6 +602,8 @@ export interface paths {
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
                             is_active: boolean;
+                            retain_clone: boolean;
+                            last_cloned_at: string | null;
                             created_at: string;
                         };
                     };
@@ -652,6 +711,99 @@ export interface paths {
                 };
             };
         };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/repos/{id}/purge-cache": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete the on-disk cached clone for this repo
+         * @description Frees the retained clone's disk space and clears `last_cloned_at`. The next scan will start from a fresh clone regardless of `retain_clone`.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            name: string;
+                            url: string;
+                            /** @enum {string} */
+                            protocol: "ssh" | "https";
+                            /** Format: uuid */
+                            credential_id: string | null;
+                            default_branch: string;
+                            scan_paths: string[];
+                            analysis_types: ("sca" | "sast")[];
+                            schedule_cron: string | null;
+                            is_active: boolean;
+                            retain_clone: boolean;
+                            last_cloned_at: string | null;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -826,21 +978,69 @@ export interface paths {
                         jira_base_url?: string | null;
                         /** Format: uuid */
                         jira_credential_id?: string | null;
-                        jira_credential?: {
-                            kind: string;
+                        jira_credential?: ({
+                            /** @enum {string} */
+                            kind: "https_token";
                             label: string;
                             value: string;
-                        } | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "https_basic";
+                            label: string;
+                            username: string;
+                            password: string;
+                        } | {
+                            /** @enum {string} */
+                            kind: "ssh_key";
+                            label: string;
+                            private_key: string;
+                            passphrase?: string | null;
+                            known_hosts?: string | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "jira_token";
+                            label: string;
+                            value: string;
+                        } | {
+                            /** @enum {string} */
+                            kind: "llm_api_key";
+                            label: string;
+                            value: string;
+                        }) | null;
                         llm_base_url?: string | null;
                         llm_api_format?: string | null;
                         llm_model?: string | null;
                         /** Format: uuid */
                         llm_credential_id?: string | null;
-                        llm_credential?: {
-                            kind: string;
+                        llm_credential?: ({
+                            /** @enum {string} */
+                            kind: "https_token";
                             label: string;
                             value: string;
-                        } | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "https_basic";
+                            label: string;
+                            username: string;
+                            password: string;
+                        } | {
+                            /** @enum {string} */
+                            kind: "ssh_key";
+                            label: string;
+                            private_key: string;
+                            passphrase?: string | null;
+                            known_hosts?: string | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "jira_token";
+                            label: string;
+                            value: string;
+                        } | {
+                            /** @enum {string} */
+                            kind: "llm_api_key";
+                            label: string;
+                            value: string;
+                        }) | null;
                     };
                 };
             };
@@ -927,6 +1127,21 @@ export interface paths {
                             id: string;
                             kind: string;
                             label: string;
+                            metadata: {
+                                username?: string | null;
+                                has_passphrase?: boolean;
+                                has_known_hosts?: boolean;
+                            } | null;
+                            references: {
+                                repos: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    name: string;
+                                }[];
+                                jira_settings: boolean;
+                                llm_settings: boolean;
+                            };
+                            reference_count: number;
                             created_at: string;
                         }[];
                     };
@@ -956,7 +1171,116 @@ export interface paths {
             };
         };
         put?: never;
-        post?: never;
+        /**
+         * Create a new credential
+         * @description Kind-aware body: `https_token`/`jira_token`/`llm_api_key` take `value`; `https_basic` takes `username`+`password`; `ssh_key` takes `private_key`, optional `passphrase`, and optional `known_hosts`.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        kind: "https_token";
+                        label: string;
+                        value: string;
+                    } | {
+                        /** @enum {string} */
+                        kind: "https_basic";
+                        label: string;
+                        username: string;
+                        password: string;
+                    } | {
+                        /** @enum {string} */
+                        kind: "ssh_key";
+                        label: string;
+                        private_key: string;
+                        passphrase?: string | null;
+                        known_hosts?: string | null;
+                    } | {
+                        /** @enum {string} */
+                        kind: "jira_token";
+                        label: string;
+                        value: string;
+                    } | {
+                        /** @enum {string} */
+                        kind: "llm_api_key";
+                        label: string;
+                        value: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            kind: string;
+                            label: string;
+                            metadata: {
+                                username?: string | null;
+                                has_passphrase?: boolean;
+                                has_known_hosts?: boolean;
+                            } | null;
+                            references: {
+                                repos: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    name: string;
+                                }[];
+                                jira_settings: boolean;
+                                llm_settings: boolean;
+                            };
+                            reference_count: number;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -1040,6 +1364,221 @@ export interface paths {
                 };
             };
         };
+        options?: never;
+        head?: never;
+        /** Rename a credential (label-only edit — value is immutable) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        label: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            kind: string;
+                            label: string;
+                            metadata: {
+                                username?: string | null;
+                                has_passphrase?: boolean;
+                                has_known_hosts?: boolean;
+                            } | null;
+                            references: {
+                                repos: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    name: string;
+                                }[];
+                                jira_settings: boolean;
+                                llm_settings: boolean;
+                            };
+                            reference_count: number;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/admin/credentials/{id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate the secret value of an existing credential
+         * @description Keeps the credential id so every repo / app_settings reference stays linked. Kind cannot change via rotate — create a new credential if you need a different kind.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        kind: "https_token";
+                        value: string;
+                    } | {
+                        /** @enum {string} */
+                        kind: "https_basic";
+                        username: string;
+                        password: string;
+                    } | {
+                        /** @enum {string} */
+                        kind: "ssh_key";
+                        private_key: string;
+                        passphrase?: string | null;
+                        known_hosts?: string | null;
+                    } | {
+                        /** @enum {string} */
+                        kind: "jira_token";
+                        value: string;
+                    } | {
+                        /** @enum {string} */
+                        kind: "llm_api_key";
+                        value: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            kind: string;
+                            label: string;
+                            metadata: {
+                                username?: string | null;
+                                has_passphrase?: boolean;
+                                has_known_hosts?: boolean;
+                            } | null;
+                            references: {
+                                repos: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    name: string;
+                                }[];
+                                jira_settings: boolean;
+                                llm_settings: boolean;
+                            };
+                            reference_count: number;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;

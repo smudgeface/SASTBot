@@ -52,12 +52,16 @@ services:
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@sastbot.local}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PORT: "8000"
+      # Where retained repo clones live. Shared with the worker so either
+      # service can purge the cache. Must match the volume mount below.
+      CLONE_CACHE_DIR: /app/clones
     ports:
       - "8000:8000"
     volumes:
       - ../../backend:/app/backend
       # Keep container-installed node_modules from being shadowed by the host mount.
       - sastbot_backend_node_modules:/app/backend/node_modules
+      - sastbot_repo_cache:/app/clones
     working_dir: /app/backend
     depends_on:
       postgres:
@@ -78,9 +82,11 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-sastbot}:${POSTGRES_PASSWORD:-sastbot}@postgres:5432/${POSTGRES_DB:-sastbot}
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      CLONE_CACHE_DIR: /app/clones
     volumes:
       - ../../backend:/app/backend
       - sastbot_backend_node_modules:/app/backend/node_modules
+      - sastbot_repo_cache:/app/clones
     working_dir: /app/backend
     depends_on:
       postgres:
@@ -117,3 +123,7 @@ volumes:
   sastbot_redisdata:
   sastbot_backend_node_modules:
   sastbot_frontend_node_modules:
+  # Retained repo clones. Size grows with how many repos have
+  # `retain_clone=true`. Purge per repo via the UI or delete the whole
+  # volume to reset everything.
+  sastbot_repo_cache:

@@ -1,3 +1,5 @@
+import { rm } from "node:fs/promises";
+
 import { Worker } from "bullmq";
 import { pino } from "pino";
 
@@ -5,41 +7,86 @@ import { loadConfig } from "./config.js";
 import { prisma } from "./db.js";
 import { closeRedis, getRedis } from "./queue/connection.js";
 import { SCAN_QUEUE_NAME, type ScanJobData } from "./queue/scanQueue.js";
+import { cloneOrRefresh } from "./services/repoCache.js";
 
 const config = loadConfig();
 const logger = pino({ level: config.logLevel, name: "sastbot-worker" });
 
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
-
 /**
- * M1 stub worker: consumes jobs from the `scans` queue, marks the scan run as
- * running, sleeps, then marks it success. No actual scanning yet.
+ * Scan job handler.
+ *
+ * M1/M2 scope: clone the repo (honouring retain_clone), then mark the run
+ * as success. No analysis yet — M3 is where cdxgen + OSV integration lands
+ * and M4 adds Opengrep + LLM triage.
+ *
+ * Even without real analysis, exercising the clone path makes the scan
+ * pipeline properly end-to-end: credentials get decrypted and exercised,
+ * retained clones get cached, and any git/auth failure surfaces as a
+ * real `failed` scan_run with an error message.
  */
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {
     const { scanRunId } = job.data;
-    logger.info({ scanRunId }, "[worker] would scan");
+    const log = logger.child({ scanRunId });
 
-    try {
-      await prisma.scanRun.update({
-        where: { id: scanRunId },
-        data: { status: "running", startedAt: new Date() },
-      });
-    } catch (err) {
-      logger.warn({ err, scanRunId }, "[worker] could not mark scan running");
+    const run = await prisma.scanRun.findUnique({
+      where: { id: scanRunId },
+      include: { repo: true },
+    });
+    if (!run || !run.repo) {
+      log.warn("[worker] scan run or repo missing — nothing to do");
+      return;
     }
+    const { repo } = run;
 
-    await sleep(2000);
+    await prisma.scanRun.update({
+      where: { id: scanRunId },
+      data: { status: "running", startedAt: new Date() },
+    });
 
+    let clone: Awaited<ReturnType<typeof cloneOrRefresh>> | null = null;
     try {
+      log.info(
+        { url: repo.url, retainClone: repo.retainClone },
+        "[worker] cloning repo",
+      );
+      clone = await cloneOrRefresh({
+        repoId: repo.id,
+        url: repo.url,
+        defaultBranch: repo.defaultBranch,
+        credentialId: repo.credentialId,
+        retainClone: repo.retainClone,
+      });
+      log.info(
+        { workingDir: clone.workingDir, fromCache: clone.fromCache },
+        "[worker] clone ready (analysis deferred to M3)",
+      );
+
       await prisma.scanRun.update({
         where: { id: scanRunId },
         data: { status: "success", finishedAt: new Date() },
       });
     } catch (err) {
-      logger.warn({ err, scanRunId }, "[worker] could not mark scan success");
+      const message = err instanceof Error ? err.message : String(err);
+      log.error({ err }, "[worker] scan failed");
+      await prisma.scanRun
+        .update({
+          where: { id: scanRunId },
+          data: {
+            status: "failed",
+            finishedAt: new Date(),
+            error: message,
+          },
+        })
+        .catch(() => undefined);
+      throw err;
+    } finally {
+      if (clone?.ephemeral) {
+        await rm(clone.workingDir, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+      }
     }
   },
   { connection: getRedis() },
@@ -47,18 +94,6 @@ const worker = new Worker<ScanJobData>(
 
 worker.on("failed", (job, err) => {
   logger.error({ jobId: job?.id, err }, "[worker] job failed");
-  if (job?.data?.scanRunId) {
-    prisma.scanRun
-      .update({
-        where: { id: job.data.scanRunId },
-        data: {
-          status: "failed",
-          finishedAt: new Date(),
-          error: err.message ?? String(err),
-        },
-      })
-      .catch(() => undefined);
-  }
 });
 
 worker.on("ready", () => logger.info("[worker] ready"));

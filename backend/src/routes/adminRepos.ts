@@ -21,6 +21,7 @@ import {
   listRepos,
   updateRepo,
 } from "../services/repoService.js";
+import { purge as purgeRepoCache } from "../services/repoCache.js";
 import { triggerScan } from "../services/scanService.js";
 
 const adminReposRoutes: FastifyPluginAsync = async (app) => {
@@ -138,6 +139,40 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
         }
         if (err instanceof RepoConflictError) {
           return reply.code(409).send({ detail: err.message });
+        }
+        throw err;
+      }
+    },
+  );
+
+  typed.post(
+    "/admin/repos/:id/purge-cache",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["admin", "repos"],
+        summary: "Delete the on-disk cached clone for this repo",
+        description:
+          "Frees the retained clone's disk space and clears `last_cloned_at`. The next scan will start from a fresh clone regardless of `retain_clone`.",
+        params: IdParamsSchema,
+        response: {
+          200: RepoOutSchema,
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        // Confirm the repo exists + belongs to the org before touching disk.
+        await getRepo(req.params.id, req.user?.orgId ?? null);
+        await purgeRepoCache(req.params.id);
+        const fresh = await getRepo(req.params.id, req.user?.orgId ?? null);
+        return repoToOut(fresh);
+      } catch (err) {
+        if (err instanceof RepoNotFoundError) {
+          return reply.code(404).send({ detail: "Repo not found" });
         }
         throw err;
       }

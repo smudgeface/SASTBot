@@ -19,9 +19,13 @@ ENV NODE_ENV=development \
 # Enable pnpm via corepack.
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-# Tools Prisma and bcrypt need at install-time.
+# System tools:
+#   openssl, ca-certificates — TLS + Prisma
+#   git, openssh-client — the scan worker shells out to `git clone` and
+#     drives SSH authentication via GIT_SSH_COMMAND
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssl ca-certificates \
+ && apt-get install -y --no-install-recommends \
+        openssl ca-certificates git openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend

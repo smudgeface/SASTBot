@@ -49,18 +49,113 @@ export const LogoutOutSchema = z.object({ ok: z.boolean() });
 // ---------------------------------------------------------------------------
 // Credentials
 // ---------------------------------------------------------------------------
+//
+// Credentials are a discriminated union on `kind`. Each kind has its own
+// required secret fields. Storage rules:
+//   - secrets (tokens, passwords, private keys, passphrases) go through
+//     AES-GCM encryption into `credentials.ciphertext`
+//   - non-secret kind-specific fields (username for https_basic,
+//     known_hosts for ssh_key) are stored in `credentials.metadata` (JSONB)
+//
+// See backend/src/services/credentialService.ts for the encoding.
 
-export const CredentialCreateSchema = z.object({
-  kind: CredentialKindSchema,
-  label: z.string().min(1).max(255),
+const LabelSchema = z.string().min(1).max(255);
+
+export const HttpsTokenCreateSchema = z.object({
+  kind: z.literal("https_token"),
+  label: LabelSchema,
   value: z.string().min(1),
 });
+
+export const HttpsBasicCreateSchema = z.object({
+  kind: z.literal("https_basic"),
+  label: LabelSchema,
+  username: z.string().min(1).max(255),
+  password: z.string().min(1),
+});
+
+export const SshKeyCreateSchema = z.object({
+  kind: z.literal("ssh_key"),
+  label: LabelSchema,
+  /** PEM-encoded private key (OpenSSH or RSA format). */
+  private_key: z.string().min(1),
+  /** Optional — only needed if the key is passphrase-protected. */
+  passphrase: z.string().min(1).nullable().optional(),
+  /**
+   * Optional — a `known_hosts`-style line (or several) to pin the remote
+   * host key. If omitted, the scan worker will auto-fetch and trust.
+   */
+  known_hosts: z.string().min(1).nullable().optional(),
+});
+
+export const JiraTokenCreateSchema = z.object({
+  kind: z.literal("jira_token"),
+  label: LabelSchema,
+  value: z.string().min(1),
+});
+
+export const LlmKeyCreateSchema = z.object({
+  kind: z.literal("llm_api_key"),
+  label: LabelSchema,
+  value: z.string().min(1),
+});
+
+export const CredentialCreateSchema = z.discriminatedUnion("kind", [
+  HttpsTokenCreateSchema,
+  HttpsBasicCreateSchema,
+  SshKeyCreateSchema,
+  JiraTokenCreateSchema,
+  LlmKeyCreateSchema,
+]);
 export type CredentialCreate = z.infer<typeof CredentialCreateSchema>;
+
+/**
+ * Shape for rotating an existing credential (replacing its secret value
+ * while keeping its id — so every row that references it stays linked).
+ *
+ * Like Create, discriminated on `kind`, but without `label`.
+ */
+export const CredentialRotateSchema = z.discriminatedUnion("kind", [
+  HttpsTokenCreateSchema.omit({ label: true }),
+  HttpsBasicCreateSchema.omit({ label: true }),
+  SshKeyCreateSchema.omit({ label: true }),
+  JiraTokenCreateSchema.omit({ label: true }),
+  LlmKeyCreateSchema.omit({ label: true }),
+]);
+export type CredentialRotate = z.infer<typeof CredentialRotateSchema>;
+
+/** Shape for renaming a credential (label-only edit). */
+export const CredentialRenameSchema = z.object({
+  label: LabelSchema,
+});
+export type CredentialRename = z.infer<typeof CredentialRenameSchema>;
+
+/** Non-secret metadata surfaced to the UI. `username` for https_basic,
+ *  `has_passphrase` + `has_known_hosts` for ssh_key. Never includes any
+ *  decrypted value. */
+export const CredentialMetadataSchema = z
+  .object({
+    username: z.string().nullable().optional(),
+    has_passphrase: z.boolean().optional(),
+    has_known_hosts: z.boolean().optional(),
+  })
+  .nullable();
+
+/** Summary of what uses a credential — drives the "Used by" column. */
+export const CredentialReferencesSchema = z.object({
+  repos: z.array(z.object({ id: UuidSchema, name: z.string() })),
+  jira_settings: z.boolean(),
+  llm_settings: z.boolean(),
+});
+export type CredentialReferences = z.infer<typeof CredentialReferencesSchema>;
 
 export const CredentialOutSchema = z.object({
   id: UuidSchema,
   kind: z.string(),
   label: z.string(),
+  metadata: CredentialMetadataSchema,
+  references: CredentialReferencesSchema,
+  reference_count: z.number().int().nonnegative(),
   created_at: IsoDateTimeSchema,
 });
 export type CredentialOut = z.infer<typeof CredentialOutSchema>;
@@ -80,6 +175,9 @@ export const RepoCreateSchema = z.object({
   analysis_types: z.array(AnalysisTypeSchema).default(["sca"]),
   schedule_cron: z.string().nullable().optional(),
   is_active: z.boolean().default(true),
+  /** When true, worker keeps the clone between scans and updates via
+   *  `git fetch`; when false, each scan starts from a fresh tmpdir. */
+  retain_clone: z.boolean().default(false),
   credential_id: UuidSchema.nullable().optional(),
   // NOTE: the contract names the inline field `credential`, NOT `new_credential`.
   credential: CredentialCreateSchema.nullable().optional(),
@@ -95,6 +193,7 @@ export const RepoUpdateSchema = z.object({
   analysis_types: z.array(AnalysisTypeSchema).optional(),
   schedule_cron: z.string().nullable().optional(),
   is_active: z.boolean().optional(),
+  retain_clone: z.boolean().optional(),
   credential_id: UuidSchema.nullable().optional(),
   credential: CredentialCreateSchema.nullable().optional(),
 });
@@ -112,6 +211,10 @@ export const RepoOutSchema = z.object({
   analysis_types: z.array(AnalysisTypeSchema),
   schedule_cron: z.string().nullable(),
   is_active: z.boolean(),
+  retain_clone: z.boolean(),
+  /** Set whenever the worker finishes a clone/fetch for this repo. Null
+   *  means no local cache exists — "Purge cache" should be disabled. */
+  last_cloned_at: IsoDateTimeSchema.nullable(),
   created_at: IsoDateTimeSchema,
 });
 export type RepoOut = z.infer<typeof RepoOutSchema>;

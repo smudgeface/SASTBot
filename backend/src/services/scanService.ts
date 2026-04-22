@@ -25,7 +25,7 @@ export async function triggerScan(input: TriggerScanInput) {
     select: { id: true, orgId: true },
   });
   if (!repo) {
-    throw new RepoNotFoundError(input.repoId);
+    throw new RepoNotFoundError();
   }
 
   const run = await prisma.scanRun.create({
