@@ -94,9 +94,8 @@ export default function CredentialsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>ID</TableHead>
-                <TableHead>Kind</TableHead>
                 <TableHead>Label</TableHead>
+                <TableHead>Kind</TableHead>
                 <TableHead>Used by</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead className="w-10" />
@@ -105,14 +104,8 @@ export default function CredentialsPage() {
             <TableBody>
               {items.map((c) => (
                 <TableRow key={c.id}>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
-                    {truncate(c.id, 10)}
-                  </TableCell>
-                  <TableCell className="uppercase text-xs text-muted-foreground">
-                    {c.kind}
-                  </TableCell>
                   <TableCell>
-                    <div>{c.label}</div>
+                    <div className="font-medium">{c.label}</div>
                     {c.metadata?.username ? (
                       <div className="text-xs text-muted-foreground">
                         user: <span className="font-mono">{c.metadata.username}</span>
@@ -121,6 +114,15 @@ export default function CredentialsPage() {
                     {c.metadata?.has_known_hosts ? (
                       <div className="text-xs text-muted-foreground">host-key pinned</div>
                     ) : null}
+                    <div
+                      className="text-xs text-muted-foreground font-mono mt-0.5"
+                      title={c.id}
+                    >
+                      {truncate(c.id, 10)}
+                    </div>
+                  </TableCell>
+                  <TableCell className="uppercase text-xs text-muted-foreground">
+                    {c.kind}
                   </TableCell>
                   <TableCell>
                     <UsedByCell refs={c.references} />
