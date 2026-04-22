@@ -1,0 +1,120 @@
+# SASTBot local development stack
+#
+# Usage from repo root:
+#   docker compose -f docker/compose/docker-compose.yml up --build
+#
+# Environment is loaded from ../../.env (repo root). See ../../.env.example.
+
+name: sastbot
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sastbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sastbot}
+      POSTGRES_DB: ${POSTGRES_DB:-sastbot}
+    ports:
+      - "5432:5432"
+    volumes:
+      - sastbot_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sastbot} -d ${POSTGRES_DB:-sastbot}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - sastbot_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: docker/backend.Dockerfile
+      target: dev
+    environment:
+      MASTER_KEY: ${MASTER_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-sastbot}:${POSTGRES_PASSWORD:-sastbot}@postgres:5432/${POSTGRES_DB:-sastbot}
+      REDIS_URL: redis://redis:6379/0
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:5173}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@sastbot.local}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../backend:/app/backend
+      # Keep container-installed node_modules from being shadowed by the host mount.
+      - sastbot_backend_node_modules:/app/backend/node_modules
+    working_dir: /app/backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # M1: `prisma db push` syncs the schema directly (no migration files committed yet).
+    # Switch to `prisma migrate deploy` once we capture the initial migration in M2.
+    command: ["sh", "-c", "pnpm prisma db push --accept-data-loss && pnpm dev"]
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: docker/backend.Dockerfile
+      target: dev
+    environment:
+      MASTER_KEY: ${MASTER_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-sastbot}:${POSTGRES_PASSWORD:-sastbot}@postgres:5432/${POSTGRES_DB:-sastbot}
+      REDIS_URL: redis://redis:6379/0
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ../../backend:/app/backend
+      - sastbot_backend_node_modules:/app/backend/node_modules
+    working_dir: /app/backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    # BullMQ worker is a stub in M1 — it consumes the `scans` queue but the
+    # handler just logs and marks the run successful. M2 fills it in.
+    command: ["pnpm", "run", "worker"]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: docker/frontend.Dockerfile
+      target: dev
+    environment:
+      VITE_API_BASE: http://backend:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../../frontend:/app
+      - sastbot_frontend_node_modules:/app/node_modules
+    working_dir: /app
+    depends_on:
+      - backend
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+    restart: unless-stopped
+
+volumes:
+  sastbot_pgdata:
+  sastbot_redisdata:
+  sastbot_backend_node_modules:
+  sastbot_frontend_node_modules:
