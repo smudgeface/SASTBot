@@ -1,13 +1,32 @@
 import { useMemo, useState } from "react";
-import { MoreHorizontal, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import {
+  Eraser,
+  MoreHorizontal,
+  Pencil,
+  Play,
+  Plus,
+  Trash2,
+} from "lucide-react";
 
 import { useCredentials } from "@/api/queries/credentials";
-import { useCreateRepo, useDeleteRepo, useRepos, useUpdateRepo } from "@/api/queries/repos";
+import {
+  useCreateRepo,
+  useDeleteRepo,
+  usePurgeRepoCache,
+  useRepos,
+  useUpdateRepo,
+} from "@/api/queries/repos";
 import { useTriggerScan } from "@/api/queries/scans";
 import type { AnalysisType, Repo, RepoProtocol, RepoUpsertInput } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  CredentialFormFields,
+  buildCredentialCreate,
+  emptyCredentialForm,
+  type CredentialFormState,
+} from "@/components/CredentialFormFields";
 import {
   Dialog,
   DialogContent,
@@ -22,7 +41,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input, Textarea } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -41,16 +60,32 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
+import { formatDate } from "@/lib/format";
+
+/** Credential kinds that can authenticate a git clone. */
+const REPO_CRED_KINDS = ["https_token", "https_basic", "ssh_key"] as const;
 
 export default function ReposPage() {
   const repos = useRepos();
   const deleteRepo = useDeleteRepo();
   const triggerScan = useTriggerScan();
+  const purgeCache = usePurgeRepoCache();
   const { toast } = useToast();
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Repo | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Repo | null>(null);
+  const [pendingPurge, setPendingPurge] = useState<Repo | null>(null);
+
+  const openCreate = () => {
+    setEditing(null);
+    setFormOpen(true);
+  };
+
+  const openEdit = (repo: Repo) => {
+    setEditing(repo);
+    setFormOpen(true);
+  };
 
   const onScanNow = async (repo: Repo) => {
     try {
@@ -63,16 +98,6 @@ export default function ReposPage() {
         description: err instanceof Error ? err.message : "Unknown error",
       });
     }
-  };
-
-  const openCreate = () => {
-    setEditing(null);
-    setFormOpen(true);
-  };
-
-  const openEdit = (repo: Repo) => {
-    setEditing(repo);
-    setFormOpen(true);
   };
 
   const confirmDelete = async () => {
@@ -88,6 +113,22 @@ export default function ReposPage() {
       });
     } finally {
       setPendingDelete(null);
+    }
+  };
+
+  const confirmPurge = async () => {
+    if (!pendingPurge) return;
+    try {
+      await purgeCache.mutateAsync(pendingPurge.id);
+      toast({ title: "Cache purged", description: pendingPurge.name });
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Failed to purge cache",
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
+    } finally {
+      setPendingPurge(null);
     }
   };
 
@@ -137,6 +178,7 @@ export default function ReposPage() {
                 <TableHead>Protocol</TableHead>
                 <TableHead>Default branch</TableHead>
                 <TableHead>Analysis</TableHead>
+                <TableHead>Cache</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
@@ -158,6 +200,9 @@ export default function ReposPage() {
                       ))}
                     </div>
                   </TableCell>
+                  <TableCell>
+                    <CacheCell repo={repo} />
+                  </TableCell>
                   <TableCell className="text-right">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -171,6 +216,12 @@ export default function ReposPage() {
                         </DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => openEdit(repo)}>
                           <Pencil className="h-4 w-4" /> Edit
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() => setPendingPurge(repo)}
+                          disabled={!repo.last_cloned_at}
+                        >
+                          <Eraser className="h-4 w-4" /> Purge cache
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onSelect={() => setPendingDelete(repo)}
@@ -200,7 +251,7 @@ export default function ReposPage() {
           <DialogHeader>
             <DialogTitle>Delete repository?</DialogTitle>
             <DialogDescription>
-              {pendingDelete ? `“${pendingDelete.name}” will be removed permanently.` : null}
+              {pendingDelete ? `"${pendingDelete.name}" will be removed permanently.` : null}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -217,6 +268,47 @@ export default function ReposPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={!!pendingPurge} onOpenChange={(open) => !open && setPendingPurge(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Purge cached clone?</DialogTitle>
+            <DialogDescription>
+              {pendingPurge ? (
+                <>
+                  The on-disk clone for "{pendingPurge.name}" will be removed. The next
+                  scan will start from a fresh clone.
+                </>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingPurge(null)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmPurge} disabled={purgeCache.isPending}>
+              {purgeCache.isPending ? "Purging…" : "Purge"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function CacheCell({ repo }: { repo: Repo }) {
+  if (!repo.retain_clone) {
+    return <span className="text-xs text-muted-foreground italic">ephemeral</span>;
+  }
+  if (!repo.last_cloned_at) {
+    return <span className="text-xs text-muted-foreground">retain (empty)</span>;
+  }
+  return (
+    <div className="text-xs">
+      <Badge variant="secondary" className="uppercase">
+        cached
+      </Badge>
+      <div className="text-muted-foreground mt-1">{formatDate(repo.last_cloned_at)}</div>
     </div>
   );
 }
@@ -248,33 +340,25 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   );
   const [sca, setSca] = useState<boolean>(repo?.analysis_types.includes("sca") ?? true);
   const [sast, setSast] = useState<boolean>(repo?.analysis_types.includes("sast") ?? true);
+  const [retainClone, setRetainClone] = useState<boolean>(repo?.retain_clone ?? false);
 
   const [credentialChoice, setCredentialChoice] = useState<CredentialChoice>(
     repo?.credential_id ? "existing" : "new",
   );
   const [credentialId, setCredentialId] = useState<string>(repo?.credential_id ?? "");
-  const [newKind, setNewKind] = useState("https_token");
-  const [newLabel, setNewLabel] = useState("");
-  const [newValue, setNewValue] = useState("");
+  const [credFormState, setCredFormState] = useState<CredentialFormState>(
+    emptyCredentialForm("https_token"),
+  );
 
   const busy = createRepo.isPending || updateRepo.isPending;
 
-  const filteredCredentials = useMemo(() => credentials.data ?? [], [credentials.data]);
-
-  const reset = () => {
-    setName("");
-    setUrl("");
-    setProtocol("https");
-    setDefaultBranch("main");
-    setScanPathsText("");
-    setSca(true);
-    setSast(true);
-    setCredentialChoice("new");
-    setCredentialId("");
-    setNewKind("https_token");
-    setNewLabel("");
-    setNewValue("");
-  };
+  const filteredCredentials = useMemo(
+    () =>
+      (credentials.data ?? []).filter((c) =>
+        (REPO_CRED_KINDS as readonly string[]).includes(c.kind),
+      ),
+    [credentials.data],
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -294,18 +378,29 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       default_branch: defaultBranch.trim() || "main",
       scan_paths,
       analysis_types,
+      retain_clone: retainClone,
     };
 
     if (credentialChoice === "existing") {
       payload.credential_id = credentialId || null;
-    } else if (newLabel.trim() && newValue.trim()) {
-      payload.credential = {
-        kind: newKind,
-        label: newLabel.trim(),
-        value: newValue,
-      };
     } else {
-      payload.credential_id = null;
+      // Only try to build an inline credential if the user typed anything.
+      const hasAnyField =
+        credFormState.label.trim() ||
+        credFormState.value ||
+        credFormState.username.trim() ||
+        credFormState.password ||
+        credFormState.private_key.trim();
+      if (hasAnyField) {
+        const built = buildCredentialCreate(credFormState);
+        if (!built.ok) {
+          toast({ variant: "destructive", title: built.error });
+          return;
+        }
+        payload.credential = built.input;
+      } else {
+        payload.credential_id = null;
+      }
     }
 
     try {
@@ -317,7 +412,19 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
         toast({ title: "Repository added", description: payload.name });
       }
       onOpenChange(false);
-      if (!repo) reset();
+      if (!repo) {
+        setName("");
+        setUrl("");
+        setProtocol("https");
+        setDefaultBranch("main");
+        setScanPathsText("");
+        setSca(true);
+        setSast(true);
+        setRetainClone(false);
+        setCredentialChoice("new");
+        setCredentialId("");
+        setCredFormState(emptyCredentialForm("https_token"));
+      }
     } catch (err) {
       toast({
         variant: "destructive",
@@ -337,7 +444,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <form className="space-y-4" onSubmit={handleSubmit}>
+        <form className="space-y-4 max-h-[70vh] overflow-y-auto pr-1" onSubmit={handleSubmit}>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="repo-name">Name</Label>
@@ -427,6 +534,25 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
             </div>
           </div>
 
+          <div className="space-y-1.5">
+            <Label>Clone cache</Label>
+            <label className="inline-flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={retainClone}
+                onChange={(e) => setRetainClone(e.target.checked)}
+              />
+              <div>
+                Retain the clone between scans
+                <p className="text-xs text-muted-foreground">
+                  Trades disk space for scan speed — subsequent scans do a `git fetch` instead
+                  of re-cloning. Purge from the row menu to recover the space or force a clean run.
+                </p>
+              </div>
+            </label>
+          </div>
+
           <Separator />
 
           <div className="space-y-3">
@@ -464,7 +590,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 <SelectContent>
                   {filteredCredentials.length === 0 ? (
                     <div className="px-3 py-2 text-xs text-muted-foreground">
-                      No credentials yet. Create one instead.
+                      No compatible credentials yet. Create one instead.
                     </div>
                   ) : null}
                   {filteredCredentials.map((c) => (
@@ -475,40 +601,12 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 </SelectContent>
               </Select>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="cred-kind">Kind</Label>
-                  <Select value={newKind} onValueChange={setNewKind}>
-                    <SelectTrigger id="cred-kind">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="https_token">HTTPS token</SelectItem>
-                      <SelectItem value="https_basic">HTTPS basic auth</SelectItem>
-                      <SelectItem value="ssh_key">SSH key</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="cred-label">Label</Label>
-                  <Input
-                    id="cred-label"
-                    value={newLabel}
-                    onChange={(e) => setNewLabel(e.target.value)}
-                    placeholder="github-read-token"
-                  />
-                </div>
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label htmlFor="cred-value">Value</Label>
-                  <Textarea
-                    id="cred-value"
-                    value={newValue}
-                    onChange={(e) => setNewValue(e.target.value)}
-                    placeholder="Paste token or key. Encrypted at rest."
-                    rows={3}
-                  />
-                </div>
-              </div>
+              <CredentialFormFields
+                idPrefix="repo-cred"
+                state={credFormState}
+                onChange={setCredFormState}
+                allowedKinds={REPO_CRED_KINDS}
+              />
             )}
           </div>
 

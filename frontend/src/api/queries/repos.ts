@@ -53,3 +53,18 @@ export function useDeleteRepo() {
     },
   });
 }
+
+/** Delete the on-disk cached clone for a repo. Enabled only when the repo
+ *  has `last_cloned_at` set. Clears `last_cloned_at` on the server and
+ *  refreshes the list so the UI picks up the new state. */
+export function usePurgeRepoCache() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<Repo>(`/admin/repos/${id}/purge-cache`, { method: "POST" }),
+    onSuccess: (_repo, id) => {
+      qc.invalidateQueries({ queryKey: reposKey });
+      qc.invalidateQueries({ queryKey: repoKey(id) });
+    },
+  });
+}

@@ -42,13 +42,7 @@ export async function createRepo(
       let credentialId: string | null = input.credential_id ?? null;
       if (input.credential) {
         const cred = await createCredential(
-          {
-            orgId,
-            kind: input.credential.kind,
-            label: input.credential.label,
-            value: input.credential.value,
-            createdBy,
-          },
+          { orgId, input: input.credential, createdBy },
           tx,
         );
         credentialId = cred.id;
@@ -66,6 +60,7 @@ export async function createRepo(
           analysisTypes: (input.analysis_types ?? ["sca"]) as Prisma.InputJsonValue,
           scheduleCron: input.schedule_cron ?? null,
           isActive: input.is_active ?? true,
+          retainClone: input.retain_clone ?? false,
         },
       });
     });
@@ -91,13 +86,7 @@ export async function updateRepo(
       let credentialId: string | null | undefined;
       if (input.credential) {
         const cred = await createCredential(
-          {
-            orgId,
-            kind: input.credential.kind,
-            label: input.credential.label,
-            value: input.credential.value,
-            createdBy,
-          },
+          { orgId, input: input.credential, createdBy },
           tx,
         );
         credentialId = cred.id;
@@ -125,6 +114,7 @@ export async function updateRepo(
         data.scheduleCron = input.schedule_cron ?? null;
       }
       if (input.is_active !== undefined) data.isActive = input.is_active;
+      if (input.retain_clone !== undefined) data.retainClone = input.retain_clone;
 
       return tx.repo.update({ where: { id }, data });
     });

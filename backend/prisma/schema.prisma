@@ -64,6 +64,11 @@ model Credential {
   nonce      Bytes
   tag        Bytes // GCM auth tag (stored separately; see security/crypto.ts)
   keyVersion Int      @default(1) @map("key_version")
+  // Kind-specific non-secret fields: username for https_basic,
+  // optional known_hosts for ssh_key, etc. Secrets (passwords,
+  // passphrases, private keys) are NEVER stored here — they live
+  // encrypted in `ciphertext`. See services/credentialService.ts.
+  metadata   Json?
   createdBy  String?  @map("created_by") @db.Uuid
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -76,8 +81,15 @@ model Credential {
 }
 
 model Repo {
-  id            String   @id @default(uuid()) @db.Uuid
-  orgId         String?  @map("org_id") @db.Uuid
+  id            String    @id @default(uuid()) @db.Uuid
+  orgId         String?   @map("org_id") @db.Uuid
+  // When true, the worker keeps the on-disk clone between scans and
+  // updates via `git fetch` + `git reset` on subsequent runs instead of
+  // re-cloning. Faster, at the cost of disk space on the scanning host.
+  retainClone   Boolean   @default(false) @map("retain_clone")
+  // Set by the worker whenever it lands a clone/fetch on disk. Null when
+  // no cached clone exists — used by the UI to enable/disable "Purge cache".
+  lastClonedAt  DateTime? @map("last_cloned_at") @db.Timestamptz(6)
   name          String
   url           String
   protocol      String // "ssh" | "https"

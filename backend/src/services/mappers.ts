@@ -3,6 +3,7 @@ import type { AppSettings, Credential, Repo, ScanRun, User } from "@prisma/clien
 import type {
   AppSettingsOut,
   CredentialOut,
+  CredentialReferences,
   RepoOut,
   ScanRunOut,
   UserOut,
@@ -67,11 +68,42 @@ export function userToOut(user: User): UserOut {
   };
 }
 
-export function credentialToOut(cred: Credential): CredentialOut {
+/** Distill the JSONB metadata blob into the UI-safe subset (no secrets).
+ *  Used by the /admin/credentials responses. */
+function credentialMetadataToOut(
+  kind: string,
+  raw: unknown,
+): CredentialOut["metadata"] {
+  if (raw === null || raw === undefined || typeof raw !== "object") return null;
+  const meta = raw as Record<string, unknown>;
+  switch (kind) {
+    case "https_basic":
+      return {
+        username: typeof meta.username === "string" ? meta.username : null,
+      };
+    case "ssh_key":
+      return {
+        has_known_hosts: typeof meta.known_hosts === "string" && meta.known_hosts.length > 0,
+      };
+    default:
+      return null;
+  }
+}
+
+export function credentialToOut(
+  cred: Credential,
+  references: CredentialReferences,
+): CredentialOut {
   return {
     id: cred.id,
     kind: cred.kind,
     label: cred.label,
+    metadata: credentialMetadataToOut(cred.kind, cred.metadata),
+    references,
+    reference_count:
+      references.repos.length +
+      (references.jira_settings ? 1 : 0) +
+      (references.llm_settings ? 1 : 0),
     created_at: cred.createdAt.toISOString(),
   };
 }
@@ -89,6 +121,8 @@ export function repoToOut(repo: Repo): RepoOut {
     analysis_types: toAnalysisArray(repo.analysisTypes),
     schedule_cron: repo.scheduleCron,
     is_active: repo.isActive,
+    retain_clone: repo.retainClone,
+    last_cloned_at: repo.lastClonedAt ? repo.lastClonedAt.toISOString() : null,
     created_at: repo.createdAt.toISOString(),
   };
 }

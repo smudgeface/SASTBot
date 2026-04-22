@@ -39,6 +39,10 @@ const EnvSchema = z.object({
   // pino requires lowercase level names ("info" not "INFO").
   LOG_LEVEL: z.string().default("info").transform((v) => v.toLowerCase()),
   PORT: z.coerce.number().int().positive().default(8000),
+  // Directory where retained per-repo clones live. In compose this is a
+  // named volume mounted into both the backend and worker services so
+  // either can purge the cache.
+  CLONE_CACHE_DIR: z.string().default("/app/clones"),
 });
 
 export type AppConfig = {
@@ -50,6 +54,7 @@ export type AppConfig = {
   bootstrapAdminEmail: string;
   logLevel: string;
   port: number;
+  cloneCacheDir: string;
 };
 
 let cached: AppConfig | null = null;
@@ -99,6 +104,7 @@ export function loadConfig(): AppConfig {
     bootstrapAdminEmail: parsed.data.BOOTSTRAP_ADMIN_EMAIL,
     logLevel: parsed.data.LOG_LEVEL,
     port: parsed.data.PORT,
+    cloneCacheDir: parsed.data.CLONE_CACHE_DIR,
   };
   return cached;
 }
