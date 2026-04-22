@@ -341,30 +341,30 @@ export interface paths {
                         credential?: ({
                             /** @enum {string} */
                             kind: "https_token";
-                            label: string;
+                            name: string;
                             value: string;
                         } | {
                             /** @enum {string} */
                             kind: "https_basic";
-                            label: string;
+                            name: string;
                             username: string;
                             password: string;
                         } | {
                             /** @enum {string} */
                             kind: "ssh_key";
-                            label: string;
+                            name: string;
                             private_key: string;
                             passphrase?: string | null;
                             known_hosts?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "jira_token";
-                            label: string;
+                            name: string;
                             value: string;
                         } | {
                             /** @enum {string} */
                             kind: "llm_api_key";
-                            label: string;
+                            name: string;
                             value: string;
                         }) | null;
                     };
@@ -550,30 +550,30 @@ export interface paths {
                         credential?: ({
                             /** @enum {string} */
                             kind: "https_token";
-                            label: string;
+                            name: string;
                             value: string;
                         } | {
                             /** @enum {string} */
                             kind: "https_basic";
-                            label: string;
+                            name: string;
                             username: string;
                             password: string;
                         } | {
                             /** @enum {string} */
                             kind: "ssh_key";
-                            label: string;
+                            name: string;
                             private_key: string;
                             passphrase?: string | null;
                             known_hosts?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "jira_token";
-                            label: string;
+                            name: string;
                             value: string;
                         } | {
                             /** @enum {string} */
                             kind: "llm_api_key";
-                            label: string;
+                            name: string;
                             value: string;
                         }) | null;
                     };
@@ -981,30 +981,30 @@ export interface paths {
                         jira_credential?: ({
                             /** @enum {string} */
                             kind: "https_token";
-                            label: string;
+                            name: string;
                             value: string;
                         } | {
                             /** @enum {string} */
                             kind: "https_basic";
-                            label: string;
+                            name: string;
                             username: string;
                             password: string;
                         } | {
                             /** @enum {string} */
                             kind: "ssh_key";
-                            label: string;
+                            name: string;
                             private_key: string;
                             passphrase?: string | null;
                             known_hosts?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "jira_token";
-                            label: string;
+                            name: string;
                             value: string;
                         } | {
                             /** @enum {string} */
                             kind: "llm_api_key";
-                            label: string;
+                            name: string;
                             value: string;
                         }) | null;
                         llm_base_url?: string | null;
@@ -1015,30 +1015,30 @@ export interface paths {
                         llm_credential?: ({
                             /** @enum {string} */
                             kind: "https_token";
-                            label: string;
+                            name: string;
                             value: string;
                         } | {
                             /** @enum {string} */
                             kind: "https_basic";
-                            label: string;
+                            name: string;
                             username: string;
                             password: string;
                         } | {
                             /** @enum {string} */
                             kind: "ssh_key";
-                            label: string;
+                            name: string;
                             private_key: string;
                             passphrase?: string | null;
                             known_hosts?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "jira_token";
-                            label: string;
+                            name: string;
                             value: string;
                         } | {
                             /** @enum {string} */
                             kind: "llm_api_key";
-                            label: string;
+                            name: string;
                             value: string;
                         }) | null;
                     };
@@ -1126,7 +1126,7 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             kind: string;
-                            label: string;
+                            name: string;
                             metadata: {
                                 username?: string | null;
                                 has_passphrase?: boolean;
@@ -1187,30 +1187,30 @@ export interface paths {
                     "application/json": {
                         /** @enum {string} */
                         kind: "https_token";
-                        label: string;
+                        name: string;
                         value: string;
                     } | {
                         /** @enum {string} */
                         kind: "https_basic";
-                        label: string;
+                        name: string;
                         username: string;
                         password: string;
                     } | {
                         /** @enum {string} */
                         kind: "ssh_key";
-                        label: string;
+                        name: string;
                         private_key: string;
                         passphrase?: string | null;
                         known_hosts?: string | null;
                     } | {
                         /** @enum {string} */
                         kind: "jira_token";
-                        label: string;
+                        name: string;
                         value: string;
                     } | {
                         /** @enum {string} */
                         kind: "llm_api_key";
-                        label: string;
+                        name: string;
                         value: string;
                     };
                 };
@@ -1226,7 +1226,7 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             kind: string;
-                            label: string;
+                            name: string;
                             metadata: {
                                 username?: string | null;
                                 has_passphrase?: boolean;
@@ -1366,7 +1366,7 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        /** Rename a credential (label-only edit — value is immutable) */
+        /** Rename a credential (name-only edit — value is immutable) */
         patch: {
             parameters: {
                 query?: never;
@@ -1379,7 +1379,7 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        label: string;
+                        name: string;
                     };
                 };
             };
@@ -1394,7 +1394,7 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             kind: string;
-                            label: string;
+                            name: string;
                             metadata: {
                                 username?: string | null;
                                 has_passphrase?: boolean;
@@ -1512,7 +1512,7 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             kind: string;
-                            label: string;
+                            name: string;
                             metadata: {
                                 username?: string | null;
                                 has_passphrase?: boolean;

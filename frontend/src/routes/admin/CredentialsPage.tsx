@@ -94,7 +94,7 @@ export default function CredentialsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Label</TableHead>
+                <TableHead>Name</TableHead>
                 <TableHead>Kind</TableHead>
                 <TableHead>Used by</TableHead>
                 <TableHead>Created</TableHead>
@@ -105,7 +105,7 @@ export default function CredentialsPage() {
               {items.map((c) => (
                 <TableRow key={c.id}>
                   <TableCell>
-                    <div className="font-medium">{c.label}</div>
+                    <div className="font-medium">{c.name}</div>
                     {c.metadata?.username ? (
                       <div className="text-xs text-muted-foreground">
                         user: <span className="font-mono">{c.metadata.username}</span>
@@ -220,7 +220,7 @@ function AddCredentialDialog({
     }
     try {
       await createCred.mutateAsync(result.input);
-      toast({ title: "Credential created", description: state.label });
+      toast({ title: "Credential created", description: state.name });
       setState(emptyCredentialForm());
       onOpenChange(false);
     } catch (err) {
@@ -238,7 +238,7 @@ function AddCredentialDialog({
         <DialogHeader>
           <DialogTitle>Add credential</DialogTitle>
           <DialogDescription>
-            Choose a kind, give it a label, and paste the secret. Values are encrypted at
+            Choose a kind, give it a name, and paste the secret. Values are encrypted at
             rest with AES-256-GCM.
           </DialogDescription>
         </DialogHeader>
@@ -272,29 +272,29 @@ function RenameCredentialDialog({
   target: Credential | null;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [label, setLabel] = useState("");
+  const [name, setName] = useState("");
   const rename = useRenameCredential(target?.id ?? "");
   const { toast } = useToast();
 
   // Reset the input whenever the dialog target changes.
-  const currentLabel = target?.label ?? "";
-  if (target && label === "" && currentLabel) {
+  const currentName = target?.name ?? "";
+  if (target && name === "" && currentName) {
     // One-shot initialization — sufficient given the dialog is keyed on target.
-    setLabel(currentLabel);
+    setName(currentName);
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!target) return;
-    const trimmed = label.trim();
+    const trimmed = name.trim();
     if (!trimmed) {
-      toast({ variant: "destructive", title: "Label is required" });
+      toast({ variant: "destructive", title: "Name is required" });
       return;
     }
     try {
       await rename.mutateAsync(trimmed);
       toast({ title: "Credential renamed", description: trimmed });
-      setLabel("");
+      setName("");
       onOpenChange(false);
     } catch (err) {
       toast({
@@ -309,7 +309,7 @@ function RenameCredentialDialog({
     <Dialog
       open={!!target}
       onOpenChange={(open) => {
-        if (!open) setLabel("");
+        if (!open) setName("");
         onOpenChange(open);
       }}
     >
@@ -317,16 +317,16 @@ function RenameCredentialDialog({
         <DialogHeader>
           <DialogTitle>Rename credential</DialogTitle>
           <DialogDescription>
-            Only the label changes — the encrypted value and references stay untouched.
+            Only the name changes — the encrypted value and references stay untouched.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="rename-label">Label</Label>
+            <Label htmlFor="rename-name">Name</Label>
             <Input
-              id="rename-label"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
+              id="rename-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               autoFocus
             />
           </div>
@@ -355,10 +355,10 @@ function RotateCredentialDialog({
   const rotate = useRotateCredential(target?.id ?? "");
   const { toast } = useToast();
 
-  // Initialize state on target change. Labels are locked on rotate so we
-  // ignore any user edit to that field via showKindAndLabel=false.
+  // Initialize state on target change. Kind + name are locked on rotate;
+  // we pass showKindAndName=false to hide those fields in the form.
   if (target && state.kind !== target.kind) {
-    setState({ ...emptyCredentialForm(target.kind), label: target.label });
+    setState({ ...emptyCredentialForm(target.kind), name: target.name });
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -371,7 +371,7 @@ function RotateCredentialDialog({
     }
     try {
       await rotate.mutateAsync(result.input);
-      toast({ title: "Credential rotated", description: target.label });
+      toast({ title: "Credential rotated", description: target.name });
       setState(emptyCredentialForm());
       onOpenChange(false);
     } catch (err) {
@@ -393,7 +393,7 @@ function RotateCredentialDialog({
     >
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Rotate value for “{target?.label}”</DialogTitle>
+          <DialogTitle>Rotate value for “{target?.name}”</DialogTitle>
           <DialogDescription>
             The old secret is overwritten; every repository / app-settings reference stays
             linked to this credential id.
@@ -404,7 +404,7 @@ function RotateCredentialDialog({
             idPrefix="rotate-cred"
             state={state}
             onChange={setState}
-            showKindAndLabel={false}
+            showKindAndName={false}
           />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
@@ -435,7 +435,7 @@ function DeleteCredentialDialog({
     if (!target) return;
     try {
       await del.mutateAsync(target.id);
-      toast({ title: "Credential deleted", description: target.label });
+      toast({ title: "Credential deleted", description: target.name });
       onOpenChange(false);
     } catch (err) {
       toast({
@@ -455,10 +455,10 @@ function DeleteCredentialDialog({
             {target ? (
               inUse ? (
                 <>
-                  “{target.label}” is still in use. Unlink it from its consumers first.
+                  “{target.name}” is still in use. Unlink it from its consumers first.
                 </>
               ) : (
-                <>“{target.label}” will be removed permanently.</>
+                <>“{target.name}” will be removed permanently.</>
               )
             ) : null}
           </DialogDescription>

@@ -386,7 +386,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
     } else {
       // Only try to build an inline credential if the user typed anything.
       const hasAnyField =
-        credFormState.label.trim() ||
+        credFormState.name.trim() ||
         credFormState.value ||
         credFormState.username.trim() ||
         credFormState.password ||
@@ -595,7 +595,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                   ) : null}
                   {filteredCredentials.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
-                      {c.label} — <span className="text-muted-foreground">{c.kind}</span>
+                      {c.name} — <span className="text-muted-foreground">{c.kind}</span>
                     </SelectItem>
                   ))}
                 </SelectContent>

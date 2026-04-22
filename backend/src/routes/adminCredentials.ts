@@ -91,7 +91,7 @@ const adminCredentialsRoutes: FastifyPluginAsync = async (app) => {
       preHandler: [app.requireAdmin],
       schema: {
         tags: ["admin", "credentials"],
-        summary: "Rename a credential (label-only edit — value is immutable)",
+        summary: "Rename a credential (name-only edit — value is immutable)",
         params: IdParamsSchema,
         body: CredentialRenameSchema,
         response: {
@@ -107,7 +107,7 @@ const adminCredentialsRoutes: FastifyPluginAsync = async (app) => {
         const cred = await renameCredential(
           req.params.id,
           req.user?.orgId ?? null,
-          req.body.label,
+          req.body.name,
         );
         const refs = await credentialReferences(cred.id);
         return credentialToOut(cred, refs);

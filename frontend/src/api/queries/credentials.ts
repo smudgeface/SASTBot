@@ -28,10 +28,10 @@ export function useCreateCredential() {
 export function useRenameCredential(id: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (label: string) =>
+    mutationFn: (name: string) =>
       apiFetch<Credential>(`/admin/credentials/${id}`, {
         method: "PATCH",
-        json: { label },
+        json: { name },
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: credentialsKey }),
   });

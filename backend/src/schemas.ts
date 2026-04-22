@@ -59,24 +59,24 @@ export const LogoutOutSchema = z.object({ ok: z.boolean() });
 //
 // See backend/src/services/credentialService.ts for the encoding.
 
-const LabelSchema = z.string().min(1).max(255);
+const NameSchema = z.string().min(1).max(255);
 
 export const HttpsTokenCreateSchema = z.object({
   kind: z.literal("https_token"),
-  label: LabelSchema,
+  name: NameSchema,
   value: z.string().min(1),
 });
 
 export const HttpsBasicCreateSchema = z.object({
   kind: z.literal("https_basic"),
-  label: LabelSchema,
+  name: NameSchema,
   username: z.string().min(1).max(255),
   password: z.string().min(1),
 });
 
 export const SshKeyCreateSchema = z.object({
   kind: z.literal("ssh_key"),
-  label: LabelSchema,
+  name: NameSchema,
   /** PEM-encoded private key (OpenSSH or RSA format). */
   private_key: z.string().min(1),
   /** Optional — only needed if the key is passphrase-protected. */
@@ -90,13 +90,13 @@ export const SshKeyCreateSchema = z.object({
 
 export const JiraTokenCreateSchema = z.object({
   kind: z.literal("jira_token"),
-  label: LabelSchema,
+  name: NameSchema,
   value: z.string().min(1),
 });
 
 export const LlmKeyCreateSchema = z.object({
   kind: z.literal("llm_api_key"),
-  label: LabelSchema,
+  name: NameSchema,
   value: z.string().min(1),
 });
 
@@ -113,20 +113,21 @@ export type CredentialCreate = z.infer<typeof CredentialCreateSchema>;
  * Shape for rotating an existing credential (replacing its secret value
  * while keeping its id — so every row that references it stays linked).
  *
- * Like Create, discriminated on `kind`, but without `label`.
+ * Like Create, discriminated on `kind`, but without `name`.
  */
 export const CredentialRotateSchema = z.discriminatedUnion("kind", [
-  HttpsTokenCreateSchema.omit({ label: true }),
-  HttpsBasicCreateSchema.omit({ label: true }),
-  SshKeyCreateSchema.omit({ label: true }),
-  JiraTokenCreateSchema.omit({ label: true }),
-  LlmKeyCreateSchema.omit({ label: true }),
+  HttpsTokenCreateSchema.omit({ name: true }),
+  HttpsBasicCreateSchema.omit({ name: true }),
+  SshKeyCreateSchema.omit({ name: true }),
+  JiraTokenCreateSchema.omit({ name: true }),
+  LlmKeyCreateSchema.omit({ name: true }),
 ]);
 export type CredentialRotate = z.infer<typeof CredentialRotateSchema>;
 
-/** Shape for renaming a credential (label-only edit). */
+/** Shape for renaming a credential (name-only edit — the secret value is
+ *  immutable; use the rotate endpoint to replace it). */
 export const CredentialRenameSchema = z.object({
-  label: LabelSchema,
+  name: NameSchema,
 });
 export type CredentialRename = z.infer<typeof CredentialRenameSchema>;
 
@@ -152,7 +153,7 @@ export type CredentialReferences = z.infer<typeof CredentialReferencesSchema>;
 export const CredentialOutSchema = z.object({
   id: UuidSchema,
   kind: z.string(),
-  label: z.string(),
+  name: z.string(),
   metadata: CredentialMetadataSchema,
   references: CredentialReferencesSchema,
   reference_count: z.number().int().nonnegative(),
