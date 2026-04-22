@@ -117,8 +117,30 @@ function SummaryCard({
   );
 }
 
+function FindingTypeBadge({ finding }: { finding: ScanFinding }) {
+  if (finding.finding_type === "eol") {
+    return (
+      <span className={cn(
+        "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase",
+        severityChipClass(finding.severity),
+      )}>
+        EOL
+      </span>
+    );
+  }
+  if (finding.finding_type === "deprecated") {
+    return (
+      <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900">
+        DEPRECATED
+      </span>
+    );
+  }
+  return <SeverityBadge severity={finding.severity} />;
+}
+
 function FindingRow({ finding }: { finding: ScanFinding }) {
   const [expanded, setExpanded] = useState(false);
+  const isCve = finding.finding_type === "cve";
 
   return (
     <>
@@ -134,7 +156,7 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
           )}
         </TableCell>
         <TableCell>
-          <SeverityBadge severity={finding.severity} />
+          <FindingTypeBadge finding={finding} />
         </TableCell>
         <TableCell className="font-medium">
           {finding.component_name}
@@ -145,10 +167,16 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
           ) : null}
         </TableCell>
         <TableCell className="font-mono text-xs">
-          <VulnLink id={finding.cve_id ?? finding.osv_id} />
+          {isCve ? (
+            <VulnLink id={finding.cve_id ?? finding.osv_id} />
+          ) : (
+            <span className="text-muted-foreground text-xs">
+              {finding.finding_type === "eol" ? "End of Life" : "Deprecated"}
+            </span>
+          )}
         </TableCell>
         <TableCell className="text-muted-foreground text-sm">
-          {finding.cvss_score != null ? finding.cvss_score.toFixed(1) : "—"}
+          {isCve && finding.cvss_score != null ? finding.cvss_score.toFixed(1) : "—"}
         </TableCell>
         <TableCell className="text-sm text-muted-foreground max-w-sm truncate">
           {finding.summary ?? "—"}
@@ -158,26 +186,31 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
         <TableRow>
           <TableCell colSpan={6} className="bg-muted/30 py-3 px-6">
             <div className="space-y-2 text-sm">
-              {finding.summary ? (
-                <p>{finding.summary}</p>
+              {finding.summary ? <p>{finding.summary}</p> : null}
+              {finding.eol_date ? (
+                <p className="text-xs text-muted-foreground">
+                  EOL date: <span className="font-medium">{finding.eol_date.slice(0, 10)}</span>
+                </p>
               ) : null}
-              <div className="flex flex-wrap gap-1">
-                {finding.aliases.map((a) => (
-                  <a
-                    key={a}
-                    href={vulnUrl(a)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="inline-flex"
-                  >
-                    <Badge variant="outline" className="font-mono text-xs hover:bg-muted cursor-pointer">
-                      {a}
-                    </Badge>
-                  </a>
-                ))}
-              </div>
-              {finding.cvss_vector ? (
+              {isCve && finding.aliases.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {finding.aliases.map((a) => (
+                    <a
+                      key={a}
+                      href={vulnUrl(a)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex"
+                    >
+                      <Badge variant="outline" className="font-mono text-xs hover:bg-muted cursor-pointer">
+                        {a}
+                      </Badge>
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+              {isCve && finding.cvss_vector ? (
                 <p className="font-mono text-xs text-muted-foreground">
                   {finding.cvss_vector}
                 </p>
@@ -246,14 +279,13 @@ function ComponentsTab({
             <TableHead>Version</TableHead>
             <TableHead>Ecosystem</TableHead>
             <TableHead>Licenses</TableHead>
-            <TableHead>Vulnerabilities</TableHead>
+            <TableHead>Findings</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {components.map((c) => {
-            const vulns = findingsByComponent.get(c.id) ?? [];
-            // Sort by severity for display.
-            const sorted = [...vulns].sort(
+            const allFindings = findingsByComponent.get(c.id) ?? [];
+            const sorted = [...allFindings].sort(
               (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
             );
             return (
@@ -277,21 +309,48 @@ function ComponentsTab({
                     <span className="text-xs text-muted-foreground">—</span>
                   ) : (
                     <div className="flex flex-wrap gap-1">
-                      {sorted.map((f) => (
-                        <a
-                          key={f.id}
-                          href={vulnUrl(f.cve_id ?? f.osv_id)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className={cn(
-                            "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase hover:opacity-80",
-                            severityChipClass(f.severity),
-                          )}
-                          title={f.summary ?? f.cve_id ?? f.osv_id}
-                        >
-                          {f.cve_id ?? f.osv_id}
-                        </a>
-                      ))}
+                      {sorted.map((f) => {
+                        if (f.finding_type === "eol") {
+                          return (
+                            <span
+                              key={f.id}
+                              className={cn(
+                                "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase",
+                                severityChipClass(f.severity),
+                              )}
+                              title={f.summary ?? undefined}
+                            >
+                              EOL {f.eol_date ? f.eol_date.slice(0, 10) : ""}
+                            </span>
+                          );
+                        }
+                        if (f.finding_type === "deprecated") {
+                          return (
+                            <span
+                              key={f.id}
+                              className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900"
+                              title={f.summary ?? undefined}
+                            >
+                              DEPRECATED
+                            </span>
+                          );
+                        }
+                        return (
+                          <a
+                            key={f.id}
+                            href={vulnUrl(f.cve_id ?? f.osv_id)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={cn(
+                              "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase hover:opacity-80",
+                              severityChipClass(f.severity),
+                            )}
+                            title={f.summary ?? f.cve_id ?? f.osv_id}
+                          >
+                            {f.cve_id ?? f.osv_id}
+                          </a>
+                        );
+                      })}
                     </div>
                   )}
                 </TableCell>

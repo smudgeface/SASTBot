@@ -215,6 +215,7 @@ export interface Scan {
 // ---------------------------------------------------------------------------
 
 export type FindingSeverity = "critical" | "high" | "medium" | "low" | "unknown";
+export type FindingType = "cve" | "eol" | "deprecated";
 
 export interface SbomComponent {
   id: string;
@@ -233,6 +234,7 @@ export interface ScanFinding {
   component_id: string;
   component_name: string;
   component_version: string | null;
+  finding_type: FindingType;
   osv_id: string;
   cve_id: string | null;
   severity: FindingSeverity;
@@ -241,5 +243,6 @@ export interface ScanFinding {
   summary: string | null;
   aliases: string[];
   actively_exploited: boolean;
+  eol_date: string | null;
   created_at: string;
 }
