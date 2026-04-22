@@ -1,0 +1,45 @@
+# Gitea integration-test overlay. Used only by `python -m scripts.integration_gitea`.
+#
+# Compose with the main file:
+#
+#   docker compose \
+#     -f docker/compose/docker-compose.yml \
+#     -f docker/compose/docker-compose.gitea.yml \
+#     --env-file .env up -d gitea
+#
+# The overlay joins the same network as the rest of the stack, so the
+# backend and worker can reach it by DNS name `gitea`.
+
+services:
+  gitea:
+    image: gitea/gitea:1.23
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      # Skip the web installer; hardcoded admin via CLI after first boot.
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__server__ROOT_URL: "http://gitea:3000/"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__service__REQUIRE_SIGNIN_VIEW: "false"
+      # We DELIBERATELY do NOT set START_SSH_SERVER / SSH_LISTEN_PORT here:
+      # the gitea image ships with its own OpenSSH daemon listening on 22
+      # already (for git-over-SSH), and starting gitea's embedded Go SSH
+      # server on the same port crashes the container with a bind error.
+      # Default behavior is "use the container's OpenSSH" — which is
+      # exactly what we want for the integration test.
+    ports:
+      # Expose for debugging/test access from the host. Inside the
+      # compose network the backend/worker reach gitea as
+      # gitea:3000 (HTTP) / gitea:22 (SSH).
+      - "3100:3000"
+      - "2222:22"
+    volumes:
+      - sastbot_gitea_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/v1/version"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  sastbot_gitea_data:
