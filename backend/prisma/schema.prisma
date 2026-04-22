@@ -56,21 +56,22 @@ model Session {
 }
 
 model Credential {
-  id         String   @id @default(uuid()) @db.Uuid
-  orgId      String?  @map("org_id") @db.Uuid
+  id         String    @id @default(uuid()) @db.Uuid
+  orgId      String?   @map("org_id") @db.Uuid
   kind       String
   name       String
   ciphertext Bytes
   nonce      Bytes
   tag        Bytes // GCM auth tag (stored separately; see security/crypto.ts)
-  keyVersion Int      @default(1) @map("key_version")
+  keyVersion Int       @default(1) @map("key_version")
   // Kind-specific non-secret fields: username for https_basic,
   // optional known_hosts for ssh_key, etc. Secrets (passwords,
   // passphrases, private keys) are NEVER stored here — they live
   // encrypted in `ciphertext`. See services/credentialService.ts.
   metadata   Json?
-  createdBy  String?  @map("created_by") @db.Uuid
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt  DateTime? @map("expires_at") @db.Timestamptz(6)
+  createdBy  String?   @map("created_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   org          Org?          @relation(fields: [orgId], references: [id], onDelete: SetNull)
   reposUsing   Repo[]        @relation("RepoCredential")
@@ -137,12 +138,62 @@ model ScanRun {
   startedAt         DateTime? @map("started_at") @db.Timestamptz(6)
   finishedAt        DateTime? @map("finished_at") @db.Timestamptz(6)
   error             String?
+  // SCA summary counters — written by the worker after OSV lookup.
+  componentCount    Int       @default(0) @map("component_count")
+  criticalCount     Int       @default(0) @map("critical_count")
+  highCount         Int       @default(0) @map("high_count")
+  mediumCount       Int       @default(0) @map("medium_count")
+  lowCount          Int       @default(0) @map("low_count")
+  // Raw CycloneDX 1.7 SBOM produced by cdxgen; stored as JSONB for the
+  // /scans/:id/sbom download endpoint. Null until the worker writes it.
+  sbomJson          Json?     @map("sbom_json")
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  org  Org? @relation(fields: [orgId], references: [id], onDelete: SetNull)
-  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  org        Org?           @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  repo       Repo           @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  components SbomComponent[]
+  findings   ScanFinding[]
 
   @@map("scan_runs")
+}
+
+model SbomComponent {
+  id            String   @id @default(uuid()) @db.Uuid
+  scanRunId     String   @map("scan_run_id") @db.Uuid
+  name          String
+  version       String?
+  purl          String
+  ecosystem     String?
+  licenses      String[]
+  componentType String   @default("library") @map("component_type")
+
+  scanRun  ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
+  findings ScanFinding[]
+
+  @@index([scanRunId])
+  @@map("sbom_components")
+}
+
+model ScanFinding {
+  id                String   @id @default(uuid()) @db.Uuid
+  scanRunId         String   @map("scan_run_id") @db.Uuid
+  componentId       String   @map("component_id") @db.Uuid
+  osvId             String   @map("osv_id")
+  cveId             String?  @map("cve_id")
+  severity          String   @default("unknown")
+  cvssScore         Float?   @map("cvss_score")
+  cvssVector        String?  @map("cvss_vector")
+  summary           String?
+  aliases           String[]
+  activelyExploited Boolean  @default(false) @map("actively_exploited")
+  detailJson        Json?    @map("detail_json")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  scanRun   ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
+  component SbomComponent @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  @@index([scanRunId])
+  @@map("scan_findings")
 }
 
 model Canary {

@@ -1,14 +1,17 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { z } from "zod";
 
 import { prisma } from "../db.js";
 import {
   ErrorSchema,
+  FindingsQuerySchema,
   IdParamsSchema,
+  ScanFindingListSchema,
   ScanRunListSchema,
   ScanRunOutSchema,
 } from "../schemas.js";
-import { scanRunToOut } from "../services/mappers.js";
+import { scanFindingToOut, scanRunToOut } from "../services/mappers.js";
 
 const scansRoutes: FastifyPluginAsync = async (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
@@ -42,7 +45,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       preHandler: [app.authenticate],
       schema: {
         tags: ["scans"],
-        summary: "Get a scan run by id",
+        summary: "Get a scan run by id (includes SCA summary counters)",
         params: IdParamsSchema,
         response: {
           200: ScanRunOutSchema,
@@ -60,6 +63,133 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(404).send({ detail: "Scan run not found" });
       }
       return scanRunToOut(run);
+    },
+  );
+
+  typed.get(
+    "/scans/:id/findings",
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ["scans"],
+        summary: "List vulnerability findings for a scan run",
+        params: IdParamsSchema,
+        querystring: FindingsQuerySchema,
+        response: {
+          200: ScanFindingListSchema,
+          401: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const run = await prisma.scanRun.findFirst({
+        where: { id: req.params.id, orgId: orgId ?? null },
+        select: { id: true },
+      });
+      if (!run) {
+        return reply.code(404).send({ detail: "Scan run not found" });
+      }
+
+      const where: Record<string, unknown> = { scanRunId: req.params.id };
+      if (req.query.severity) where.severity = req.query.severity;
+      if (req.query.package) {
+        where.component = {
+          name: { contains: req.query.package, mode: "insensitive" },
+        };
+      }
+
+      const findings = await prisma.scanFinding.findMany({
+        where,
+        include: { component: { select: { name: true, version: true } } },
+        orderBy: [
+          { severity: "asc" }, // critical → high → low alphabetically; re-sort UI-side
+          { cvssScore: "desc" },
+        ],
+      });
+
+      return findings.map(scanFindingToOut);
+    },
+  );
+
+  // Raw CycloneDX JSON download — returns the SBOM stored by the worker.
+  app.get(
+    "/scans/:id/sbom",
+    {
+      preHandler: [app.authenticate],
+    },
+    async (req, reply) => {
+      const orgId = (req as unknown as { user?: { orgId?: string } }).user?.orgId ?? null;
+      const params = req.params as { id: string };
+
+      const run = await prisma.scanRun.findFirst({
+        where: { id: params.id, orgId: orgId ?? null },
+        select: { id: true, sbomJson: true, repo: { select: { name: true } } },
+      });
+      if (!run) {
+        return reply.code(404).send({ detail: "Scan run not found" });
+      }
+      if (!run.sbomJson) {
+        return reply.code(404).send({ detail: "SBOM not yet available for this scan" });
+      }
+
+      const filename = `sbom-${(run.repo as { name: string }).name}-${params.id.slice(0, 8)}.cdx.json`;
+      return reply
+        .header("Content-Type", "application/json")
+        .header("Content-Disposition", `attachment; filename="${filename}"`)
+        .send(run.sbomJson);
+    },
+  );
+
+  // Trigger a scan — kept here to minimise route file count.
+  // (Previously lived in adminRepos.ts but it's really a scan operation.)
+  typed.get(
+    "/scans/:id/components",
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ["scans"],
+        summary: "List SBOM components for a scan run",
+        params: IdParamsSchema,
+        response: {
+          200: z.array(
+            z.object({
+              id: z.string(),
+              name: z.string(),
+              version: z.string().nullable(),
+              purl: z.string(),
+              ecosystem: z.string().nullable(),
+              licenses: z.array(z.string()),
+              component_type: z.string(),
+            }),
+          ),
+          401: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const run = await prisma.scanRun.findFirst({
+        where: { id: req.params.id, orgId: orgId ?? null },
+        select: { id: true },
+      });
+      if (!run) return reply.code(404).send({ detail: "Scan run not found" });
+
+      const comps = await prisma.sbomComponent.findMany({
+        where: { scanRunId: req.params.id },
+        orderBy: { name: "asc" },
+      });
+      return comps.map((c) => ({
+        id: c.id,
+        name: c.name,
+        version: c.version,
+        purl: c.purl,
+        ecosystem: c.ecosystem,
+        licenses: c.licenses,
+        component_type: c.componentType,
+      }));
     },
   );
 };

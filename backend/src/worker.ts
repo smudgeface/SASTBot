@@ -8,22 +8,12 @@ import { prisma } from "./db.js";
 import { closeRedis, getRedis } from "./queue/connection.js";
 import { SCAN_QUEUE_NAME, type ScanJobData } from "./queue/scanQueue.js";
 import { cloneOrRefresh } from "./services/repoCache.js";
+import { persistComponents, runCdxgen } from "./services/sbomService.js";
+import { queryAndPersistFindings } from "./services/osvService.js";
 
 const config = loadConfig();
 const logger = pino({ level: config.logLevel, name: "sastbot-worker" });
 
-/**
- * Scan job handler.
- *
- * M1/M2 scope: clone the repo (honouring retain_clone), then mark the run
- * as success. No analysis yet — M3 is where cdxgen + OSV integration lands
- * and M4 adds Opengrep + LLM triage.
- *
- * Even without real analysis, exercising the clone path makes the scan
- * pipeline properly end-to-end: credentials get decrypted and exercised,
- * retained clones get cached, and any git/auth failure surfaces as a
- * real `failed` scan_run with an error message.
- */
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {
@@ -47,10 +37,8 @@ const worker = new Worker<ScanJobData>(
 
     let clone: Awaited<ReturnType<typeof cloneOrRefresh>> | null = null;
     try {
-      log.info(
-        { url: repo.url, retainClone: repo.retainClone },
-        "[worker] cloning repo",
-      );
+      // ── Step 1: clone / refresh ─────────────────────────────────────────
+      log.info({ url: repo.url, retainClone: repo.retainClone }, "[worker] cloning repo");
       clone = await cloneOrRefresh({
         repoId: repo.id,
         url: repo.url,
@@ -60,13 +48,57 @@ const worker = new Worker<ScanJobData>(
       });
       log.info(
         { workingDir: clone.workingDir, fromCache: clone.fromCache },
-        "[worker] clone ready (analysis deferred to M3)",
+        "[worker] clone ready",
       );
+
+      // ── Step 2: cdxgen → CycloneDX 1.7 SBOM ────────────────────────────
+      log.info("[worker] running cdxgen");
+      const sbomDoc = await runCdxgen(clone.workingDir);
+      const componentCount = sbomDoc.components?.length ?? 0;
+      log.info({ componentCount }, "[worker] cdxgen done");
+
+      // ── Step 3: persist components + raw SBOM ───────────────────────────
+      const components = await prisma.$transaction(async (tx) => {
+        // Store the raw SBOM and the component count on the run row now so
+        // partial failures still leave the SBOM downloadable.
+        await tx.scanRun.update({
+          where: { id: scanRunId },
+          data: {
+            sbomJson: sbomDoc as object,
+            componentCount,
+          },
+        });
+        return persistComponents(scanRunId, sbomDoc, tx);
+      });
+      log.info({ inserted: components.length }, "[worker] components persisted");
+
+      // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
+      log.info("[worker] querying OSV.dev");
+      const findings = await queryAndPersistFindings(scanRunId, components, prisma);
+      log.info({ findings: findings.length }, "[worker] findings persisted");
+
+      // ── Step 5: update severity summary counters ─────────────────────────
+      const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+      for (const f of findings) {
+        if (f.severity === "critical") counts.critical++;
+        else if (f.severity === "high") counts.high++;
+        else if (f.severity === "medium") counts.medium++;
+        else if (f.severity === "low") counts.low++;
+      }
 
       await prisma.scanRun.update({
         where: { id: scanRunId },
-        data: { status: "success", finishedAt: new Date() },
+        data: {
+          status: "success",
+          finishedAt: new Date(),
+          criticalCount: counts.critical,
+          highCount: counts.high,
+          mediumCount: counts.medium,
+          lowCount: counts.low,
+        },
       });
+
+      log.info(counts, "[worker] scan complete");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error({ err }, "[worker] scan failed");

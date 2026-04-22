@@ -107,7 +107,7 @@ const adminCredentialsRoutes: FastifyPluginAsync = async (app) => {
         const cred = await renameCredential(
           req.params.id,
           req.user?.orgId ?? null,
-          req.body.name,
+          req.body,
         );
         const refs = await credentialReferences(cred.id);
         return credentialToOut(cred, refs);

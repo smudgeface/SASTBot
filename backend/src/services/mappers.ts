@@ -1,11 +1,22 @@
-import type { AppSettings, Credential, Repo, ScanRun, User } from "@prisma/client";
+import type {
+  AppSettings,
+  Credential,
+  Repo,
+  SbomComponent,
+  ScanFinding,
+  ScanRun,
+  User,
+} from "@prisma/client";
 
 import type {
   AppSettingsOut,
   CredentialOut,
   CredentialReferences,
   RepoOut,
+  SbomComponentOut,
+  ScanFindingOut,
   ScanRunOut,
+  Severity,
   UserOut,
 } from "../schemas.js";
 
@@ -104,6 +115,7 @@ export function credentialToOut(
       references.repos.length +
       (references.jira_settings ? 1 : 0) +
       (references.llm_settings ? 1 : 0),
+    expires_at: cred.expiresAt ? cred.expiresAt.toISOString() : null,
     created_at: cred.createdAt.toISOString(),
   };
 }
@@ -141,6 +153,20 @@ export function appSettingsToOut(s: AppSettings): AppSettingsOut {
   };
 }
 
+const ALLOWED_SEVERITY: ReadonlyArray<Severity> = [
+  "critical",
+  "high",
+  "medium",
+  "low",
+  "unknown",
+];
+
+function toSeverity(value: string): Severity {
+  return (ALLOWED_SEVERITY as ReadonlyArray<string>).includes(value)
+    ? (value as Severity)
+    : "unknown";
+}
+
 export function scanRunToOut(s: ScanRun): ScanRunOut {
   return {
     id: s.id,
@@ -152,6 +178,45 @@ export function scanRunToOut(s: ScanRun): ScanRunOut {
     started_at: s.startedAt ? s.startedAt.toISOString() : null,
     finished_at: s.finishedAt ? s.finishedAt.toISOString() : null,
     error: s.error,
+    component_count: s.componentCount,
+    critical_count: s.criticalCount,
+    high_count: s.highCount,
+    medium_count: s.mediumCount,
+    low_count: s.lowCount,
     created_at: s.createdAt.toISOString(),
+  };
+}
+
+export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
+  return {
+    id: c.id,
+    scan_run_id: c.scanRunId,
+    name: c.name,
+    version: c.version,
+    purl: c.purl,
+    ecosystem: c.ecosystem,
+    licenses: c.licenses,
+    component_type: c.componentType,
+  };
+}
+
+export function scanFindingToOut(
+  f: ScanFinding & { component: Pick<SbomComponent, "name" | "version"> },
+): ScanFindingOut {
+  return {
+    id: f.id,
+    scan_run_id: f.scanRunId,
+    component_id: f.componentId,
+    component_name: f.component.name,
+    component_version: f.component.version,
+    osv_id: f.osvId,
+    cve_id: f.cveId,
+    severity: toSeverity(f.severity),
+    cvss_score: f.cvssScore,
+    cvss_vector: f.cvssVector,
+    summary: f.summary,
+    aliases: f.aliases,
+    actively_exploited: f.activelyExploited,
+    created_at: f.createdAt.toISOString(),
   };
 }

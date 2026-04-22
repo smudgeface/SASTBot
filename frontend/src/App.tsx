@@ -6,6 +6,7 @@ import { RequireAdmin } from "@/components/RequireAdmin";
 import LoginPage from "@/routes/LoginPage";
 import DashboardPage from "@/routes/DashboardPage";
 import ScansPage from "@/routes/ScansPage";
+import ScanDetailPage from "@/routes/ScanDetailPage";
 import ReposPage from "@/routes/admin/ReposPage";
 import SettingsPage from "@/routes/admin/SettingsPage";
 import CredentialsPage from "@/routes/admin/CredentialsPage";
@@ -26,6 +27,7 @@ export default function App() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/scans" element={<ScansPage />} />
+        <Route path="/scans/:id" element={<ScanDetailPage />} />
         <Route
           path="/admin/repos"
           element={

@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/api/client";
-import type { Scan } from "@/api/types";
+import type { Scan, ScanFinding } from "@/api/types";
 
 export const scansKey = ["scans"] as const;
 
@@ -20,6 +20,37 @@ export function useScans() {
       const live = data.some((s) => s.status === "pending" || s.status === "running");
       return live ? 2000 : false;
     },
+  });
+}
+
+export function useScanDetail(scanId: string | undefined) {
+  return useQuery<Scan>({
+    queryKey: [...scansKey, scanId],
+    queryFn: () => apiFetch<Scan>(`/scans/${scanId}`),
+    enabled: !!scanId,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return false;
+      const live = data.status === "pending" || data.status === "running";
+      return live ? 2000 : false;
+    },
+  });
+}
+
+export function useScanFindings(
+  scanId: string | undefined,
+  options?: { severity?: string; package?: string },
+) {
+  return useQuery<ScanFinding[]>({
+    queryKey: [...scansKey, scanId, "findings", options],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (options?.severity) params.set("severity", options.severity);
+      if (options?.package) params.set("package", options.package);
+      const qs = params.toString();
+      return apiFetch<ScanFinding[]>(`/scans/${scanId}/findings${qs ? `?${qs}` : ""}`);
+    },
+    enabled: !!scanId,
   });
 }
 

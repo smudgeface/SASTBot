@@ -119,3 +119,27 @@ Review of M2 flagged two gaps before M3 could build on top: (a) credentials were
 
 **Next — M3: SCA vertical slice**
 Real git clone using the stored credentials (now live — M3 will consume the cached working dir from `cloneOrRefresh`). cdxgen (Node, in-process) produces a CycloneDX 1.7 SBOM. Persist components + versions + PURLs + licenses. Call OSV.dev for CVE matches. Findings UI (list + detail). SBOM download as JSON. Verify against a repo with known-vulnerable deps.
+
+---
+
+## M3 — SCA vertical slice (2026-04-22)
+
+**What shipped**
+- **Credential expiry date (pre-M3 queue item).** Optional `expires_at` timestamp on `credentials` — set at create/rename, surfaced in the UI as a formatted date with orange/red colouring when within 30 days of expiry or already expired.
+- **Prisma schema additions.** `SbomComponent` (name, version, purl, ecosystem, licenses, componentType) and `ScanFinding` (osvId, cveId, severity, cvssScore, cvssVector, summary, aliases, activelyExploited, detailJson) models; `sbomJson` JSONB + severity summary counters (componentCount, criticalCount, highCount, mediumCount, lowCount) added to `ScanRun`. Migration `20260422201148_m3_sca` applied.
+- **sbomService.ts.** Shells out to `@cyclonedx/cdxgen` (installed as a production dep, binary at `node_modules/.bin/cdxgen`) via `execFile`. Parses CycloneDX 1.7 JSON, persists `SbomComponent` rows, stores raw SBOM in `scan_runs.sbom_json`.
+- **osvService.ts.** Queries `https://api.osv.dev/v1/query` (one request per PURL, throttled to 10 concurrent). Maps `database_specific.severity` (CRITICAL / HIGH / MODERATE / LOW) plus CVSS v3 score fallback to the internal severity enum. Persists `ScanFinding` rows, deduplicates by (componentId, osvId).
+- **Worker real pipeline.** Replaced the M2.5 stub with: clone → cdxgen → persist components → OSV.dev → persist findings → update severity summary counters.
+- **New backend routes.** `GET /scans/:id/findings` (paginated, filterable by severity and package name); `GET /scans/:id/sbom` (raw CycloneDX JSON download with `Content-Disposition`); `GET /scans/:id/components`. ScanRunOut schema extended with the five counter fields.
+- **Frontend ScanDetailPage.** Summary cards (Components, Critical, High, Medium, Low), findings table sorted by severity then CVSS, expandable rows showing aliases + CVSS vector, SBOM download button. `ScansPage` rows now clickable; Findings column shows coloured C/H/M/L chips. Credential expiry column added.
+- **Vite polling fix.** `server.watch.usePolling: true, interval: 300` in `vite.config.ts` so Docker Desktop macOS bind-mount changes are picked up by the dev server.
+- **End-to-end verification.** Local test repo (`backend/test-vuln-repo`) with lodash 4.17.15, axios 0.21.1, minimist 1.2.5. Scan produces 4 components, 13 findings (1 critical, 6 high, 6 medium). SBOM download returns valid CycloneDX 1.6 JSON.
+
+**What we learned**
+- **OSV.dev `/v1/querybatch` now returns stubs** — only `id` and `modified` per vulnerability, not the full record. Full severity / CVSS data requires per-PURL calls to `/v1/query`. The change appears to be a 2025 API update; the old batch approach silently produced 13 findings all labelled "unknown".
+- **OSV.dev severity is `"MODERATE"` not `"MEDIUM"`** — the string comes from GitHub's advisory database, which uses `MODERATE` instead of the CVSS standard `MEDIUM`. Both must be mapped to the internal `"medium"` severity.
+- **Docker Desktop bind mounts don't trigger `tsx watch` or Vite HMR on macOS** — the same Docker-Desktop-over-VirtioFS limitation that affected uvicorn in M1 applies to Node.js watchers. Restarts are required for the worker (which runs `tsx src/worker.ts` without watch mode). Added Vite polling config; noted the need to restart the worker container after any service code change.
+- **Prisma `createMany` returns a count, not rows** — `persistComponents` uses `createMany` then a follow-up `findMany` to return the inserted rows (needed to build the OSV query list). Not a problem but a non-obvious Prisma quirk worth knowing.
+
+**Next — M4**
+Opengrep SARIF runner: shell out to `opengrep` binary, normalise SARIF findings into a `SastFinding` DB table, fingerprint by (file_path, rule_id, snippet_hash) so suppressions survive re-scans. LLM triage via LiteLLM: classify each finding as likely-FP vs. real, attach reasoning. Per-scan token budget. CWE + CVSS fields on SAST findings.
