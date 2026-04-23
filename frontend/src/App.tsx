@@ -5,6 +5,8 @@ import { RequireAuth } from "@/components/RequireAuth";
 import { RequireAdmin } from "@/components/RequireAdmin";
 import LoginPage from "@/routes/LoginPage";
 import DashboardPage from "@/routes/DashboardPage";
+import ScopesPage from "@/routes/ScopesPage";
+import ScopeDetailPage from "@/routes/ScopeDetailPage";
 import ScansPage from "@/routes/ScansPage";
 import ScanDetailPage from "@/routes/ScanDetailPage";
 import SbomViewerPage from "@/routes/SbomViewerPage";
@@ -25,8 +27,10 @@ export default function App() {
           </RequireAuth>
         }
       >
-        <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route index element={<Navigate to="/scopes" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/scopes" element={<ScopesPage />} />
+        <Route path="/scopes/:id" element={<ScopeDetailPage />} />
         <Route path="/scans" element={<ScansPage />} />
         <Route path="/scans/:id" element={<ScanDetailPage />} />
         <Route path="/scans/:id/sbom" element={<SbomViewerPage />} />

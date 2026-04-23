@@ -78,7 +78,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/scopes",
+    "/api/scopes",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -172,7 +172,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/scopes/:id",
+    "/api/scopes/:id",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -263,7 +263,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/scopes/:id/sast-issues",
+    "/api/scopes/:id/sast-issues",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -332,7 +332,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/scopes/:id/sca-issues",
+    "/api/scopes/:id/sca-issues",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -407,7 +407,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/scopes/:id/components",
+    "/api/scopes/:id/components",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -469,7 +469,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/scopes/:id/scans",
+    "/api/scopes/:id/scans",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -539,7 +539,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.post(
-    "/sast-issues/:id/triage",
+    "/api/sast-issues/:id/triage",
     {
       preHandler: [app.requireAdmin],
       schema: {
@@ -584,7 +584,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.post(
-    "/sca-issues/:id/dismiss",
+    "/api/sca-issues/:id/dismiss",
     {
       preHandler: [app.requireAdmin],
       schema: {
@@ -627,7 +627,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.put(
-    "/sast-issues/:id/notes",
+    "/api/sast-issues/:id/notes",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -663,7 +663,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.put(
-    "/sca-issues/:id/notes",
+    "/api/sca-issues/:id/notes",
     {
       preHandler: [app.authenticate],
       schema: {

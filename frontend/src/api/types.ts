@@ -250,6 +250,7 @@ export interface ScanFinding {
   id: string;
   scan_run_id: string;
   component_id: string;
+  issue_id: string;
   component_name: string;
   component_version: string | null;
   /** "required" = runtime dep, "optional" = dev/test dep, "excluded", or null */
@@ -266,16 +267,11 @@ export interface ScanFinding {
   eol_date: string | null;
   /** True when OSV advisory includes at least one fixed version. */
   has_fix: boolean;
-  confirmed_reachable: boolean;
-  reachable_via_sast_fingerprint: string | null;
-  reachable_reasoning: string | null;
-  reachable_assessed_at: string | null;
-  reachable_model: string | null;
   created_at: string;
 }
 
 // ---------------------------------------------------------------------------
-// SAST findings (M4)
+// SAST findings (M4 — detection rows; triage now lives on SastIssue)
 // ---------------------------------------------------------------------------
 
 export type SastTriageStatus = "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
@@ -285,6 +281,7 @@ export interface SastFinding {
   id: string;
   scan_run_id: string;
   scope_id: string;
+  issue_id: string;
   fingerprint: string;
   rule_id: string;
   rule_name: string | null;
@@ -295,6 +292,20 @@ export interface SastFinding {
   start_line: number;
   end_line: number | null;
   snippet: string | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Issues (M5) — stable identity rows
+// ---------------------------------------------------------------------------
+
+export type ScaDismissedStatus = "active" | "acknowledged" | "wont_fix" | "false_positive";
+
+export interface SastIssue {
+  id: string;
+  org_id: string | null;
+  scope_id: string;
+  fingerprint: string;
   triage_status: SastTriageStatus;
   triage_confidence: number | null;
   triage_reasoning: string | null;
@@ -304,5 +315,103 @@ export interface SastFinding {
   suppressed_at: string | null;
   suppressed_by_user_id: string | null;
   suppressed_reason: string | null;
+  notes: string | null;
+  jira_ticket_id: string | null;
+  latest_rule_id: string;
+  latest_rule_name: string | null;
+  latest_rule_message: string | null;
+  latest_severity: SastSeverity;
+  latest_cwe_ids: string[];
+  latest_file_path: string;
+  latest_start_line: number;
+  latest_snippet: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScaIssue {
+  id: string;
+  org_id: string | null;
+  scope_id: string;
+  package_name: string;
+  osv_id: string;
+  dismissed_status: ScaDismissedStatus;
+  dismissed_at: string | null;
+  dismissed_by_user_id: string | null;
+  dismissed_reason: string | null;
+  notes: string | null;
+  jira_ticket_id: string | null;
+  latest_package_version: string | null;
+  latest_ecosystem: string | null;
+  latest_component_scope: string | null;
+  latest_finding_type: FindingType;
+  latest_cve_id: string | null;
+  latest_severity: FindingSeverity;
+  latest_cvss_score: number | null;
+  latest_cvss_vector: string | null;
+  latest_summary: string | null;
+  latest_aliases: string[];
+  latest_actively_exploited: boolean;
+  latest_eol_date: string | null;
+  latest_has_fix: boolean;
+  confirmed_reachable: boolean;
+  reachable_via_sast_fingerprint: string | null;
+  reachable_reasoning: string | null;
+  reachable_assessed_at: string | null;
+  reachable_model: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Paginated<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+// ---------------------------------------------------------------------------
+// Scopes (M5)
+// ---------------------------------------------------------------------------
+
+export interface ScopeListItem {
+  id: string;
+  org_id: string | null;
+  repo_id: string;
+  repo_name: string;
+  repo_branch: string;
+  path: string;
+  display_name: string | null;
+  is_active: boolean;
+  last_scan_run_id: string | null;
+  last_scan_completed_at: string | null;
+  active_sast_issue_count: number;
+  active_sca_issue_count: number;
+  critical_count: number;
+  high_count: number;
+  pending_triage_count: number;
+  created_at: string;
+}
+
+export interface ScopeDetail extends ScopeListItem {
+  resolved_sast_count: number;
+  resolved_sca_count: number;
+}
+
+export interface ScanRunSummary {
+  id: string;
+  status: ScanStatus;
+  triggered_by: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  component_count: number;
+  critical_count: number;
+  high_count: number;
+  sast_finding_count: number;
   created_at: string;
 }

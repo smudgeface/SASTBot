@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+// useQueryClient kept for useTriggerScan
 
 import { apiFetch } from "@/api/client";
 import type { Scan, SastFinding, SbomComponent, ScanFinding } from "@/api/types";
@@ -91,40 +92,17 @@ export function useTriggerScan() {
 
 export function useSastFindings(
   scanId: string | undefined,
-  options?: { severity?: string; triage_status?: string; file_path?: string },
+  options?: { severity?: string; file_path?: string },
 ) {
   return useQuery<SastFinding[]>({
     queryKey: [...scansKey, scanId, "sast-findings", options],
     queryFn: () => {
       const params = new URLSearchParams();
       if (options?.severity) params.set("severity", options.severity);
-      if (options?.triage_status) params.set("triage_status", options.triage_status);
       if (options?.file_path) params.set("file_path", options.file_path);
       const qs = params.toString();
       return apiFetch<SastFinding[]>(`/scans/${scanId}/sast-findings${qs ? `?${qs}` : ""}`);
     },
     enabled: !!scanId,
-  });
-}
-
-export function useTriageSastFinding(scanId: string | undefined) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      findingId,
-      status,
-      reason,
-    }: {
-      findingId: string;
-      status: "confirmed" | "false_positive" | "suppressed" | "pending";
-      reason?: string;
-    }) =>
-      apiFetch<SastFinding>(`/scans/${scanId}/sast-findings/${findingId}/triage`, {
-        method: "POST",
-        json: { status, reason },
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: [...scansKey, scanId, "sast-findings"] });
-    },
   });
 }

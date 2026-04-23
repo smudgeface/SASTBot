@@ -7,7 +7,7 @@ import path from "node:path";
 // docker set BACKEND_URL=http://localhost:8000.
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://backend:8000";
 
-const proxied = ["/auth", "/admin", "/scans", "/healthz", "/openapi.json", "/docs", "/api"];
+const proxied = ["/auth", "/admin", "/scans", "/scopes", "/sast-issues", "/sca-issues", "/healthz", "/openapi.json", "/docs", "/api"];
 
 // Vite's proxy matches on path only — but the React app uses some of these
 // paths (e.g. /admin/repos) for client-side routes. If the user reloads or
