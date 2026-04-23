@@ -68,11 +68,25 @@ const TRIAGE_COLORS: Record<string, string> = {
   error: "text-destructive border-destructive",
 };
 
+const TRIAGE_LABELS: Record<string, string> = {
+  pending: "pending",
+  confirmed: "confirmed",
+  false_positive: "invalid",
+  suppressed: "won't fix",
+  error: "error",
+};
+
+const SCA_STATUS_LABELS: Record<string, string> = {
+  active: "active",
+  acknowledged: "acknowledged",
+  wont_fix: "won't fix",
+  false_positive: "invalid",
+};
+
 function TriageBadge({ status }: { status: string }) {
-  const label = status.replace("_", " ");
   return (
     <Badge variant="outline" className={`capitalize text-[10px] ${TRIAGE_COLORS[status] ?? ""}`}>
-      {label}
+      {TRIAGE_LABELS[status] ?? status.replace(/_/g, " ")}
     </Badge>
   );
 }
@@ -271,25 +285,23 @@ function SastIssueRow({ issue, isAdmin }: { issue: SastIssue; isAdmin: boolean }
               <p className="mb-3 text-xs text-muted-foreground">CWE: {issue.latest_cwe_ids.join(", ")}</p>
             )}
             {isAdmin && (
-              <div className="flex flex-wrap gap-2">
-                {issue.triage_status !== "confirmed" && (
-                  <Button size="sm" variant="destructive" disabled={triage.isPending} onClick={() => act("confirmed")}>
-                    Confirm
-                  </Button>
-                )}
-                {issue.triage_status !== "false_positive" && (
-                  <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("false_positive")}>
-                    False positive
-                  </Button>
-                )}
-                {issue.triage_status !== "suppressed" && (
-                  <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("suppressed")}>
-                    Suppress
-                  </Button>
-                )}
-                {issue.triage_status !== "pending" && (
-                  <Button size="sm" variant="ghost" disabled={triage.isPending} onClick={() => act("pending")}>
-                    Reset to pending
+              <div className="flex flex-wrap gap-2 pt-1">
+                {/* Open → show action buttons; triaged → show only Reopen */}
+                {(issue.triage_status === "pending" || issue.triage_status === "error") ? (
+                  <>
+                    <Button size="sm" variant="destructive" disabled={triage.isPending} onClick={() => act("confirmed")}>
+                      Confirm
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("suppressed")}>
+                      Won't fix
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("false_positive")}>
+                      Invalid
+                    </Button>
+                  </>
+                ) : (
+                  <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("pending")}>
+                    Reopen
                   </Button>
                 )}
               </div>
@@ -340,7 +352,7 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
           items={SAST_STATUSES}
           active={statusSet}
           onToggle={(s) => toggleSet(statusSet, "triage_statuses", s)}
-          label={(s) => s.replace(/_/g, " ")}
+          label={(s) => TRIAGE_LABELS[s] ?? s.replace(/_/g, " ")}
         />
         <Pipe />
         <ToggleGroup
@@ -377,7 +389,7 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
                 <TableHead>Severity</TableHead>
                 <TableHead>Rule</TableHead>
                 <TableHead>Location</TableHead>
-                <TableHead>Triage</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead>Last seen</TableHead>
               </TableRow>
             </TableHeader>
@@ -460,7 +472,7 @@ function ScaIssueRow({ issue, isAdmin }: { issue: ScaIssue; isAdmin: boolean }) 
         <TableCell>
           {issue.dismissed_status !== "active" && (
             <Badge variant="outline" className="capitalize text-[10px] text-slate-500 border-slate-400">
-              {issue.dismissed_status.replace("_", " ")}
+              {SCA_STATUS_LABELS[issue.dismissed_status] ?? issue.dismissed_status.replace("_", " ")}
             </Badge>
           )}
         </TableCell>
@@ -515,7 +527,7 @@ function ScaIssueRow({ issue, isAdmin }: { issue: ScaIssue; isAdmin: boolean }) 
                       Won't fix
                     </Button>
                     <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("false_positive")}>
-                      False positive
+                      Invalid
                     </Button>
                   </>
                 )}
