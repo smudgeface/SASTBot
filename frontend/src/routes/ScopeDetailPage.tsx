@@ -78,6 +78,30 @@ function TriageBadge({ status }: { status: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Vuln link helpers
+// ---------------------------------------------------------------------------
+
+function vulnUrl(id: string): string {
+  if (id.startsWith("CVE-")) return `https://nvd.nist.gov/vuln/detail/${id}`;
+  if (id.startsWith("GHSA-")) return `https://github.com/advisories/${id}`;
+  return `https://osv.dev/vulnerability/${id}`;
+}
+
+function VulnLink({ id, className }: { id: string; className?: string }) {
+  return (
+    <a
+      href={vulnUrl(id)}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className={`font-mono hover:underline text-blue-600 dark:text-blue-400 ${className ?? ""}`}
+    >
+      {id}
+    </a>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Filter bar primitives
 // ---------------------------------------------------------------------------
 
@@ -411,7 +435,7 @@ function ScaIssueRow({ issue, isAdmin }: { issue: ScaIssue; isAdmin: boolean }) 
               {issue.latest_finding_type === "deprecated" ? "Deprecated" : issue.latest_finding_type.toUpperCase()}
             </span>
             {issue.latest_cve_id && (
-              <span className="text-[10px] font-mono text-muted-foreground">{issue.latest_cve_id}</span>
+              <VulnLink id={issue.latest_cve_id} className="text-[10px]" />
             )}
             {isDev && (
               <Badge variant="outline" className="text-[9px] px-1 py-0 text-slate-500 border-slate-300">
@@ -451,7 +475,10 @@ function ScaIssueRow({ issue, isAdmin }: { issue: ScaIssue; isAdmin: boolean }) 
               <p className="text-sm">{issue.latest_summary}</p>
             )}
             <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-              <span><span className="font-medium">OSV ID:</span> {issue.osv_id}</span>
+              <span>
+                <span className="font-medium">OSV:&nbsp;</span>
+                <VulnLink id={issue.osv_id} className="text-xs" />
+              </span>
               {issue.latest_cvss_score != null && (
                 <span><span className="font-medium">CVSS:</span> {issue.latest_cvss_score.toFixed(1)}</span>
               )}
@@ -463,7 +490,14 @@ function ScaIssueRow({ issue, isAdmin }: { issue: ScaIssue; isAdmin: boolean }) 
               )}
             </div>
             {issue.latest_aliases.length > 0 && (
-              <p className="text-xs text-muted-foreground">Aliases: {issue.latest_aliases.join(", ")}</p>
+              <div className="flex flex-wrap gap-1.5 items-center text-xs">
+                <span className="text-muted-foreground font-medium">Aliases:</span>
+                {issue.latest_aliases
+                  .filter((a) => a !== issue.osv_id && a !== issue.latest_cve_id)
+                  .map((alias) => (
+                    <VulnLink key={alias} id={alias} className="text-xs" />
+                  ))}
+              </div>
             )}
             {isAdmin && (
               <div className="flex flex-wrap gap-2 pt-1">
