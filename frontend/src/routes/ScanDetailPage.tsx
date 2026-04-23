@@ -141,44 +141,38 @@ function OptionalBadge() {
   );
 }
 
-function FindingTypeBadge({ finding }: { finding: ScanFinding }) {
+// Severity column always shows just the severity level badge (no EOL/deprecated marker here)
+function SeverityCell({ severity }: { severity: FindingSeverity }) {
+  return <SeverityBadge severity={severity} />;
+}
+
+// "Finding" column: CVE link, or EOL / Deprecated chip
+function FindingCell({ finding }: { finding: ScanFinding }) {
+  if (finding.finding_type === "cve") {
+    return <VulnLink id={finding.cve_id ?? finding.osv_id} />;
+  }
   if (finding.finding_type === "eol") {
     return (
-      <div className="flex items-center gap-1">
-        {finding.component_scope === "optional" ? <OptionalBadge /> : null}
-        <span className={cn(
-          "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase",
-          severityChipClass(finding.severity),
-        )}>
-          EOL
-        </span>
-      </div>
-    );
-  }
-  if (finding.finding_type === "deprecated") {
-    return (
-      <div className="flex items-center gap-1">
-        {finding.component_scope === "optional" ? <OptionalBadge /> : null}
-        <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900">
-          DEPRECATED
-        </span>
-      </div>
+      <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-900">
+        End of Life
+      </span>
     );
   }
   return (
-    <div className="flex items-center gap-1">
-      {finding.component_scope === "optional" ? <OptionalBadge /> : null}
-      <SeverityBadge severity={finding.severity} />
-    </div>
+    <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900">
+      Deprecated
+    </span>
   );
 }
 
-function ReachableIcon({ reasoning }: { reasoning?: string | null }) {
+// Inline reachable badge shown under summary text
+function ReachableInlineBadge({ reasoning }: { reasoning?: string | null }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex">
-          <Zap className="h-3.5 w-3.5 text-blue-500 shrink-0" aria-label="Reachable" />
+        <span className="inline-flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-xs font-medium text-blue-600 border-blue-200 bg-blue-50 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-900 cursor-default">
+          <Zap className="h-2.5 w-2.5 shrink-0" />
+          Reachable
         </span>
       </TooltipTrigger>
       <TooltipContent>
@@ -192,6 +186,7 @@ function ReachableIcon({ reasoning }: { reasoning?: string | null }) {
 function FindingRow({ finding }: { finding: ScanFinding }) {
   const [expanded, setExpanded] = useState(false);
   const isCve = finding.finding_type === "cve";
+  const hasSubBadges = finding.component_scope === "optional" || finding.confirmed_reachable;
 
   return (
     <>
@@ -199,20 +194,15 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
         className="cursor-pointer hover:bg-muted/50"
         onClick={() => setExpanded((x) => !x)}
       >
-        <TableCell className="w-8">
-          <div className="flex items-center gap-1">
-            {expanded ? (
-              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            )}
-            {finding.confirmed_reachable ? (
-              <ReachableIcon reasoning={finding.reachable_reasoning} />
-            ) : null}
-          </div>
+        <TableCell className="w-6">
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          )}
         </TableCell>
-        <TableCell>
-          <FindingTypeBadge finding={finding} />
+        <TableCell className="w-28">
+          <SeverityCell severity={finding.severity} />
         </TableCell>
         <TableCell className="font-medium">
           {finding.component_name}
@@ -223,21 +213,27 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
           ) : null}
         </TableCell>
         <TableCell className="font-mono text-xs">
-          {isCve ? (
-            <VulnLink id={finding.cve_id ?? finding.osv_id} />
-          ) : (
-            <span className="text-muted-foreground text-xs">
-              {finding.finding_type === "eol" ? "End of Life" : "Deprecated"}
-            </span>
-          )}
+          <FindingCell finding={finding} />
         </TableCell>
-        <TableCell className="text-sm text-muted-foreground max-w-sm truncate">
-          {finding.summary ?? "—"}
+        <TableCell className="max-w-sm">
+          <div>
+            <span className="text-sm text-muted-foreground line-clamp-1">
+              {finding.summary ?? "—"}
+            </span>
+            {hasSubBadges ? (
+              <div className="flex items-center gap-1 mt-1">
+                {finding.component_scope === "optional" ? <OptionalBadge /> : null}
+                {finding.confirmed_reachable ? (
+                  <ReachableInlineBadge reasoning={finding.reachable_reasoning} />
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </TableCell>
       </TableRow>
       {expanded ? (
         <TableRow>
-          <TableCell colSpan={6} className="bg-muted/30 py-3 px-6">
+          <TableCell colSpan={5} className="bg-muted/30 py-3 px-6">
             <div className="space-y-2 text-sm">
               {finding.summary ? <p>{finding.summary}</p> : null}
               {finding.eol_date ? (
@@ -724,6 +720,8 @@ function ComponentsTab({
   findings: ScanFinding[];
   isLoading: boolean;
 }) {
+  const [onlyWithFindings, setOnlyWithFindings] = useState(false);
+
   if (isLoading) {
     return (
       <Card>
@@ -750,8 +748,28 @@ function ComponentsTab({
     findingsByComponent.set(f.component_id, list);
   }
 
+  const withFindings = components.filter((c) => findingsByComponent.has(c.id));
+  const visible = onlyWithFindings ? withFindings : components;
+
   return (
-    <Card>
+    <div className="space-y-3">
+      {withFindings.length > 0 ? (
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={onlyWithFindings}
+              onChange={(e) => setOnlyWithFindings(e.target.checked)}
+              className="rounded"
+            />
+            Only show components with findings
+            {onlyWithFindings ? (
+              <span className="text-muted-foreground">({withFindings.length})</span>
+            ) : null}
+          </label>
+        </div>
+      ) : null}
+      <Card>
       <Table>
         <TableHeader>
           <TableRow>
@@ -763,9 +781,9 @@ function ComponentsTab({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {components.map((c) => {
-            const allFindings = findingsByComponent.get(c.id) ?? [];
-            const sorted = [...allFindings].sort(
+          {visible.map((c) => {
+            const compFindings = findingsByComponent.get(c.id) ?? [];
+            const sorted = [...compFindings].sort(
               (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
             );
             return (
@@ -839,7 +857,8 @@ function ComponentsTab({
           })}
         </TableBody>
       </Table>
-    </Card>
+      </Card>
+    </div>
   );
 }
 
@@ -1089,10 +1108,10 @@ export default function ScanDetailPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-8" />
+                      <TableHead className="w-6" />
                       <TableHead className="w-28">Severity</TableHead>
                       <TableHead>Package</TableHead>
-                      <TableHead>CVE / ID</TableHead>
+                      <TableHead>Finding</TableHead>
                       <TableHead>Summary</TableHead>
                     </TableRow>
                   </TableHeader>
