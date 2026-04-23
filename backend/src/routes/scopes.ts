@@ -49,18 +49,29 @@ const ScopeDetailSchema = ScopeListItemSchema.extend({
   resolved_sca_count: z.number().int().nonnegative(),
 });
 
+// Coerce a repeated query param (string | string[] | undefined) to string[] | undefined
+function toArray<T extends string>(
+  schema: z.ZodType<T>,
+): z.ZodType<T[] | undefined> {
+  return z
+    .preprocess(
+      (v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v]),
+      z.array(schema).optional(),
+    ) as z.ZodType<T[] | undefined>;
+}
+
 // Query schemas for issue lists
 const SastIssuesQuerySchema = PaginationQuerySchema.extend({
-  severity: SastSeveritySchema.optional(),
-  triage_status: SastTriageStatusSchema.optional(),
+  severity: toArray(SastSeveritySchema),
+  triage_status: toArray(SastTriageStatusSchema),
   has_jira_ticket: z.enum(["yes", "no"]).optional(),
   seen_since_last_scan: z.enum(["new", "unchanged", "resolved"]).optional(),
   include_resolved: z.coerce.boolean().default(false),
 });
 
 const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
-  severity: SeveritySchema.optional(),
-  finding_type: FindingTypeSchema.optional(),
+  severity: toArray(SeveritySchema),
+  finding_type: toArray(FindingTypeSchema),
   dismissed_status: z.enum(["active", "acknowledged", "wont_fix", "false_positive"]).optional(),
   has_jira_ticket: z.enum(["yes", "no"]).optional(),
   reachable: z.coerce.boolean().optional(),
@@ -290,8 +301,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       const lastScanRunId = scope.lastScanRunId;
 
       const where: Record<string, unknown> = { scopeId: req.params.id };
-      if (severity) where.latestSeverity = severity;
-      if (triage_status) where.triageStatus = triage_status;
+      if (severity?.length)      where.latestSeverity = severity.length === 1 ? severity[0] : { in: severity };
+      if (triage_status?.length) where.triageStatus   = triage_status.length === 1 ? triage_status[0] : { in: triage_status };
       if (has_jira_ticket === "yes") where.jiraTicketId = { not: null };
       if (has_jira_ticket === "no") where.jiraTicketId = null;
 
@@ -363,8 +374,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       const lastScanRunId = scope.lastScanRunId;
 
       const where: Record<string, unknown> = { scopeId: req.params.id };
-      if (severity) where.latestSeverity = severity;
-      if (finding_type) where.latestFindingType = finding_type;
+      if (severity?.length)      where.latestSeverity     = severity.length === 1     ? severity[0]      : { in: severity };
+      if (finding_type?.length)  where.latestFindingType  = finding_type.length === 1 ? finding_type[0]  : { in: finding_type };
       if (dismissed_status) where.dismissedStatus = dismissed_status;
       if (has_jira_ticket === "yes") where.jiraTicketId = { not: null };
       if (has_jira_ticket === "no") where.jiraTicketId = null;

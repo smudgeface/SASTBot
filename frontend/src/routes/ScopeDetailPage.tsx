@@ -87,10 +87,10 @@ function Pipe() {
 }
 
 /**
- * A group of mutually-exclusive filter chips joined by "|" separators.
- * Clicking an active chip deselects it (nothing selected = show all).
+ * A stackable filter group — items joined by "|" separators.
+ * Multiple can be active simultaneously; nothing active = show all.
  */
-function RadioGroup<T extends string>({
+function FilterGroup<T extends string>({
   items,
   active,
   onToggle,
@@ -98,7 +98,7 @@ function RadioGroup<T extends string>({
   colorFn,
 }: {
   items: readonly T[];
-  active: T | undefined;
+  active: ReadonlySet<T>;
   onToggle: (v: T) => void;
   label?: (v: T) => string;
   colorFn?: (v: T) => string;
@@ -114,7 +114,7 @@ function RadioGroup<T extends string>({
           <button
             onClick={() => onToggle(item)}
             className={`rounded px-2 py-0.5 text-xs font-medium border transition-colors ${
-              active === item
+              active.has(item)
                 ? (colorFn ? colorFn(item) : "bg-accent text-accent-foreground border-border")
                 : baseInactive
             }`}
@@ -287,23 +287,35 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
   const SAST_SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
   const SAST_STATUSES = ["pending", "confirmed", "false_positive", "suppressed"] as const;
 
-  const hasFilter = !!(filters.severity || filters.triage_status || filters.include_resolved);
+  const severitySet = new Set(filters.severities ?? []) as ReadonlySet<typeof SAST_SEVERITIES[number]>;
+  const statusSet   = new Set(filters.triage_statuses ?? []) as ReadonlySet<typeof SAST_STATUSES[number]>;
+
+  function toggleSet<T extends string>(
+    current: ReadonlySet<T>,
+    key: keyof SastIssueFilters,
+    value: T,
+  ) {
+    const next = new Set(current);
+    next.has(value) ? next.delete(value) : next.add(value);
+    setFilters((f) => ({ ...f, page: 1, [key]: next.size > 0 ? [...next] : undefined }));
+  }
+
+  const hasFilter = !!(filters.severities?.length || filters.triage_statuses?.length || filters.include_resolved);
 
   return (
     <div className="space-y-3">
-      {/* Filter bar — | separates radio groups; toggle groups have no | */}
       <div className="flex flex-wrap items-center gap-y-2 gap-x-0">
-        <RadioGroup
+        <FilterGroup
           items={SAST_SEVERITIES}
-          active={filters.severity as typeof SAST_SEVERITIES[number] | undefined}
-          onToggle={(s) => setFilters((f) => ({ ...f, page: 1, severity: f.severity === s ? undefined : s }))}
+          active={severitySet}
+          onToggle={(s) => toggleSet(severitySet, "severities", s)}
           colorFn={(s) => SEVERITY_COLORS[s] ?? ""}
         />
         <Pipe />
-        <RadioGroup
+        <FilterGroup
           items={SAST_STATUSES}
-          active={filters.triage_status as typeof SAST_STATUSES[number] | undefined}
-          onToggle={(s) => setFilters((f) => ({ ...f, page: 1, triage_status: f.triage_status === s ? undefined : s }))}
+          active={statusSet}
+          onToggle={(s) => toggleSet(statusSet, "triage_statuses", s)}
           label={(s) => s.replace(/_/g, " ")}
         />
         <Pipe />
@@ -396,7 +408,7 @@ function ScaIssueRow({ issue, isAdmin }: { issue: ScaIssue; isAdmin: boolean }) 
           </div>
           <div className="flex flex-wrap gap-1 mt-0.5">
             <span className="text-[10px] text-muted-foreground uppercase font-medium">
-              {issue.latest_finding_type}
+              {issue.latest_finding_type === "deprecated" ? "Deprecated" : issue.latest_finding_type.toUpperCase()}
             </span>
             {issue.latest_cve_id && (
               <span className="text-[10px] font-mono text-muted-foreground">{issue.latest_cve_id}</span>
@@ -492,27 +504,41 @@ function ScaIssuesTab({ scopeId }: { scopeId: string }) {
   const SCA_SEVERITIES = ["critical", "high", "medium", "low"] as const;
   const SCA_TYPES = ["cve", "eol", "deprecated"] as const;
 
+  const severitySet = new Set(filters.severities ?? []) as ReadonlySet<typeof SCA_SEVERITIES[number]>;
+  const typeSet     = new Set(filters.finding_types ?? []) as ReadonlySet<typeof SCA_TYPES[number]>;
+
+  function toggleSet<T extends string>(
+    current: ReadonlySet<T>,
+    key: keyof ScaIssueFilters,
+    value: T,
+  ) {
+    const next = new Set(current);
+    next.has(value) ? next.delete(value) : next.add(value);
+    setFilters((f) => ({ ...f, page: 1, [key]: next.size > 0 ? [...next] : undefined }));
+  }
+
+  const TYPE_LABELS: Record<string, string> = { cve: "CVE", eol: "EOL", deprecated: "Deprecated" };
+
   const hasScaFilter = !!(
-    filters.severity || filters.finding_type ||
+    filters.severities?.length || filters.finding_types?.length ||
     filters.reachable || filters.has_fix || filters.hide_dev || filters.include_resolved
   );
 
   return (
     <div className="space-y-3">
-      {/* Filter bar — | = radio (pick one); no | = stackable toggles */}
       <div className="flex flex-wrap items-center gap-y-2 gap-x-0">
-        <RadioGroup
+        <FilterGroup
           items={SCA_SEVERITIES}
-          active={filters.severity as typeof SCA_SEVERITIES[number] | undefined}
-          onToggle={(s) => setFilters((f) => ({ ...f, page: 1, severity: f.severity === s ? undefined : s }))}
+          active={severitySet}
+          onToggle={(s) => toggleSet(severitySet, "severities", s)}
           colorFn={(s) => SEVERITY_COLORS[s] ?? ""}
         />
         <Pipe />
-        <RadioGroup
+        <FilterGroup
           items={SCA_TYPES}
-          active={filters.finding_type as typeof SCA_TYPES[number] | undefined}
-          onToggle={(s) => setFilters((f) => ({ ...f, page: 1, finding_type: f.finding_type === s ? undefined : s }))}
-          label={(t) => t.toUpperCase()}
+          active={typeSet}
+          onToggle={(s) => toggleSet(typeSet, "finding_types", s)}
+          label={(t) => TYPE_LABELS[t] ?? t}
         />
         <Pipe />
         <ToggleGroup

@@ -37,8 +37,8 @@ export function useScopeDetail(scopeId: string | undefined) {
 export interface SastIssueFilters {
   page?: number;
   page_size?: number;
-  severity?: string;
-  triage_status?: string;
+  severities?: string[];       // multi-select: show all in set (OR); empty = no filter
+  triage_statuses?: string[];  // multi-select
   has_jira_ticket?: "yes" | "no";
   seen_since_last_scan?: "new" | "unchanged" | "resolved";
   include_resolved?: boolean;
@@ -51,8 +51,8 @@ export function useScopeSastIssues(scopeId: string | undefined, filters: SastIss
       const params = new URLSearchParams();
       if (filters.page) params.set("page", String(filters.page));
       if (filters.page_size) params.set("page_size", String(filters.page_size));
-      if (filters.severity) params.set("severity", filters.severity);
-      if (filters.triage_status) params.set("triage_status", filters.triage_status);
+      filters.severities?.forEach((s) => params.append("severity", s));
+      filters.triage_statuses?.forEach((s) => params.append("triage_status", s));
       if (filters.has_jira_ticket) params.set("has_jira_ticket", filters.has_jira_ticket);
       if (filters.seen_since_last_scan) params.set("seen_since_last_scan", filters.seen_since_last_scan);
       if (filters.include_resolved) params.set("include_resolved", "true");
@@ -66,8 +66,8 @@ export function useScopeSastIssues(scopeId: string | undefined, filters: SastIss
 export interface ScaIssueFilters {
   page?: number;
   page_size?: number;
-  severity?: string;
-  finding_type?: string;
+  severities?: string[];      // multi-select
+  finding_types?: string[];   // multi-select
   dismissed_status?: string;
   has_jira_ticket?: "yes" | "no";
   reachable?: boolean;
@@ -84,8 +84,8 @@ export function useScopeScaIssues(scopeId: string | undefined, filters: ScaIssue
       const params = new URLSearchParams();
       if (filters.page) params.set("page", String(filters.page));
       if (filters.page_size) params.set("page_size", String(filters.page_size));
-      if (filters.severity) params.set("severity", filters.severity);
-      if (filters.finding_type) params.set("finding_type", filters.finding_type);
+      filters.severities?.forEach((s) => params.append("severity", s));
+      filters.finding_types?.forEach((t) => params.append("finding_type", t));
       if (filters.dismissed_status) params.set("dismissed_status", filters.dismissed_status);
       if (filters.has_jira_ticket) params.set("has_jira_ticket", filters.has_jira_ticket);
       if (filters.reachable) params.set("reachable", "true");
