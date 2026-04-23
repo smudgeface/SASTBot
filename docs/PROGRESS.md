@@ -143,3 +143,39 @@ Real git clone using the stored credentials (now live — M3 will consume the ca
 
 **Next — M4**
 Opengrep SARIF runner: shell out to `opengrep` binary, normalise SARIF findings into a `SastFinding` DB table, fingerprint by (file_path, rule_id, snippet_hash) so suppressions survive re-scans. LLM triage via LiteLLM: classify each finding as likely-FP vs. real, attach reasoning. Per-scan token budget. CWE + CVSS fields on SAST findings.
+
+---
+
+## M4 — SAST + LLM triage + reachability (2026-04-23)
+
+**What shipped**
+- **Schema additions.** `SastFinding` + `CveKnowledge` models; `ScanRun` extended with `warnings` JSON array, LLM token counters (`llmInputTokens`, `llmOutputTokens`, `llmRequestCount`), SAST + reachability summary counts; `ScanFinding` extended with five reachability fields; `AppSettings` extended with `llmAssistanceEnabled`, `llmTriageTokenBudget`, `reachabilityCvssThreshold`. Migration `m4_sast_scaffold` applied.
+- **Opengrep + ripgrep in backend image.** Arch-aware binary download (`manylinux_aarch64` on Apple Silicon, `manylinux_x86` on CI/prod). Opengrep v1.20.0. Worker detects missing binary at runtime and writes a `opengrep_missing` warning — scan continues SCA-only.
+- **`sastService.ts`.** Runs Opengrep (`--config auto --sarif`, 64 MB stdout buffer), parses SARIF 2.1.0, maps severity (`error→high`, `warning→medium`, `note→low`), strips the clone working-dir prefix from file paths, computes fingerprint `sha256(ruleId + ":" + normalizedSnippet)[0:16]` (file path excluded), inherits prior triage status from same-scope findings.
+- **`llmClient.ts`.** Supports `anthropic-messages` (tool_use for structured output) and `openai-chat` (JSON mode). Org-aware settings lookup, retry once on 5xx/timeout, atomic token counter increments, `skipEnabledCheck` flag for the connection test. `checkLlmConnection()` for the Settings UI.
+- **`llmTriageService.ts`.** Triage loop: severity-ordered, budget-enforced, one Zod-parse + one retry on malformed JSON, falls through to `triageStatus='error'` on second failure. Opportunistic reachability hints: LLM returns `confirmed_reachable_sca_ids` in the triage response, which mark SCA findings reachable immediately without a separate grep pass.
+- **`cveKnowledgeService.ts`.** LLM-only extraction of vulnerable function names from OSV advisory text. Global cache in `CveKnowledge` table (one extraction per CVE for the tool lifetime). Re-extracts only when `osvModifiedAt` advances. Cache timestamp comparison uses second-precision epoch to handle OSV's nanosecond-precision `modified` strings vs Postgres's microsecond round-trip.
+- **`reachabilityService.ts`.** For each high/critical SCA finding (by severity string when `cvssScore` is null — common in OSV/GHSA data): get function names from `CveKnowledgeService`, ripgrep scope directory, zero hits → `reachable=false` (no LLM), hits → LLM confirmation with ±10 lines of context.
+- **Routes.** `GET /scans/:id/sast-findings` (filterable), `POST .../triage` (admin-only, server-side enforced), `POST /admin/settings/llm/check`.
+- **Frontend.** SAST tab with severity badge, `file:line`, triage badge (colour-coded by status), expandable row showing snippet + reasoning + admin-only FP/Suppress/Confirm buttons. Warnings banner above tabs. LLM usage card (tokens in/out, request count, budget %). `REACHABLE N` summary card. ⚡ REACHABLE badge on SCA findings with reachability section in expanded row. Settings: LLM-assisted analysis card (toggle, token budget, CVSS threshold), connection check moved into LLM gateway card.
+
+**Fingerprint robustness results**
+| Test | Change | Fingerprint |
+|------|--------|-------------|
+| Baseline | `res.redirect(req.query.url)` | `f23296a4c3cfb955` |
+| Blank line above | blank line inserted before the finding's line | same ✓ (triage inherited) |
+| EOL comment on adjacent line | `app.get(...) { // comment` | same ✓ (triage inherited) |
+| Whitespace inside tokens | `res.redirect(  req.query.url  )` | **different** — collapse to single spaces still produces `res.redirect( req.query.url )` vs `res.redirect(req.query.url)` |
+| Variable rename | `req.query.target` | different ✓ (correct, content changed) |
+| File moved | `src/routes/app.js` | same ✓ (path excluded from hash, triage inherited) |
+
+Note on test 4: `normalizeSnippet` collapses whitespace runs but does not remove all inter-token spaces. Indentation and leading/trailing whitespace are fully normalized; extra spaces added *inside* code tokens produce a different hash. This is arguably correct — `redirect(  url  )` and `redirect(url)` are textually different, and a suppression of one should not silently apply to the other.
+
+**What we learned**
+- **Opengrep stdout buffer.** `execFileAsync` default `maxBuffer` is 1 MB; large repos produce SARIF that overflows it. Fixed at 64 MB. Symptom was "Unterminated string in JSON at position 1048562".
+- **OSV `cvssScore` is frequently null.** OSV/GHSA advisories often include severity as a string (`"HIGH"`, `"CRITICAL"`) but omit a numeric CVSS score. Reachability threshold filter must use `OR` over both `cvssScore >= threshold` and `severity IN ('critical', 'high')`. The original query returned zero findings.
+- **OSV `modified` timestamps have nanosecond precision** (`"2026-04-02T17:29:57.498155673Z"`). JavaScript `Date` truncates to milliseconds; Postgres round-trips to microseconds. String comparison of `.toISOString()` against the raw OSV string always fails. Fixed by comparing seconds-precision epoch values.
+- **`llmClient` needs org-aware settings lookup.** Initial implementation used `getOrCreateSettings(null)` hardcoded. Connection check and triage were looking at the wrong settings row (null-org default, not the authenticated user's org). Fixed by threading `orgId` through all LLM call paths.
+- **`tsx watch` and Vite HMR do not reliably detect host-side edits through Docker Desktop bind mounts on macOS.** Worker and backend require explicit container restarts; Vite requires both `.vite` cache deletion and frontend restart. Documented pattern: `docker compose exec frontend rm -rf /app/node_modules/.vite && docker compose restart frontend`.
+- **Regex function extraction was dropped.** The plan included regex as the primary extraction path with LLM as fallback. On review, confidence derived from "number of patterns that fired" is not meaningful — a single clear `via \`template\`` match is more reliable than four noisy regex hits. LLM-only extraction (always, cache globally) is both simpler and more accurate.
+- **Known issue — LLM extraction accuracy not validated at scale.** The extraction is demonstrably good on the test set (lodash template 0.99, prototype-pollution functions 1.0, axios HTTP methods 0.85). Accuracy on a broader corpus of OSV advisories is unknown. **TODO:** audit 50+ real OSV records from production repos; tune prompts; assess whether any class of advisories systematically produces wrong function names.
