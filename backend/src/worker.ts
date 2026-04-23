@@ -13,6 +13,7 @@ import { persistComponents, runCdxgen } from "./services/sbomService.js";
 import { queryAndPersistFindings } from "./services/osvService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { runOpengrep, parseSarif, persistSastFindings } from "./services/sastService.js";
+import { triageFindings } from "./services/llmTriageService.js";
 import type { ScanWarning } from "./schemas.js";
 import type { Prisma } from "@prisma/client";
 
@@ -142,6 +143,13 @@ const worker = new Worker<ScanJobData>(
             where: { id: scanRunId },
             data: { sastFindingCount: sastFindings.length },
           });
+
+          // ── Step 6b: LLM triage ───────────────────────────────────────────
+          if (sastFindings.length > 0) {
+            log.info("[worker] starting LLM triage");
+            await triageFindings(scanRunId, run.scopeId, run.orgId, prisma);
+            log.info("[worker] LLM triage complete");
+          }
         }
       }
 

@@ -23,3 +23,19 @@ export function useUpdateSettings() {
     },
   });
 }
+
+export interface LlmCheckResult {
+  success: boolean;
+  latency_ms: number;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  error?: string;
+}
+
+export function useCheckLlm() {
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<LlmCheckResult>("/admin/settings/llm/check", { method: "POST" }),
+  });
+}
