@@ -147,6 +147,14 @@ function FindingTypeBadge({ finding }: { finding: ScanFinding }) {
   return <SeverityBadge severity={finding.severity} />;
 }
 
+function ReachableBadge() {
+  return (
+    <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold bg-yellow-100 text-yellow-700 border-yellow-200 dark:bg-yellow-950 dark:text-yellow-300 dark:border-yellow-900">
+      ⚡ REACHABLE
+    </span>
+  );
+}
+
 function FindingRow({ finding }: { finding: ScanFinding }) {
   const [expanded, setExpanded] = useState(false);
   const isCve = finding.finding_type === "cve";
@@ -165,7 +173,10 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
           )}
         </TableCell>
         <TableCell>
-          <FindingTypeBadge finding={finding} />
+          <div className="flex flex-wrap gap-1">
+            {finding.confirmed_reachable ? <ReachableBadge /> : null}
+            <FindingTypeBadge finding={finding} />
+          </div>
         </TableCell>
         <TableCell className="font-medium">
           {finding.component_name}
@@ -223,6 +234,22 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
                 <p className="font-mono text-xs text-muted-foreground">
                   {finding.cvss_vector}
                 </p>
+              ) : null}
+              {isCve && finding.reachable_assessed_at ? (
+                <div className="border-t pt-2 mt-1 space-y-0.5">
+                  <p className="text-xs font-medium uppercase text-muted-foreground">Reachability</p>
+                  <p className="text-xs">
+                    <span className={cn("font-medium", finding.confirmed_reachable ? "text-yellow-600 dark:text-yellow-400" : "text-muted-foreground")}>
+                      {finding.confirmed_reachable ? "⚡ Reachable" : "Not reachable"}
+                    </span>
+                    {finding.reachable_reasoning ? ` — ${finding.reachable_reasoning}` : null}
+                  </p>
+                  {finding.reachable_via_sast_fingerprint ? (
+                    <p className="text-xs text-muted-foreground">
+                      Via SAST finding <span className="font-mono">{finding.reachable_via_sast_fingerprint}</span>
+                    </p>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           </TableCell>
@@ -693,12 +720,13 @@ export default function ScanDetailPage() {
 
       {/* Summary cards */}
       {isTerminal && s.status === "success" ? (
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
           <SummaryCard label="Components" value={s.component_count} />
           <SummaryCard label="Critical" value={s.critical_count} severity="critical" />
           <SummaryCard label="High" value={s.high_count} severity="high" />
           <SummaryCard label="Medium" value={s.medium_count} severity="medium" />
           <SummaryCard label="Low" value={s.low_count} severity="low" />
+          <SummaryCard label="Reachable" value={s.confirmed_reachable_count} />
         </div>
       ) : null}
 

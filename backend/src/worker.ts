@@ -14,6 +14,7 @@ import { queryAndPersistFindings } from "./services/osvService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { runOpengrep, parseSarif, persistSastFindings } from "./services/sastService.js";
 import { triageFindings } from "./services/llmTriageService.js";
+import { assessReachability } from "./services/reachabilityService.js";
 import type { ScanWarning } from "./schemas.js";
 import type { Prisma } from "@prisma/client";
 
@@ -153,7 +154,12 @@ const worker = new Worker<ScanJobData>(
         }
       }
 
-      // ── Step 7: update SCA severity summary counters ─────────────────────
+      // ── Step 7: SCA reachability analysis ────────────────────────────────
+      log.info("[worker] assessing SCA reachability");
+      await assessReachability(scanRunId, run.scopeId, scanDir, run.orgId, prisma);
+      log.info("[worker] reachability assessment complete");
+
+      // ── Step 8: update SCA severity summary counters ─────────────────────
       const counts = { critical: 0, high: 0, medium: 0, low: 0 };
       for (const f of findings) {
         if (f.severity === "critical") counts.critical++;
