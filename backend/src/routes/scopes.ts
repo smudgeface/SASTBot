@@ -81,6 +81,14 @@ const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
   include_resolved: z.coerce.boolean().default(false),
 });
 
+// Prisma sorts severity strings alphabetically (low < medium), so we post-sort.
+const SEVERITY_ORDER: Record<string, number> = {
+  critical: 0, high: 1, medium: 2, low: 3, unknown: 4, info: 5,
+};
+function bySeverity(a: string, b: string): number {
+  return (SEVERITY_ORDER[a] ?? 9) - (SEVERITY_ORDER[b] ?? 9);
+}
+
 const scopesRoutes: FastifyPluginAsync = async (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
@@ -324,15 +332,15 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const skip = (page - 1) * page_size;
-      const [items, total] = await Promise.all([
-        prisma.sastIssue.findMany({
-          where,
-          orderBy: [{ latestSeverity: "asc" }, { lastSeenAt: "desc" }],
-          skip,
-          take: page_size,
-        }),
+      const [all, total] = await Promise.all([
+        prisma.sastIssue.findMany({ where }),
         prisma.sastIssue.count({ where }),
       ]);
+      all.sort((a, b) =>
+        bySeverity(a.latestSeverity, b.latestSeverity) ||
+        b.lastSeenAt.getTime() - a.lastSeenAt.getTime(),
+      );
+      const items = all.slice(skip, skip + page_size);
 
       return { items: items.map(sastIssueToOut), total, page, page_size };
     },
@@ -399,15 +407,15 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const skip = (page - 1) * page_size;
-      const [items, total] = await Promise.all([
-        prisma.scaIssue.findMany({
-          where,
-          orderBy: [{ latestSeverity: "asc" }, { latestCvssScore: "desc" }],
-          skip,
-          take: page_size,
-        }),
+      const [all, total] = await Promise.all([
+        prisma.scaIssue.findMany({ where }),
         prisma.scaIssue.count({ where }),
       ]);
+      all.sort((a, b) =>
+        bySeverity(a.latestSeverity, b.latestSeverity) ||
+        (b.latestCvssScore ?? 0) - (a.latestCvssScore ?? 0),
+      );
+      const items = all.slice(skip, skip + page_size);
 
       return { items: items.map(scaIssueToOut), total, page, page_size };
     },
