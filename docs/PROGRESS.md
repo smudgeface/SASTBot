@@ -179,3 +179,15 @@ Note on test 4: `normalizeSnippet` collapses whitespace runs but does not remove
 - **`tsx watch` and Vite HMR do not reliably detect host-side edits through Docker Desktop bind mounts on macOS.** Worker and backend require explicit container restarts; Vite requires both `.vite` cache deletion and frontend restart. Documented pattern: `docker compose exec frontend rm -rf /app/node_modules/.vite && docker compose restart frontend`.
 - **Regex function extraction was dropped.** The plan included regex as the primary extraction path with LLM as fallback. On review, confidence derived from "number of patterns that fired" is not meaningful — a single clear `via \`template\`` match is more reliable than four noisy regex hits. LLM-only extraction (always, cache globally) is both simpler and more accurate.
 - **Known issue — LLM extraction accuracy not validated at scale.** The extraction is demonstrably good on the test set (lodash template 0.99, prototype-pollution functions 1.0, axios HTTP methods 0.85). Accuracy on a broader corpus of OSV advisories is unknown. **TODO:** audit 50+ real OSV records from production repos; tune prompts; assess whether any class of advisories systematically produces wrong function names.
+- **Lockfiles pollute ripgrep reachability search.** Adding `jest` / `mocha` devDependencies introduced `@babel/template` hundreds of times in `package-lock.json`, causing the LLM to dismiss a genuine `lodash.template` call as "only lockfile metadata." Fixed by excluding `*.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `Gemfile.lock`, and `composer.lock` from all ripgrep invocations.
+- **CycloneDX `scope` field semantics.** cdxgen marks direct runtime deps as `"required"` and both devDependencies and transitive deps as `"optional"`. The UI shows a "DEV" badge for all `optional`-scope findings and allows hiding them with a toggle. This is a useful noise-reduction proxy even though it's broader than "devDependencies only."
+
+**M4 post-phase UI polish (added after 4e)**
+- Scan detail tabs renamed: "Findings" → "SCA Findings", "SAST" → "SAST Findings"
+- Unified SCA filter bar: severity chips, type chips (CVE/EOL/Deprecated), "Hide dev-only deps" (scope=optional), "Has fix available" (OSV events check), "Reachable only" (confirmed_reachable=true only — includes all types)
+- SCA findings table: CVSS column removed (always null from OSV), "CVE / ID" → "Finding" column, EOL chip moved from severity cell to finding cell, DEV + ⚡ Reachable badges shown below summary text, Zap icon moved to expand cell to prevent severity column layout shift
+- SAST findings table: Rule column → Summary (rule_message), filter for hiding FP/suppressed, Reset to Pending action
+- Components tab: "Only show components with findings" filter
+- `SbomComponent.scope` persisted from CycloneDX; `has_fix` computed from OSV `affected[].ranges[].events` (no DB column needed); both surfaced in `ScanFindingOut`
+
+**Next — M5**
