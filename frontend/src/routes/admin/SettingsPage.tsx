@@ -234,6 +234,50 @@ export default function SettingsPage() {
               kindLabel="LLM API key"
             />
 
+            <Separator />
+
+            {/* Connection check */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={checkLlm.isPending}
+                  onClick={() => checkLlm.mutate()}
+                >
+                  {checkLlm.isPending ? "Checking…" : "Check connection"}
+                </Button>
+                {checkLlm.data ? (
+                  <span
+                    className={cn(
+                      "text-xs font-medium",
+                      checkLlm.data.success
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-destructive",
+                    )}
+                  >
+                    {checkLlm.data.success ? "Connected" : "Failed"}
+                  </span>
+                ) : null}
+              </div>
+              {checkLlm.data ? (
+                <div className="rounded border bg-muted/40 px-3 py-2 text-xs space-y-0.5">
+                  {checkLlm.data.success ? (
+                    <>
+                      <p>Model: <span className="font-mono">{checkLlm.data.model}</span></p>
+                      <p>Latency: {checkLlm.data.latency_ms}ms</p>
+                      <p>Tokens: {checkLlm.data.input_tokens} in / {checkLlm.data.output_tokens} out</p>
+                    </>
+                  ) : (
+                    <p className="text-destructive">{checkLlm.data.error}</p>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+
         {/* LLM-assisted analysis */}
         <Card>
           <CardHeader>
@@ -314,47 +358,6 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <Separator />
-
-            {/* Connection check */}
-            <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={checkLlm.isPending}
-                  onClick={() => checkLlm.mutate()}
-                >
-                  {checkLlm.isPending ? "Checking…" : "Check connection"}
-                </Button>
-                {checkLlm.data ? (
-                  <span
-                    className={cn(
-                      "text-xs font-medium",
-                      checkLlm.data.success
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : "text-destructive",
-                    )}
-                  >
-                    {checkLlm.data.success ? "Connected" : "Failed"}
-                  </span>
-                ) : null}
-              </div>
-              {checkLlm.data ? (
-                <div className="rounded border bg-muted/40 px-3 py-2 text-xs space-y-0.5">
-                  {checkLlm.data.success ? (
-                    <>
-                      <p>Model: <span className="font-mono">{checkLlm.data.model}</span></p>
-                      <p>Latency: {checkLlm.data.latency_ms}ms</p>
-                      <p>Tokens: {checkLlm.data.input_tokens} in / {checkLlm.data.output_tokens} out</p>
-                    </>
-                  ) : (
-                    <p className="text-destructive">{checkLlm.data.error}</p>
-                  )}
-                </div>
-              ) : null}
-            </div>
           </CardContent>
         </Card>
 
