@@ -252,6 +252,8 @@ export interface ScanFinding {
   component_id: string;
   component_name: string;
   component_version: string | null;
+  /** "required" = runtime dep, "optional" = dev/test dep, "excluded", or null */
+  component_scope: string | null;
   finding_type: FindingType;
   osv_id: string;
   cve_id: string | null;
@@ -262,6 +264,8 @@ export interface ScanFinding {
   aliases: string[];
   actively_exploited: boolean;
   eol_date: string | null;
+  /** True when OSV advisory includes at least one fixed version. */
+  has_fix: boolean;
   confirmed_reachable: boolean;
   reachable_via_sast_fingerprint: string | null;
   reachable_reasoning: string | null;

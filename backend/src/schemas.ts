@@ -345,6 +345,7 @@ export const SbomComponentOutSchema = z.object({
   ecosystem: z.string().nullable(),
   licenses: z.array(z.string()),
   component_type: z.string(),
+  scope: z.string().nullable(),
 });
 export type SbomComponentOut = z.infer<typeof SbomComponentOutSchema>;
 
@@ -357,6 +358,8 @@ export const ScanFindingOutSchema = z.object({
   component_id: UuidSchema,
   component_name: z.string(),
   component_version: z.string().nullable(),
+  /** CycloneDX scope: "required" (runtime dep), "optional" (dev/test), "excluded", or null */
+  component_scope: z.string().nullable(),
   finding_type: FindingTypeSchema,
   osv_id: z.string(),
   cve_id: z.string().nullable(),
@@ -367,6 +370,8 @@ export const ScanFindingOutSchema = z.object({
   aliases: z.array(z.string()),
   actively_exploited: z.boolean(),
   eol_date: IsoDateTimeSchema.nullable(),
+  /** True when OSV data contains at least one fixed version for this CVE. */
+  has_fix: z.boolean(),
   confirmed_reachable: z.boolean(),
   reachable_via_sast_fingerprint: z.string().nullable(),
   reachable_reasoning: z.string().nullable(),

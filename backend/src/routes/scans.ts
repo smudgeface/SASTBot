@@ -109,7 +109,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
 
       const findings = await prisma.scanFinding.findMany({
         where,
-        include: { component: { select: { name: true, version: true } } },
+        include: { component: { select: { name: true, version: true, scope: true } } },
         orderBy: [
           { severity: "asc" }, // critical → high → low alphabetically; re-sort UI-side
           { cvssScore: "desc" },
@@ -197,6 +197,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         ecosystem: c.ecosystem,
         licenses: c.licenses,
         component_type: c.componentType,
+        scope: c.scope,
       }));
     },
   );

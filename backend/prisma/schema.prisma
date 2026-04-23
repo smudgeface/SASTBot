@@ -204,6 +204,8 @@ model SbomComponent {
   ecosystem     String?
   licenses      String[]
   componentType String   @default("library") @map("component_type")
+  // CycloneDX scope: "required" (runtime), "optional" (dev/test), "excluded"
+  scope         String?
 
   scanRun  ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
   findings ScanFinding[]
