@@ -242,6 +242,7 @@ export const RepoIdParamsSchema = z.object({ id: UuidSchema });
 
 export const AppSettingsUpdateSchema = z.object({
   jira_base_url: z.string().nullable().optional(),
+  jira_email: z.string().email().nullable().optional(),
   jira_credential_id: UuidSchema.nullable().optional(),
   jira_credential: CredentialCreateSchema.nullable().optional(),
   llm_base_url: z.string().nullable().optional(),
@@ -259,6 +260,7 @@ export const AppSettingsOutSchema = z.object({
   id: UuidSchema,
   org_id: UuidSchema.nullable(),
   jira_base_url: z.string().nullable(),
+  jira_email: z.string().nullable(),
   jira_credential_id: UuidSchema.nullable(),
   llm_base_url: z.string().nullable(),
   llm_api_format: z.string().nullable(),
@@ -356,6 +358,7 @@ export const ScanFindingOutSchema = z.object({
   id: UuidSchema,
   scan_run_id: UuidSchema,
   component_id: UuidSchema,
+  issue_id: UuidSchema,
   component_name: z.string(),
   component_version: z.string().nullable(),
   /** CycloneDX scope: "required" (runtime dep), "optional" (dev/test), "excluded", or null */
@@ -370,13 +373,7 @@ export const ScanFindingOutSchema = z.object({
   aliases: z.array(z.string()),
   actively_exploited: z.boolean(),
   eol_date: IsoDateTimeSchema.nullable(),
-  /** True when OSV data contains at least one fixed version for this CVE. */
   has_fix: z.boolean(),
-  confirmed_reachable: z.boolean(),
-  reachable_via_sast_fingerprint: z.string().nullable(),
-  reachable_reasoning: z.string().nullable(),
-  reachable_assessed_at: IsoDateTimeSchema.nullable(),
-  reachable_model: z.string().nullable(),
   created_at: IsoDateTimeSchema,
 });
 export type ScanFindingOut = z.infer<typeof ScanFindingOutSchema>;
@@ -408,6 +405,7 @@ export const SastFindingOutSchema = z.object({
   id: UuidSchema,
   scan_run_id: UuidSchema,
   scope_id: UuidSchema,
+  issue_id: UuidSchema,
   fingerprint: z.string(),
   rule_id: z.string(),
   rule_name: z.string().nullable(),
@@ -418,15 +416,6 @@ export const SastFindingOutSchema = z.object({
   start_line: z.number().int(),
   end_line: z.number().int().nullable(),
   snippet: z.string().nullable(),
-  triage_status: SastTriageStatusSchema,
-  triage_confidence: z.number().nullable(),
-  triage_reasoning: z.string().nullable(),
-  triage_model: z.string().nullable(),
-  triage_input_tokens: z.number().int().nullable(),
-  triage_output_tokens: z.number().int().nullable(),
-  suppressed_at: IsoDateTimeSchema.nullable(),
-  suppressed_by_user_id: UuidSchema.nullable(),
-  suppressed_reason: z.string().nullable(),
   created_at: IsoDateTimeSchema,
 });
 export type SastFindingOut = z.infer<typeof SastFindingOutSchema>;
@@ -441,7 +430,6 @@ export type SastTriageBody = z.infer<typeof SastTriageBodySchema>;
 
 export const SastFindingsQuerySchema = z.object({
   severity: SastSeveritySchema.optional(),
-  triage_status: SastTriageStatusSchema.optional(),
   file_path: z.string().optional(),
 });
 
@@ -455,3 +443,111 @@ export const SastFindingParamsSchema = z.object({
   id: UuidSchema,
   fid: UuidSchema,
 });
+
+// ---------------------------------------------------------------------------
+// Issues (M5) — stable identity rows, one per (scope, fingerprint/pkg+osv)
+// ---------------------------------------------------------------------------
+
+export const SastIssueOutSchema = z.object({
+  id: UuidSchema,
+  org_id: UuidSchema.nullable(),
+  scope_id: UuidSchema,
+  fingerprint: z.string(),
+  triage_status: SastTriageStatusSchema,
+  triage_confidence: z.number().nullable(),
+  triage_reasoning: z.string().nullable(),
+  triage_model: z.string().nullable(),
+  triage_input_tokens: z.number().int().nullable(),
+  triage_output_tokens: z.number().int().nullable(),
+  suppressed_at: IsoDateTimeSchema.nullable(),
+  suppressed_by_user_id: UuidSchema.nullable(),
+  suppressed_reason: z.string().nullable(),
+  notes: z.string().nullable(),
+  jira_ticket_id: UuidSchema.nullable(),
+  latest_rule_id: z.string(),
+  latest_rule_name: z.string().nullable(),
+  latest_rule_message: z.string().nullable(),
+  latest_severity: SastSeveritySchema,
+  latest_cwe_ids: z.array(z.string()),
+  latest_file_path: z.string(),
+  latest_start_line: z.number().int(),
+  latest_snippet: z.string().nullable(),
+  first_seen_at: IsoDateTimeSchema,
+  last_seen_at: IsoDateTimeSchema,
+  created_at: IsoDateTimeSchema,
+  updated_at: IsoDateTimeSchema,
+});
+export type SastIssueOut = z.infer<typeof SastIssueOutSchema>;
+
+export const ScaDismissedStatusSchema = z.enum(["active", "acknowledged", "wont_fix", "false_positive"]);
+export type ScaDismissedStatus = z.infer<typeof ScaDismissedStatusSchema>;
+
+export const ScaIssueOutSchema = z.object({
+  id: UuidSchema,
+  org_id: UuidSchema.nullable(),
+  scope_id: UuidSchema,
+  package_name: z.string(),
+  osv_id: z.string(),
+  dismissed_status: ScaDismissedStatusSchema,
+  dismissed_at: IsoDateTimeSchema.nullable(),
+  dismissed_by_user_id: UuidSchema.nullable(),
+  dismissed_reason: z.string().nullable(),
+  notes: z.string().nullable(),
+  jira_ticket_id: UuidSchema.nullable(),
+  latest_package_version: z.string().nullable(),
+  latest_ecosystem: z.string().nullable(),
+  latest_component_scope: z.string().nullable(),
+  latest_finding_type: FindingTypeSchema,
+  latest_cve_id: z.string().nullable(),
+  latest_severity: SeveritySchema,
+  latest_cvss_score: z.number().nullable(),
+  latest_cvss_vector: z.string().nullable(),
+  latest_summary: z.string().nullable(),
+  latest_aliases: z.array(z.string()),
+  latest_actively_exploited: z.boolean(),
+  latest_eol_date: IsoDateTimeSchema.nullable(),
+  latest_has_fix: z.boolean(),
+  confirmed_reachable: z.boolean(),
+  reachable_via_sast_fingerprint: z.string().nullable(),
+  reachable_reasoning: z.string().nullable(),
+  reachable_assessed_at: IsoDateTimeSchema.nullable(),
+  reachable_model: z.string().nullable(),
+  first_seen_at: IsoDateTimeSchema,
+  last_seen_at: IsoDateTimeSchema,
+  created_at: IsoDateTimeSchema,
+  updated_at: IsoDateTimeSchema,
+});
+export type ScaIssueOut = z.infer<typeof ScaIssueOutSchema>;
+
+export const SastIssueListSchema = z.array(SastIssueOutSchema);
+export const ScaIssueListSchema = z.array(ScaIssueOutSchema);
+
+// Triage action for a SastIssue
+export const SastIssueTriageBodySchema = z.object({
+  status: z.enum(["confirmed", "false_positive", "suppressed", "pending"]),
+  reason: z.string().optional(),
+});
+export type SastIssueTriageBody = z.infer<typeof SastIssueTriageBodySchema>;
+
+// Dismiss action for a ScaIssue
+export const ScaIssueDismissBodySchema = z.object({
+  status: ScaDismissedStatusSchema,
+  reason: z.string().optional(),
+});
+export type ScaIssueDismissBody = z.infer<typeof ScaIssueDismissBodySchema>;
+
+// Paginated wrapper
+export const PaginationQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  page_size: z.coerce.number().int().min(1).max(500).default(100),
+});
+export type PaginationQuery = z.infer<typeof PaginationQuerySchema>;
+
+export function PaginatedSchema<T extends z.ZodTypeAny>(itemSchema: T) {
+  return z.object({
+    items: z.array(itemSchema),
+    total: z.number().int().nonnegative(),
+    page: z.number().int().min(1),
+    page_size: z.number().int().min(1),
+  });
+}

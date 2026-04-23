@@ -229,7 +229,6 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
 
       const where: Record<string, unknown> = { scanRunId: req.params.id };
       if (req.query.severity) where.severity = req.query.severity;
-      if (req.query.triage_status) where.triageStatus = req.query.triage_status;
       if (req.query.file_path) {
         where.filePath = { startsWith: req.query.file_path };
       }
@@ -273,21 +272,21 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       });
       if (!finding) return reply.code(404).send({ detail: "SAST finding not found" });
 
+      // Deprecated: forward to the issue. Triage state lives on SastIssue now.
       const { status, reason } = req.body;
-      const updated = await prisma.sastFinding.update({
-        where: { id: req.params.fid },
+      await prisma.sastIssue.update({
+        where: { id: finding.issueId },
         data: {
           triageStatus: status,
           suppressedReason: status === "pending" ? null : (reason ?? null),
           suppressedAt: status === "suppressed" ? new Date() : null,
           suppressedByUserId: status === "suppressed" ? (req.user?.id ?? null) : null,
-          // Clear LLM triage fields when manually resetting to pending
           triageConfidence: status === "pending" ? null : undefined,
           triageReasoning: status === "pending" ? null : undefined,
         },
       });
 
-      return sastFindingToOut(updated);
+      return sastFindingToOut(finding);
     },
   );
 };

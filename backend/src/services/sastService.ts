@@ -6,6 +6,7 @@ import type { Prisma, PrismaClient, SastFinding } from "@prisma/client";
 import { pino } from "pino";
 
 import { loadConfig } from "../config.js";
+import { upsertSastIssueFromDetection } from "./issueService.js";
 
 const execFileAsync = promisify(execFile);
 const logger = pino({ level: loadConfig().logLevel, name: "sastService" });
@@ -226,41 +227,15 @@ export function parseSarif(doc: SarifDoc, scopeDir?: string): SastFindingInput[]
 }
 
 // ---------------------------------------------------------------------------
-// Triage inheritance
+// Persistence
 // ---------------------------------------------------------------------------
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
 /**
- * Check whether a previous scan in the same scope resolved this fingerprint.
- * Returns the inherited status + reason when the most recent match is
- * suppressed or false_positive; null otherwise.
+ * Upsert a SastIssue for each detection, then create the SastFinding detection
+ * row linking back to the issue. Returns the inserted SastFinding rows.
  */
-export async function inheritTriage(
-  scopeId: string,
-  fingerprint: string,
-  client: Tx,
-): Promise<{ status: string; reason: string | null } | null> {
-  const prior = await (client as PrismaClient).sastFinding.findFirst({
-    where: {
-      scopeId,
-      fingerprint,
-      triageStatus: { in: ["suppressed", "false_positive"] },
-    },
-    orderBy: { createdAt: "desc" },
-    select: { triageStatus: true, suppressedReason: true, triageReasoning: true },
-  });
-  if (!prior) return null;
-  return {
-    status: prior.triageStatus,
-    reason: prior.suppressedReason ?? prior.triageReasoning ?? null,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Persistence
-// ---------------------------------------------------------------------------
-
 export async function persistSastFindings(
   scanRunId: string,
   scopeId: string,
@@ -270,36 +245,41 @@ export async function persistSastFindings(
 ): Promise<SastFinding[]> {
   if (inputs.length === 0) return [];
 
-  const rows: Prisma.SastFindingCreateManyInput[] = [];
-
   for (const input of inputs) {
-    const inherited = await inheritTriage(scopeId, input.fingerprint, client);
-
-    const row: Prisma.SastFindingCreateManyInput = {
-      scanRunId,
-      scopeId,
-      orgId,
+    const { issue } = await upsertSastIssueFromDetection(client, scanRunId, scopeId, orgId, {
       fingerprint: input.fingerprint,
       ruleId: input.ruleId,
       ruleName: input.ruleName,
       ruleMessage: input.ruleMessage,
-      cweIds: input.cweIds,
       severity: input.severity,
+      cweIds: input.cweIds,
       filePath: input.filePath,
       startLine: input.startLine,
-      endLine: input.endLine,
       snippet: input.snippet,
-      triageStatus: inherited?.status ?? "pending",
-      suppressedReason: inherited?.reason ?? null,
-    };
+    });
 
-    rows.push(row);
+    // [scanRunId, fingerprint] unique index skips duplicates across retried scans
+    await (client as PrismaClient).sastFinding.upsert({
+      where: { scanRunId_fingerprint: { scanRunId, fingerprint: input.fingerprint } },
+      create: {
+        scanRunId,
+        scopeId,
+        orgId,
+        issueId: issue.id,
+        fingerprint: input.fingerprint,
+        ruleId: input.ruleId,
+        ruleName: input.ruleName,
+        ruleMessage: input.ruleMessage,
+        cweIds: input.cweIds,
+        severity: input.severity,
+        filePath: input.filePath,
+        startLine: input.startLine,
+        endLine: input.endLine,
+        snippet: input.snippet,
+      },
+      update: {},
+    });
   }
-
-  await (client as PrismaClient).sastFinding.createMany({
-    data: rows,
-    skipDuplicates: true, // [scanRunId, fingerprint] unique index
-  });
 
   return (client as PrismaClient).sastFinding.findMany({
     where: { scanRunId },

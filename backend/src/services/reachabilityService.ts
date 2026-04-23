@@ -1,20 +1,14 @@
 /**
- * SCA reachability analysis.
+ * SCA reachability analysis — M5 refactor.
  *
- * For each high/critical SCA finding in a scan:
- *   1. Look up (or extract) the vulnerable function names via CveKnowledgeService.
- *   2. Ripgrep the scope directory for those function names.
- *   3. Zero hits → mark reachable=false (no LLM call needed — high confidence).
- *   4. Hits → ask LLM to confirm whether the code actually invokes the
- *      vulnerable functionality, with ±10 lines of context per match site.
- *
- * Also applies SAST-originated reachability hints: findings already marked
- * reachable via SAST triage (confirmed_reachable_sca_ids) are accepted as-is.
+ * Queries ScaIssue rows detected in the current scan and writes reachability
+ * verdicts back to the issue (not the detection rows). The ripgrep + LLM
+ * confirmation logic is unchanged.
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import type { Prisma, PrismaClient, ScanFinding } from "@prisma/client";
+import type { Prisma, PrismaClient, ScaIssue } from "@prisma/client";
 import { pino } from "pino";
 import { z } from "zod";
 
@@ -72,7 +66,6 @@ async function ripgrepForFunction(
       .split("\n")
       .filter(Boolean)
       .map((line) => {
-        // rg output: filepath:linenum:text
         const m = line.match(/^(.+):(\d+):(.*)$/);
         if (!m) return null;
         return { file: m[1], line: parseInt(m[2], 10), text: m[3] };
@@ -80,7 +73,6 @@ async function ripgrepForFunction(
       .filter((h): h is GrepHit => h !== null);
   } catch (err) {
     const e = err as { code?: string | number };
-    // Exit code 1 = no matches (not an error)
     if (e.code === 1) return [];
     logger.warn({ functionName, err }, "[reachabilityService] ripgrep error");
     return [];
@@ -88,7 +80,7 @@ async function ripgrepForFunction(
 }
 
 // ---------------------------------------------------------------------------
-// LLM reachability confirmation
+// LLM confirmation
 // ---------------------------------------------------------------------------
 
 const ReachabilityResponseSchema = z.object({
@@ -111,12 +103,11 @@ const REACHABILITY_TOOL_SCHEMA = {
 };
 
 async function confirmReachabilityWithLlm(
-  finding: ScanFinding & { component: { name: string; version: string | null } },
+  issue: ScaIssue,
   functionName: string,
   hits: GrepHit[],
   orgId: string | null,
 ): Promise<{ reachable: boolean; confidence: number; reasoning: string; model: string } | null> {
-  // Show up to 3 hit sites, each with surrounding context lines
   const sites = hits.slice(0, 3).map((h) => {
     return `File: ${h.file} line ${h.line}\n${h.text.trim()}`;
   });
@@ -124,9 +115,9 @@ async function confirmReachabilityWithLlm(
   const prompt = `You are a security researcher assessing whether application code calls a vulnerable library function.
 
 ## Vulnerability
-Package: ${finding.component.name}@${finding.component.version ?? "unknown"}
-CVE: ${finding.cveId ?? finding.osvId}
-Summary: ${finding.summary ?? "no summary"}
+Package: ${issue.packageName}@${issue.latestPackageVersion ?? "unknown"}
+CVE: ${issue.latestCveId ?? issue.osvId}
+Summary: ${issue.latestSummary ?? "no summary"}
 Vulnerable function: ${functionName}
 
 ## Code references found by grep
@@ -139,30 +130,19 @@ Consider: is the function called with user-controlled input? Is the usage in a v
 Respond with whether the vulnerability appears reachable from this codebase.`;
 
   const result = await callLlm(
-    {
-      orgId,
-      prompt,
-      maxTokens: 256,
-      toolName: "submit_reachability",
-      toolSchema: REACHABILITY_TOOL_SCHEMA,
-    },
-    { skipEnabledCheck: false }, // respects the enabled toggle
+    { orgId, prompt, maxTokens: 256, toolName: "submit_reachability", toolSchema: REACHABILITY_TOOL_SCHEMA },
+    { skipEnabledCheck: false },
   );
 
   if (!result) return null;
 
   const parsed = parseJsonResponse(result.text, ReachabilityResponseSchema);
   if (!parsed) {
-    logger.warn({ findingId: finding.id }, "[reachabilityService] LLM returned unparseable response");
+    logger.warn({ issueId: issue.id }, "[reachabilityService] LLM returned unparseable response");
     return null;
   }
 
-  return {
-    reachable: parsed.reachable,
-    confidence: parsed.confidence,
-    reasoning: parsed.reasoning,
-    model: result.model,
-  };
+  return { reachable: parsed.reachable, confidence: parsed.confidence, reasoning: parsed.reasoning, model: result.model };
 }
 
 // ---------------------------------------------------------------------------
@@ -186,56 +166,48 @@ export async function assessReachability(
 
   const threshold = settings.reachabilityCvssThreshold;
 
-  // Load high/critical SCA CVE findings not yet assessed.
-  // Use cvssScore when available; fall back to severity string for advisories
-  // that don't include a numeric CVSS score (common in OSV/GHSA data).
-  const findings = await db.scanFinding.findMany({
+  // Query ScaIssue rows detected in this scan that meet severity threshold
+  const issues = await db.scaIssue.findMany({
     where: {
-      scanRunId,
-      findingType: "cve",
-      reachableAssessedAt: null,
-      confirmedReachable: false,
+      scopeId,
+      lastSeenScanRunId: scanRunId,
+      latestFindingType: "cve",
       OR: [
-        { cvssScore: { gte: threshold } },
-        { cvssScore: null, severity: { in: ["critical", "high"] } },
+        { latestCvssScore: { gte: threshold } },
+        { latestCvssScore: null, latestSeverity: { in: ["critical", "high"] } },
       ],
     },
-    include: { component: { select: { name: true, version: true, ecosystem: true, purl: true } } },
   });
 
-  if (findings.length === 0) {
-    logger.info("[reachabilityService] no findings to assess");
+  if (issues.length === 0) {
+    logger.info("[reachabilityService] no issues to assess");
     return;
   }
 
   logger.info(
-    { count: findings.length, threshold },
+    { count: issues.length, threshold },
     "[reachabilityService] assessing reachability",
   );
 
-  for (const finding of findings) {
-    // Skip if already marked reachable via SAST triage hints
-    if (finding.confirmedReachable) continue;
-
-    const component = finding.component as { name: string; version: string | null; ecosystem: string | null; purl: string };
+  for (const issue of issues) {
+    // Already marked reachable (e.g. via SAST triage hints) — skip LLM
+    if (issue.confirmedReachable) continue;
 
     const osvVuln: OsvVulnForExtraction = {
-      id: finding.osvId,
-      cveId: finding.cveId,
-      ecosystem: component.ecosystem ?? "npm",
-      packageName: component.name,
-      summary: finding.summary,
-      details: (finding.detailJson as Record<string, unknown> | null)?.details as string | null ?? null,
-      modified: (finding.detailJson as Record<string, unknown> | null)?.modified as string | null ?? null,
+      id: issue.osvId,
+      cveId: issue.latestCveId,
+      ecosystem: issue.latestEcosystem ?? "npm",
+      packageName: issue.packageName,
+      summary: issue.latestSummary,
+      details: null,
+      modified: null,
     };
 
-    // Step 1: get or extract vulnerable functions (cached globally)
     const knowledge = await getOrExtract(osvVuln, orgId, db);
 
     if (knowledge.vulnerableFunctions.length === 0) {
-      // Can't assess — no function names identified
-      await db.scanFinding.update({
-        where: { id: finding.id },
+      await db.scaIssue.update({
+        where: { id: issue.id },
         data: {
           reachableAssessedAt: new Date(),
           reachableReasoning: "No specific vulnerable functions identified from advisory",
@@ -244,7 +216,6 @@ export async function assessReachability(
       continue;
     }
 
-    // Step 2: ripgrep scope for each function name
     let allHits: GrepHit[] = [];
     let matchedFunction = "";
 
@@ -253,18 +224,17 @@ export async function assessReachability(
       if (hits.length > 0) {
         allHits = hits;
         matchedFunction = fn;
-        break; // one confirmed hit is enough to warrant LLM confirmation
+        break;
       }
     }
 
     if (allHits.length === 0) {
-      // No references in scope — high confidence not reachable
       logger.info(
-        { findingId: finding.id, functions: knowledge.vulnerableFunctions },
+        { issueId: issue.id, functions: knowledge.vulnerableFunctions },
         "[reachabilityService] no references found — marking not reachable",
       );
-      await db.scanFinding.update({
-        where: { id: finding.id },
+      await db.scaIssue.update({
+        where: { id: issue.id },
         data: {
           confirmedReachable: false,
           reachableReasoning: `No references to ${knowledge.vulnerableFunctions.join(", ")} found in scope`,
@@ -274,23 +244,16 @@ export async function assessReachability(
       continue;
     }
 
-    // Step 3: LLM confirms whether it's actually a vulnerable call
     logger.info(
-      { findingId: finding.id, matchedFunction, hits: allHits.length },
+      { issueId: issue.id, matchedFunction, hits: allHits.length },
       "[reachabilityService] hits found — asking LLM to confirm",
     );
 
-    const confirmation = await confirmReachabilityWithLlm(
-      finding as ScanFinding & { component: { name: string; version: string | null } },
-      matchedFunction,
-      allHits,
-      orgId,
-    );
+    const confirmation = await confirmReachabilityWithLlm(issue, matchedFunction, allHits, orgId);
 
     if (!confirmation) {
-      // LLM not available — record grep hit as tentative
-      await db.scanFinding.update({
-        where: { id: finding.id },
+      await db.scaIssue.update({
+        where: { id: issue.id },
         data: {
           reachableAssessedAt: new Date(),
           reachableReasoning: `References to '${matchedFunction}' found in scope but LLM confirmation unavailable`,
@@ -299,8 +262,8 @@ export async function assessReachability(
       continue;
     }
 
-    await db.scanFinding.update({
-      where: { id: finding.id },
+    await db.scaIssue.update({
+      where: { id: issue.id },
       data: {
         confirmedReachable: confirmation.reachable,
         reachableReasoning: confirmation.reasoning,
@@ -310,14 +273,14 @@ export async function assessReachability(
     });
 
     logger.info(
-      { findingId: finding.id, reachable: confirmation.reachable, confidence: confirmation.confidence },
+      { issueId: issue.id, reachable: confirmation.reachable, confidence: confirmation.confidence },
       "[reachabilityService] reachability assessed",
     );
   }
 
-  // Update scan-level counter
-  const reachableCount = await db.scanFinding.count({
-    where: { scanRunId, confirmedReachable: true },
+  // Update scan-level counter from ScaIssue
+  const reachableCount = await db.scaIssue.count({
+    where: { scopeId, lastSeenScanRunId: scanRunId, confirmedReachable: true },
   });
   await db.scanRun.update({
     where: { id: scanRunId },

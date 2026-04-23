@@ -13,6 +13,7 @@ import { pino } from "pino";
 
 import { loadConfig } from "../config.js";
 import type { Severity } from "../schemas.js";
+import { upsertScaIssueFromDetection } from "./issueService.js";
 
 const logger = pino({ level: loadConfig().logLevel, name: "eolService" });
 
@@ -149,35 +150,57 @@ const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
 export async function checkAndPersistEolFindings(
   scanRunId: string,
+  scopeId: string,
+  orgId: string | null,
   components: SbomComponent[],
   client: Tx,
 ): Promise<ScanFinding[]> {
-  const rows: Prisma.ScanFindingCreateManyInput[] = [];
+  type ComponentFinding = { component: SbomComponent; row: FindingRow };
+  const found: ComponentFinding[] = [];
 
-  // Run checks with limited concurrency (10 at a time) to be a polite client.
   const CONCURRENCY = 10;
   for (let i = 0; i < components.length; i += CONCURRENCY) {
     const chunk = components.slice(i, i + CONCURRENCY);
     await Promise.all(
       chunk.map(async (component) => {
         const result = await checkComponent(component);
-        if (result) {
-          rows.push({ ...result, scanRunId, componentId: component.id });
-        }
+        if (result) found.push({ component, row: result });
       }),
     );
   }
 
-  if (rows.length === 0) return [];
+  if (found.length === 0) return [];
 
   logger.info(
-    { scanRunId, count: rows.length },
+    { scanRunId, count: found.length },
     "[eolService] persisting EOL/deprecated findings",
   );
-  await (client as PrismaClient).scanFinding.createMany({
-    data: rows,
-    skipDuplicates: true,
-  });
+
+  for (const { component, row } of found) {
+    const { issue } = await upsertScaIssueFromDetection(
+      client,
+      scanRunId,
+      scopeId,
+      orgId,
+      { name: component.name, version: component.version, ecosystem: component.ecosystem, scope: component.scope },
+      {
+        osvId: row.osvId,
+        cveId: row.cveId ?? null,
+        findingType: row.findingType ?? "eol",
+        severity: (row.severity ?? "unknown") as string,
+        cvssScore: row.cvssScore ?? null,
+        cvssVector: row.cvssVector ?? null,
+        summary: row.summary ?? null,
+        aliases: (row.aliases as string[]) ?? [],
+        activelyExploited: row.activelyExploited ?? false,
+        eolDate: row.eolDate instanceof Date ? row.eolDate : null,
+      },
+    );
+
+    await (client as PrismaClient).scanFinding.create({
+      data: { ...row, scanRunId, componentId: component.id, issueId: issue.id },
+    });
+  }
 
   return (client as PrismaClient).scanFinding.findMany({
     where: { scanRunId, findingType: { in: ["eol", "deprecated"] } },
@@ -188,7 +211,7 @@ export async function checkAndPersistEolFindings(
 // Per-component check
 // ---------------------------------------------------------------------------
 
-type FindingRow = Omit<Prisma.ScanFindingCreateManyInput, "scanRunId" | "componentId">;
+type FindingRow = Omit<Prisma.ScanFindingCreateManyInput, "scanRunId" | "componentId" | "issueId">;
 
 async function checkComponent(c: SbomComponent): Promise<FindingRow | null> {
   const { name, version, ecosystem } = c;
