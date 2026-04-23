@@ -3,6 +3,7 @@ import { pino } from "pino";
 
 import { loadConfig } from "../config.js";
 import type { Severity } from "../schemas.js";
+import { upsertScaIssueFromDetection } from "./issueService.js";
 
 const logger = pino({ level: loadConfig().logLevel, name: "osvService" });
 
@@ -124,11 +125,13 @@ export interface OsvResult {
 }
 
 /**
- * Query OSV.dev for all components that have a purl, then persist findings.
- * Returns the inserted ScanFinding rows.
+ * Query OSV.dev for all components that have a purl, upsert ScaIssue rows,
+ * then persist ScanFinding detection rows. Returns the inserted ScanFinding rows.
  */
 export async function queryAndPersistFindings(
   scanRunId: string,
+  scopeId: string,
+  orgId: string | null,
   components: SbomComponent[],
   client: Tx,
 ): Promise<ScanFinding[]> {
@@ -139,9 +142,8 @@ export async function queryAndPersistFindings(
   const purls = withPurl.map((c) => c.purl);
   const results = await queryOsvForPurls(purls);
 
-  // Build (componentId, vuln) pairs, deduplicating by (componentId, osvId).
+  // Deduplicate by (componentId, osvId) then upsert issues + create detections.
   const seen = new Set<string>();
-  const rows: Prisma.ScanFindingCreateManyInput[] = [];
 
   for (let i = 0; i < withPurl.length; i++) {
     const component = withPurl[i];
@@ -153,37 +155,53 @@ export async function queryAndPersistFindings(
 
       const severity = mapSeverity(vuln);
       const cvss3 = vuln.severity?.find((s: OsvSeverityEntry) => s.type === "CVSS_V3");
+      const aliases = [vuln.id, ...(vuln.aliases ?? [])].filter(
+        (a, idx, arr) => arr.indexOf(a) === idx,
+      );
 
-      rows.push({
+      const { issue } = await upsertScaIssueFromDetection(
+        client,
         scanRunId,
-        componentId: component.id,
-        osvId: vuln.id,
-        cveId: extractCveId(vuln),
-        severity,
-        cvssScore: cvss3 ? parseCvssScore(cvss3.score) : null,
-        cvssVector: cvss3 ? cvss3.score : null,
-        summary: vuln.summary ?? null,
-        aliases: [vuln.id, ...(vuln.aliases ?? [])].filter(
-          (a, idx, arr) => arr.indexOf(a) === idx,
-        ),
-        activelyExploited: false,
-        detailJson: vuln as Prisma.InputJsonValue,
+        scopeId,
+        orgId,
+        { name: component.name, version: component.version, ecosystem: component.ecosystem, scope: component.scope },
+        {
+          osvId: vuln.id,
+          cveId: extractCveId(vuln),
+          findingType: "cve",
+          severity,
+          cvssScore: cvss3 ? parseCvssScore(cvss3.score) : null,
+          cvssVector: cvss3 ? cvss3.score : null,
+          summary: vuln.summary ?? null,
+          aliases,
+          activelyExploited: false,
+          eolDate: null,
+          detailJson: vuln,
+        },
+      );
+
+      await (client as PrismaClient).scanFinding.create({
+        data: {
+          scanRunId,
+          componentId: component.id,
+          issueId: issue.id,
+          findingType: "cve",
+          osvId: vuln.id,
+          cveId: extractCveId(vuln),
+          severity,
+          cvssScore: cvss3 ? parseCvssScore(cvss3.score) : null,
+          cvssVector: cvss3 ? cvss3.score : null,
+          summary: vuln.summary ?? null,
+          aliases,
+          activelyExploited: false,
+          detailJson: vuln as Prisma.InputJsonValue,
+        },
       });
     }
   }
 
-  if (rows.length === 0) {
-    logger.info({ scanRunId }, "[osvService] no vulnerabilities found");
-    return [];
-  }
-
-  logger.info({ scanRunId, count: rows.length }, "[osvService] persisting findings");
-  await (client as PrismaClient).scanFinding.createMany({
-    data: rows,
-    skipDuplicates: true,
-  });
-
+  logger.info({ scanRunId }, "[osvService] CVE findings persisted");
   return (client as PrismaClient).scanFinding.findMany({
-    where: { scanRunId },
+    where: { scanRunId, findingType: "cve" },
   });
 }

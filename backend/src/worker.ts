@@ -105,12 +105,12 @@ const worker = new Worker<ScanJobData>(
 
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");
-      const cveFindings = await queryAndPersistFindings(scanRunId, components, prisma);
+      const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma);
       log.info({ findings: cveFindings.length }, "[worker] CVE findings persisted");
 
       // ── Step 5: EOL / deprecation check ─────────────────────────────────
       log.info("[worker] checking EOL / deprecation");
-      const eolFindings = await checkAndPersistEolFindings(scanRunId, components, prisma);
+      const eolFindings = await checkAndPersistEolFindings(scanRunId, run.scopeId, run.orgId, components, prisma);
       log.info({ eolFindings: eolFindings.length }, "[worker] EOL findings persisted");
 
       const findings = [...cveFindings, ...eolFindings];
@@ -168,16 +168,23 @@ const worker = new Worker<ScanJobData>(
         else if (f.severity === "low") counts.low++;
       }
 
+      const finishedAt = new Date();
       await prisma.scanRun.update({
         where: { id: scanRunId },
         data: {
           status: "success",
-          finishedAt: new Date(),
+          finishedAt,
           criticalCount: counts.critical,
           highCount: counts.high,
           mediumCount: counts.medium,
           lowCount: counts.low,
         },
+      });
+
+      // Update scope denorm so the scope list page can show last-scan timestamps
+      await prisma.scanScope.update({
+        where: { id: run.scopeId },
+        data: { lastScanRunId: scanRunId, lastScanCompletedAt: finishedAt },
       });
 
       log.info(counts, "[worker] scan complete");

@@ -1,13 +1,10 @@
 /**
- * LLM-assisted SAST finding triage.
+ * LLM-assisted SAST issue triage.
  *
- * For each pending finding, builds a prompt with:
- *   - The SAST finding details + code snippet
- *   - High-severity SCA findings for the same scope (for reachability hints)
- *
- * Uses tool_use on anthropic-messages for guaranteed structured output.
- * Falls back to JSON-in-prompt + Zod parse + one retry on other formats.
- * Enforces the per-scan token budget set in AppSettings.
+ * Queries SastIssue rows where triageStatus is pending/error AND
+ * lastSeenScanRunId matches the current scan, then writes triage decisions
+ * back to the issue (not the detection). Reachability hints from triage
+ * update ScaIssue rows.
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { pino } from "pino";
@@ -33,7 +30,6 @@ const TriageResponseSchema = z.object({
 });
 type TriageResponse = z.infer<typeof TriageResponseSchema>;
 
-// Tool schema sent to Anthropic for tool_use structured output
 const TRIAGE_TOOL_SCHEMA = {
   type: "object",
   properties: {
@@ -42,18 +38,12 @@ const TRIAGE_TOOL_SCHEMA = {
       enum: ["confirmed", "false_positive"],
       description: "Whether this is a real vulnerability or a false positive",
     },
-    confidence: {
-      type: "number",
-      description: "Confidence score 0.0-1.0",
-    },
-    reasoning: {
-      type: "string",
-      description: "Brief explanation of the triage decision",
-    },
+    confidence: { type: "number", description: "Confidence score 0.0-1.0" },
+    reasoning: { type: "string", description: "Brief explanation of the triage decision" },
     confirmed_reachable_sca_ids: {
       type: "array",
       items: { type: "string" },
-      description: "IDs of SCA dependency findings that appear reachable from this code",
+      description: "IDs of SCA issues (ScaIssue.id) that appear reachable from this code",
     },
   },
   required: ["triage", "confidence", "reasoning", "confirmed_reachable_sca_ids"],
@@ -74,33 +64,33 @@ interface ScaHint {
 }
 
 function buildPrompt(
-  finding: {
-    ruleId: string;
-    ruleName: string | null;
-    ruleMessage: string | null;
-    severity: string;
-    cweIds: string[];
-    filePath: string;
-    startLine: number;
-    snippet: string | null;
+  issue: {
+    latestRuleId: string;
+    latestRuleName: string | null;
+    latestRuleMessage: string | null;
+    latestSeverity: string;
+    latestCweIds: string[];
+    latestFilePath: string;
+    latestStartLine: number;
+    latestSnippet: string | null;
   },
   scaHints: ScaHint[],
 ): string {
-  const cweStr = finding.cweIds.length > 0 ? finding.cweIds.join(", ") : "none";
+  const cweStr = issue.latestCweIds.length > 0 ? issue.latestCweIds.join(", ") : "none";
 
   let prompt = `You are a security code reviewer. Analyze this static analysis finding and classify it.
 
 ## SAST Finding
-Rule: ${finding.ruleId}${finding.ruleName ? ` - ${finding.ruleName}` : ""}
-Severity: ${finding.severity}
+Rule: ${issue.latestRuleId}${issue.latestRuleName ? ` - ${issue.latestRuleName}` : ""}
+Severity: ${issue.latestSeverity}
 CWE: ${cweStr}
-${finding.ruleMessage ? `Description: ${finding.ruleMessage}\n` : ""}
+${issue.latestRuleMessage ? `Description: ${issue.latestRuleMessage}\n` : ""}
 ## Location
-${finding.filePath}:${finding.startLine}
+${issue.latestFilePath}:${issue.latestStartLine}
 
 ## Code
 \`\`\`
-${finding.snippet ?? "(no snippet available)"}
+${issue.latestSnippet ?? "(no snippet available)"}
 \`\`\`
 `;
 
@@ -124,7 +114,7 @@ Respond with ONLY valid JSON:
   "triage": "confirmed" | "false_positive",
   "confidence": 0.0-1.0,
   "reasoning": "brief explanation",
-  "confirmed_reachable_sca_ids": ["<id>", ...]
+  "confirmed_reachable_sca_ids": ["<ScaIssue id>", ...]
 }`;
 
   return prompt;
@@ -149,37 +139,42 @@ export async function triageFindings(
     return;
   }
 
-  // Load pending SAST findings ordered by severity (high → low)
+  // Load SastIssue rows needing triage in this scan, ordered by severity
   const severityOrder = ["critical", "high", "medium", "low", "info"];
-  const pending = await db.sastFinding.findMany({
-    where: { scanRunId, triageStatus: "pending" },
+  const pending = await db.sastIssue.findMany({
+    where: {
+      scopeId,
+      lastSeenScanRunId: scanRunId,
+      triageStatus: { in: ["pending", "error"] },
+    },
   });
   pending.sort(
-    (a, b) => severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity),
+    (a, b) =>
+      severityOrder.indexOf(a.latestSeverity) - severityOrder.indexOf(b.latestSeverity),
   );
 
   if (pending.length === 0) {
-    logger.info("[llmTriageService] no pending findings to triage");
+    logger.info("[llmTriageService] no pending issues to triage");
     return;
   }
 
-  // Load high/critical SCA findings for reachability context
-  const scaFindings = await db.scanFinding.findMany({
+  // Load high/critical ScaIssue rows for reachability context
+  const scaIssues = await db.scaIssue.findMany({
     where: {
-      scanRunId,
-      findingType: "cve",
-      severity: { in: ["critical", "high"] },
+      scopeId,
+      lastSeenScanRunId: scanRunId,
+      latestFindingType: "cve",
+      latestSeverity: { in: ["critical", "high"] },
     },
-    include: { component: { select: { name: true, version: true } } },
   });
-  const scaHints: ScaHint[] = scaFindings.map((f) => ({
-    id: f.id,
-    componentName: (f.component as { name: string }).name,
-    version: (f.component as { version: string | null }).version,
-    cveId: f.cveId,
-    osvId: f.osvId,
-    summary: f.summary,
-    cvssScore: f.cvssScore,
+  const scaHints: ScaHint[] = scaIssues.map((i) => ({
+    id: i.id,
+    componentName: i.packageName,
+    version: i.latestPackageVersion,
+    cveId: i.latestCveId,
+    osvId: i.osvId,
+    summary: i.latestSummary,
+    cvssScore: i.latestCvssScore,
   }));
 
   const budget = settings.llmTriageTokenBudget;
@@ -190,25 +185,24 @@ export async function triageFindings(
     "[llmTriageService] starting triage",
   );
 
-  for (const finding of pending) {
-    // Check budget before each call
+  for (const issue of pending) {
     const run = await db.scanRun.findUnique({
       where: { id: scanRunId },
       select: { llmInputTokens: true, llmOutputTokens: true },
     });
     const tokensUsed = (run?.llmInputTokens ?? 0) + (run?.llmOutputTokens ?? 0);
     if (tokensUsed >= budget) {
-      const remaining = pending.length - pending.indexOf(finding);
+      const remaining = pending.length - pending.indexOf(issue);
       logger.warn({ remaining, budget }, "[llmTriageService] budget exhausted");
       await appendWarning(scanRunId, db, {
         code: "triage_budget_exhausted",
-        message: `LLM token budget (${budget}) exhausted; ${remaining} finding(s) left pending.`,
+        message: `LLM token budget (${budget}) exhausted; ${remaining} issue(s) left pending.`,
         context: { remaining },
       });
       break;
     }
 
-    const prompt = buildPrompt(finding, scaHints);
+    const prompt = buildPrompt(issue, scaHints);
     let parsed: TriageResponse | null = null;
     let callResult;
 
@@ -223,33 +217,30 @@ export async function triageFindings(
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ findingId: finding.id, err: msg }, "[llmTriageService] LLM call failed");
-      await db.sastFinding.update({
-        where: { id: finding.id },
+      logger.warn({ issueId: issue.id, err: msg }, "[llmTriageService] LLM call failed");
+      await db.sastIssue.update({
+        where: { id: issue.id },
         data: { triageStatus: "error", triageReasoning: `LLM error: ${msg}` },
       });
       await appendWarning(scanRunId, db, {
         code: "llm_transient_error",
-        message: `LLM call failed for finding ${finding.id}: ${msg}`,
-        context: { findingId: finding.id },
+        message: `LLM call failed for issue ${issue.id}: ${msg}`,
+        context: { issueId: issue.id },
       });
       continue;
     }
 
     if (callResult === null) {
-      // LLM became unconfigured mid-scan (toggle flipped) — stop gracefully
       logger.info("[llmTriageService] callLlm returned null — stopping");
       break;
     }
 
-    // Parse response
     parsed = parseJsonResponse(callResult.text, TriageResponseSchema);
 
-    // One retry on parse failure with error feedback
-    if (parsed === null && callResult !== null) {
+    if (parsed === null) {
       logger.warn(
-        { findingId: finding.id, raw: callResult.text.slice(0, 200) },
-        "[llmTriageService] parse failed — retrying with error feedback",
+        { issueId: issue.id, raw: callResult.text.slice(0, 200) },
+        "[llmTriageService] parse failed — retrying",
       );
       const retryPrompt = `${prompt}\n\nYour previous response was not valid JSON. Please respond with ONLY the JSON object, no other text.`;
       try {
@@ -270,8 +261,8 @@ export async function triageFindings(
     }
 
     if (parsed === null) {
-      await db.sastFinding.update({
-        where: { id: finding.id },
+      await db.sastIssue.update({
+        where: { id: issue.id },
         data: {
           triageStatus: "error",
           triageReasoning: "LLM returned malformed JSON after retry",
@@ -283,9 +274,9 @@ export async function triageFindings(
       continue;
     }
 
-    // Persist triage result
-    await db.sastFinding.update({
-      where: { id: finding.id },
+    // Persist triage decision on the SastIssue
+    await db.sastIssue.update({
+      where: { id: issue.id },
       data: {
         triageStatus: parsed.triage,
         triageConfidence: parsed.confidence,
@@ -296,18 +287,15 @@ export async function triageFindings(
       },
     });
 
-    // Apply opportunistic reachability hints from SAST triage
+    // Apply opportunistic reachability hints to ScaIssue rows
     const reachableIds = parsed.confirmed_reachable_sca_ids ?? [];
     if (reachableIds.length > 0) {
-      await db.scanFinding.updateMany({
-        where: {
-          id: { in: reachableIds },
-          scanRunId,
-        },
+      await db.scaIssue.updateMany({
+        where: { id: { in: reachableIds }, scopeId },
         data: {
           confirmedReachable: true,
-          reachableViaSastFingerprint: finding.fingerprint,
-          reachableReasoning: `Identified as reachable by LLM during SAST triage of ${finding.ruleId}`,
+          reachableViaSastFingerprint: issue.fingerprint,
+          reachableReasoning: `Identified as reachable by LLM during SAST triage of ${issue.latestRuleId}`,
           reachableAssessedAt: new Date(),
           reachableModel: callResult.model,
         },
@@ -315,14 +303,14 @@ export async function triageFindings(
     }
 
     logger.info(
-      { findingId: finding.id, triage: parsed.triage, confidence: parsed.confidence },
-      "[llmTriageService] finding triaged",
+      { issueId: issue.id, triage: parsed.triage, confidence: parsed.confidence },
+      "[llmTriageService] issue triaged",
     );
   }
 
-  // Update confirmedReachableCount
-  const reachableCount = await db.scanFinding.count({
-    where: { scanRunId, confirmedReachable: true },
+  // Update scan-level reachable count from ScaIssue
+  const reachableCount = await db.scaIssue.count({
+    where: { scopeId, lastSeenScanRunId: scanRunId, confirmedReachable: true },
   });
   await db.scanRun.update({
     where: { id: scanRunId },
@@ -331,7 +319,7 @@ export async function triageFindings(
 }
 
 // ---------------------------------------------------------------------------
-// Warning helper (inline — avoids circular import with worker)
+// Warning helper
 // ---------------------------------------------------------------------------
 
 interface ScanWarning {

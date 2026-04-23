@@ -1,6 +1,4 @@
-// SASTBot Prisma schema.
-// Models mirror the Python/SQLAlchemy M1 design so the API contract stays
-// identical for the existing React frontend.
+// SASTBot Prisma schema — M5 issue identity refactor.
 
 generator client {
   provider = "prisma-client-js"
@@ -23,6 +21,9 @@ model Org {
   scanScopes   ScanScope[]
   appSettings  AppSettings[]
   sastFindings SastFinding[]
+  jiraTickets  JiraTicket[]
+  sastIssues   SastIssue[]
+  scaIssues    ScaIssue[]
 
   @@map("orgs")
 }
@@ -64,12 +65,8 @@ model Credential {
   name       String
   ciphertext Bytes
   nonce      Bytes
-  tag        Bytes // GCM auth tag (stored separately; see security/crypto.ts)
+  tag        Bytes
   keyVersion Int       @default(1) @map("key_version")
-  // Kind-specific non-secret fields: username for https_basic,
-  // optional known_hosts for ssh_key, etc. Secrets (passwords,
-  // passphrases, private keys) are NEVER stored here — they live
-  // encrypted in `ciphertext`. See services/credentialService.ts.
   metadata   Json?
   expiresAt  DateTime? @map("expires_at") @db.Timestamptz(6)
   createdBy  String?   @map("created_by") @db.Uuid
@@ -84,45 +81,43 @@ model Credential {
 }
 
 model ScanScope {
-  id          String   @id @default(uuid()) @db.Uuid
-  orgId       String?  @map("org_id") @db.Uuid
-  repoId      String   @map("repo_id") @db.Uuid
-  // Relative path within the repo to scan (e.g. "/" or "services/api").
-  // Combined with the repo URL this forms the canonical unit of analysis.
-  path        String   @default("/")
-  displayName String?  @map("display_name")
-  isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                  String    @id @default(uuid()) @db.Uuid
+  orgId               String?   @map("org_id") @db.Uuid
+  repoId              String    @map("repo_id") @db.Uuid
+  path                String    @default("/")
+  displayName         String?   @map("display_name")
+  isActive            Boolean   @default(true) @map("is_active")
+  lastScanRunId       String?   @map("last_scan_run_id") @db.Uuid
+  lastScanCompletedAt DateTime? @map("last_scan_completed_at") @db.Timestamptz(6)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  org          Org?          @relation(fields: [orgId], references: [id], onDelete: SetNull)
-  repo         Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
-  scanRuns     ScanRun[]
+  org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  repo       Repo        @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  scanRuns   ScanRun[]
   sastFindings SastFinding[]
+  sastIssues SastIssue[]
+  scaIssues  ScaIssue[]
 
   @@unique([repoId, path], name: "uq_scan_scopes_repo_path")
   @@map("scan_scopes")
 }
 
 model Repo {
-  id            String    @id @default(uuid()) @db.Uuid
-  orgId         String?   @map("org_id") @db.Uuid
-  // When true, the worker keeps the on-disk clone between scans and
-  // updates via `git fetch` + `git reset` on subsequent runs instead of
-  // re-cloning. Faster, at the cost of disk space on the scanning host.
-  retainClone   Boolean   @default(false) @map("retain_clone")
-  // Set by the worker whenever it lands a clone/fetch on disk. Null when
-  // no cached clone exists — used by the UI to enable/disable "Purge cache".
-  lastClonedAt  DateTime? @map("last_cloned_at") @db.Timestamptz(6)
-  name          String
-  url           String
-  protocol      String // "ssh" | "https"
-  credentialId  String?  @map("credential_id") @db.Uuid
-  defaultBranch String   @default("main") @map("default_branch")
-  scanPaths     Json     @default("[\"/\"]") @map("scan_paths")
-  analysisTypes Json     @default("[\"sca\"]") @map("analysis_types")
-  scheduleCron  String?  @map("schedule_cron")
-  isActive      Boolean  @default(true) @map("is_active")
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                  String    @id @default(uuid()) @db.Uuid
+  orgId               String?   @map("org_id") @db.Uuid
+  retainClone         Boolean   @default(false) @map("retain_clone")
+  lastClonedAt        DateTime? @map("last_cloned_at") @db.Timestamptz(6)
+  lastScheduledScanAt DateTime? @map("last_scheduled_scan_at") @db.Timestamptz(6)
+  name                String
+  url                 String
+  protocol            String // "ssh" | "https"
+  credentialId        String?   @map("credential_id") @db.Uuid
+  defaultBranch       String    @default("main") @map("default_branch")
+  scanPaths           Json      @default("[\"/\"]") @map("scan_paths")
+  analysisTypes       Json      @default("[\"sca\"]") @map("analysis_types")
+  scheduleCron        String?   @map("schedule_cron")
+  isActive            Boolean   @default(true) @map("is_active")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
   credential Credential? @relation("RepoCredential", fields: [credentialId], references: [id], onDelete: SetNull)
@@ -130,22 +125,24 @@ model Repo {
   scopes     ScanScope[]
 
   @@unique([orgId, url], name: "uq_repos_org_url")
+  @@index([isActive, scheduleCron])
   @@map("repos")
 }
 
 model AppSettings {
-  id                       String   @id @default(uuid()) @db.Uuid
-  orgId                    String?  @unique @map("org_id") @db.Uuid
-  jiraBaseUrl              String?  @map("jira_base_url")
-  jiraCredentialId         String?  @map("jira_credential_id") @db.Uuid
-  llmBaseUrl               String?  @map("llm_base_url")
-  llmApiFormat             String?  @map("llm_api_format")
-  llmModel                 String?  @map("llm_model")
-  llmCredentialId          String?  @map("llm_credential_id") @db.Uuid
-  llmAssistanceEnabled     Boolean  @default(false) @map("llm_assistance_enabled")
-  llmTriageTokenBudget     Int      @default(50000) @map("llm_triage_token_budget")
-  reachabilityCvssThreshold Float   @default(7.0) @map("reachability_cvss_threshold")
-  updatedAt                DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                        String   @id @default(uuid()) @db.Uuid
+  orgId                     String?  @unique @map("org_id") @db.Uuid
+  jiraBaseUrl               String?  @map("jira_base_url")
+  jiraEmail                 String?  @map("jira_email")
+  jiraCredentialId          String?  @map("jira_credential_id") @db.Uuid
+  llmBaseUrl                String?  @map("llm_base_url")
+  llmApiFormat              String?  @map("llm_api_format")
+  llmModel                  String?  @map("llm_model")
+  llmCredentialId           String?  @map("llm_credential_id") @db.Uuid
+  llmAssistanceEnabled      Boolean  @default(false) @map("llm_assistance_enabled")
+  llmTriageTokenBudget      Int      @default(50000) @map("llm_triage_token_budget")
+  reachabilityCvssThreshold Float    @default(7.0) @map("reachability_cvss_threshold")
+  updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   org            Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
   jiraCredential Credential? @relation("JiraCredential", fields: [jiraCredentialId], references: [id], onDelete: SetNull)
@@ -158,8 +155,6 @@ model ScanRun {
   id                      String    @id @default(uuid()) @db.Uuid
   orgId                   String?   @map("org_id") @db.Uuid
   repoId                  String    @map("repo_id") @db.Uuid
-  // Scope is the canonical unit — (repo, path). repoId is kept as a
-  // denorm for cheap filtering without a join.
   scopeId                 String    @map("scope_id") @db.Uuid
   status                  String // "pending" | "running" | "success" | "failed"
   triggeredBy             String    @map("triggered_by") // "user" | "api" | "schedule"
@@ -167,16 +162,12 @@ model ScanRun {
   startedAt               DateTime? @map("started_at") @db.Timestamptz(6)
   finishedAt              DateTime? @map("finished_at") @db.Timestamptz(6)
   error                   String?
-  // SCA summary counters — written by the worker after OSV lookup.
   componentCount          Int       @default(0) @map("component_count")
   criticalCount           Int       @default(0) @map("critical_count")
   highCount               Int       @default(0) @map("high_count")
   mediumCount             Int       @default(0) @map("medium_count")
   lowCount                Int       @default(0) @map("low_count")
-  // Raw CycloneDX 1.7 SBOM produced by cdxgen; stored as JSONB for the
-  // /scans/:id/sbom download endpoint. Null until the worker writes it.
   sbomJson                Json?     @map("sbom_json")
-  // M4 SAST + LLM fields
   warnings                Json      @default("[]")
   llmInputTokens          Int       @default(0) @map("llm_input_tokens")
   llmOutputTokens         Int       @default(0) @map("llm_output_tokens")
@@ -192,6 +183,8 @@ model ScanRun {
   findings     ScanFinding[]
   sastFindings SastFinding[]
 
+  @@index([scopeId, createdAt(sort: Desc)])
+  @@index([repoId, createdAt(sort: Desc)])
   @@map("scan_runs")
 }
 
@@ -204,7 +197,6 @@ model SbomComponent {
   ecosystem     String?
   licenses      String[]
   componentType String   @default("library") @map("component_type")
-  // CycloneDX scope: "required" (runtime), "optional" (dev/test), "excluded"
   scope         String?
 
   scanRun  ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
@@ -215,68 +207,54 @@ model SbomComponent {
 }
 
 model ScanFinding {
-  id                          String    @id @default(uuid()) @db.Uuid
-  scanRunId                   String    @map("scan_run_id") @db.Uuid
-  componentId                 String    @map("component_id") @db.Uuid
-  // "cve" for OSV/NVD findings; "deprecated" for npm deprecated flag;
-  // "eol" for endoflife.date cycle findings.
-  findingType                 String    @default("cve") @map("finding_type")
-  osvId                       String    @map("osv_id")
-  cveId                       String?   @map("cve_id")
-  severity                    String    @default("unknown")
-  cvssScore                   Float?    @map("cvss_score")
-  cvssVector                  String?   @map("cvss_vector")
-  summary                     String?
-  aliases                     String[]
-  activelyExploited           Boolean   @default(false) @map("actively_exploited")
-  // ISO-8601 date when this component version reaches end-of-life (eol findings only).
-  eolDate                     DateTime? @map("eol_date") @db.Timestamptz(6)
-  detailJson                  Json?     @map("detail_json")
-  // M4 reachability fields
-  confirmedReachable          Boolean   @default(false) @map("confirmed_reachable")
-  reachableViaSastFingerprint String?   @map("reachable_via_sast_fingerprint")
-  reachableReasoning          String?   @map("reachable_reasoning")
-  reachableAssessedAt         DateTime? @map("reachable_assessed_at") @db.Timestamptz(6)
-  reachableModel              String?   @map("reachable_model")
-  createdAt                   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  id              String    @id @default(uuid()) @db.Uuid
+  scanRunId       String    @map("scan_run_id") @db.Uuid
+  componentId     String    @map("component_id") @db.Uuid
+  issueId         String    @map("issue_id") @db.Uuid
+  findingType     String    @default("cve") @map("finding_type")
+  osvId           String    @map("osv_id")
+  cveId           String?   @map("cve_id")
+  severity        String    @default("unknown")
+  cvssScore       Float?    @map("cvss_score")
+  cvssVector      String?   @map("cvss_vector")
+  summary         String?
+  aliases         String[]
+  activelyExploited Boolean @default(false) @map("actively_exploited")
+  eolDate         DateTime? @map("eol_date") @db.Timestamptz(6)
+  detailJson      Json?     @map("detail_json")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   scanRun   ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
   component SbomComponent @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  issue     ScaIssue      @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
   @@index([scanRunId])
   @@map("scan_findings")
 }
 
 model SastFinding {
-  id                  String    @id @default(uuid()) @db.Uuid
-  scanRunId           String    @map("scan_run_id") @db.Uuid
-  scopeId             String    @map("scope_id") @db.Uuid
-  orgId               String?   @map("org_id") @db.Uuid
-  fingerprint         String
-  ruleId              String    @map("rule_id")
-  ruleName            String?   @map("rule_name")
-  ruleMessage         String?   @map("rule_message")
-  cweIds              String[]  @map("cwe_ids")
-  severity            String    @default("info")
-  filePath            String    @map("file_path")
-  startLine           Int       @map("start_line")
-  endLine             Int?      @map("end_line")
-  snippet             String?
-  triageStatus        String    @default("pending") @map("triage_status")
-  triageConfidence    Float?    @map("triage_confidence")
-  triageReasoning     String?   @map("triage_reasoning")
-  triageModel         String?   @map("triage_model")
-  triageInputTokens   Int?      @map("triage_input_tokens")
-  triageOutputTokens  Int?      @map("triage_output_tokens")
-  suppressedAt        DateTime? @map("suppressed_at") @db.Timestamptz(6)
-  suppressedByUserId  String?   @map("suppressed_by_user_id") @db.Uuid
-  suppressedReason    String?   @map("suppressed_reason")
-  detailJson          Json?     @map("detail_json")
-  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  id          String   @id @default(uuid()) @db.Uuid
+  scanRunId   String   @map("scan_run_id") @db.Uuid
+  scopeId     String   @map("scope_id") @db.Uuid
+  orgId       String?  @map("org_id") @db.Uuid
+  issueId     String   @map("issue_id") @db.Uuid
+  fingerprint String
+  ruleId      String   @map("rule_id")
+  ruleName    String?  @map("rule_name")
+  ruleMessage String?  @map("rule_message")
+  cweIds      String[] @map("cwe_ids")
+  severity    String   @default("info")
+  filePath    String   @map("file_path")
+  startLine   Int      @map("start_line")
+  endLine     Int?     @map("end_line")
+  snippet     String?
+  detailJson  Json?    @map("detail_json")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   scanRun ScanRun   @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
-  scope   ScanScope @relation(fields: [scopeId],   references: [id], onDelete: Cascade)
-  org     Org?      @relation(fields: [orgId],     references: [id], onDelete: SetNull)
+  scope   ScanScope @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  org     Org?      @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  issue   SastIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
   @@unique([scanRunId, fingerprint])
   @@index([fingerprint])
@@ -284,20 +262,152 @@ model SastFinding {
   @@map("sast_findings")
 }
 
+model SastIssue {
+  id                   String    @id @default(uuid()) @db.Uuid
+  orgId                String?   @map("org_id") @db.Uuid
+  scopeId              String    @map("scope_id") @db.Uuid
+  fingerprint          String
+  // Decisions
+  triageStatus         String    @default("pending") @map("triage_status")
+  // "pending" | "confirmed" | "false_positive" | "suppressed" | "error"
+  triageConfidence     Float?    @map("triage_confidence")
+  triageReasoning      String?   @map("triage_reasoning")
+  triageModel          String?   @map("triage_model")
+  triageInputTokens    Int?      @map("triage_input_tokens")
+  triageOutputTokens   Int?      @map("triage_output_tokens")
+  suppressedAt         DateTime? @map("suppressed_at") @db.Timestamptz(6)
+  suppressedByUserId   String?   @map("suppressed_by_user_id") @db.Uuid
+  suppressedReason     String?   @map("suppressed_reason")
+  notes                String?
+  jiraTicketId         String?   @map("jira_ticket_id") @db.Uuid
+  // Denorm from latest detection
+  latestRuleId         String    @map("latest_rule_id")
+  latestRuleName       String?   @map("latest_rule_name")
+  latestRuleMessage    String?   @map("latest_rule_message")
+  latestSeverity       String    @default("info") @map("latest_severity")
+  latestCweIds         String[]  @default([]) @map("latest_cwe_ids")
+  latestFilePath       String    @map("latest_file_path")
+  latestStartLine      Int       @map("latest_start_line")
+  latestSnippet        String?   @map("latest_snippet")
+  // Lifecycle
+  firstSeenAt          DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz(6)
+  firstSeenScanRunId   String    @map("first_seen_scan_run_id") @db.Uuid
+  lastSeenAt           DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  lastSeenScanRunId    String    @map("last_seen_scan_run_id") @db.Uuid
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  scope      ScanScope   @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  jiraTicket JiraTicket? @relation(fields: [jiraTicketId], references: [id], onDelete: SetNull)
+  detections SastFinding[]
+
+  @@unique([scopeId, fingerprint], name: "uq_sast_issues_scope_fingerprint")
+  @@index([scopeId, triageStatus])
+  @@index([scopeId, latestSeverity])
+  @@index([jiraTicketId])
+  @@map("sast_issues")
+}
+
+model ScaIssue {
+  id                          String    @id @default(uuid()) @db.Uuid
+  orgId                       String?   @map("org_id") @db.Uuid
+  scopeId                     String    @map("scope_id") @db.Uuid
+  packageName                 String    @map("package_name")
+  osvId                       String    @map("osv_id")
+  // Decisions
+  dismissedStatus             String    @default("active") @map("dismissed_status")
+  // "active" | "acknowledged" | "wont_fix" | "false_positive"
+  dismissedAt                 DateTime? @map("dismissed_at") @db.Timestamptz(6)
+  dismissedByUserId           String?   @map("dismissed_by_user_id") @db.Uuid
+  dismissedReason             String?   @map("dismissed_reason")
+  notes                       String?
+  jiraTicketId                String?   @map("jira_ticket_id") @db.Uuid
+  // Denorm from latest detection
+  latestPackageVersion        String?   @map("latest_package_version")
+  latestEcosystem             String?   @map("latest_ecosystem")
+  latestComponentScope        String?   @map("latest_component_scope") // "required" | "optional"
+  latestFindingType           String    @default("cve") @map("latest_finding_type")
+  latestCveId                 String?   @map("latest_cve_id")
+  latestSeverity              String    @default("unknown") @map("latest_severity")
+  latestCvssScore             Float?    @map("latest_cvss_score")
+  latestCvssVector            String?   @map("latest_cvss_vector")
+  latestSummary               String?   @map("latest_summary")
+  latestAliases               String[]  @default([]) @map("latest_aliases")
+  latestActivelyExploited     Boolean   @default(false) @map("latest_actively_exploited")
+  latestEolDate               DateTime? @map("latest_eol_date") @db.Timestamptz(6)
+  latestHasFix                Boolean   @default(false) @map("latest_has_fix")
+  // Reachability (latest assessment; overwritten each scan the issue is detected in)
+  confirmedReachable          Boolean   @default(false) @map("confirmed_reachable")
+  reachableViaSastFingerprint String?   @map("reachable_via_sast_fingerprint")
+  reachableReasoning          String?   @map("reachable_reasoning")
+  reachableAssessedAt         DateTime? @map("reachable_assessed_at") @db.Timestamptz(6)
+  reachableModel              String?   @map("reachable_model")
+  reachableAtScanRunId        String?   @map("reachable_at_scan_run_id") @db.Uuid
+  // Lifecycle
+  firstSeenAt                 DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz(6)
+  firstSeenScanRunId          String    @map("first_seen_scan_run_id") @db.Uuid
+  lastSeenAt                  DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  lastSeenScanRunId           String    @map("last_seen_scan_run_id") @db.Uuid
+  createdAt                   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  scope      ScanScope   @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  jiraTicket JiraTicket? @relation(fields: [jiraTicketId], references: [id], onDelete: SetNull)
+  detections ScanFinding[]
+
+  @@unique([scopeId, packageName, osvId], name: "uq_sca_issues_scope_pkg_osv")
+  @@index([scopeId, latestSeverity])
+  @@index([scopeId, dismissedStatus])
+  @@index([jiraTicketId])
+  @@map("sca_issues")
+}
+
+model JiraTicket {
+  id             String    @id @default(uuid()) @db.Uuid
+  orgId          String?   @map("org_id") @db.Uuid
+  issueKey       String    @map("issue_key")
+  issueId        String?   @map("issue_id")
+  projectKey     String?   @map("project_key")
+  projectName    String?   @map("project_name")
+  summary        String?
+  status         String?
+  statusCategory String?   @map("status_category") // "new" | "indeterminate" | "done"
+  assigneeName   String?   @map("assignee_name")
+  assigneeEmail  String?   @map("assignee_email")
+  fixVersions    String[]  @default([]) @map("fix_versions")
+  issueType      String?   @map("issue_type")
+  url            String?
+  resolvedAt     DateTime? @map("resolved_at") @db.Timestamptz(6)
+  lastSyncedAt   DateTime? @map("last_synced_at") @db.Timestamptz(6)
+  syncError      String?   @map("sync_error")
+  linkedByUserId String?   @map("linked_by_user_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  sastIssues SastIssue[]
+  scaIssues  ScaIssue[]
+
+  @@unique([orgId, issueKey], name: "uq_jira_tickets_org_key")
+  @@index([orgId, statusCategory])
+  @@map("jira_tickets")
+}
+
 model CveKnowledge {
-  id                    String    @id @default(uuid()) @db.Uuid
-  osvId                 String    @unique @map("osv_id")
-  cveId                 String?   @map("cve_id")
-  ecosystem             String
-  packageName           String    @map("package_name")
-  vulnerableFunctions   String[]  @map("vulnerable_functions")
-  extractionMethod      String    @map("extraction_method")
-  extractionConfidence  Float     @map("extraction_confidence")
-  extractionModel       String?   @map("extraction_model")
-  extractionReasoning   String?   @map("extraction_reasoning")
-  osvModifiedAt         DateTime? @map("osv_modified_at") @db.Timestamptz(6)
-  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                   String    @id @default(uuid()) @db.Uuid
+  osvId                String    @unique @map("osv_id")
+  cveId                String?   @map("cve_id")
+  ecosystem            String
+  packageName          String    @map("package_name")
+  vulnerableFunctions  String[]  @map("vulnerable_functions")
+  extractionMethod     String    @map("extraction_method")
+  extractionConfidence Float     @map("extraction_confidence")
+  extractionModel      String?   @map("extraction_model")
+  extractionReasoning  String?   @map("extraction_reasoning")
+  osvModifiedAt        DateTime? @map("osv_modified_at") @db.Timestamptz(6)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([ecosystem, packageName])
   @@map("cve_knowledge")
