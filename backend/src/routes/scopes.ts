@@ -350,7 +350,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       ]);
       all.sort((a, b) =>
         bySeverity(a.latestSeverity, b.latestSeverity) ||
-        b.lastSeenAt.getTime() - a.lastSeenAt.getTime(),
+        b.lastSeenAt.getTime() - a.lastSeenAt.getTime() ||
+        a.id.localeCompare(b.id),
       );
       const items = all.slice(skip, skip + page_size);
 
@@ -425,7 +426,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       ]);
       all.sort((a, b) =>
         bySeverity(a.latestSeverity, b.latestSeverity) ||
-        (b.latestCvssScore ?? 0) - (a.latestCvssScore ?? 0),
+        (b.latestCvssScore ?? 0) - (a.latestCvssScore ?? 0) ||
+        a.id.localeCompare(b.id),
       );
       const items = all.slice(skip, skip + page_size);
 
