@@ -249,6 +249,9 @@ export const AppSettingsUpdateSchema = z.object({
   llm_model: z.string().nullable().optional(),
   llm_credential_id: UuidSchema.nullable().optional(),
   llm_credential: CredentialCreateSchema.nullable().optional(),
+  llm_assistance_enabled: z.boolean().optional(),
+  llm_triage_token_budget: z.number().int().min(1000).optional(),
+  reachability_cvss_threshold: z.number().min(0).max(10).optional(),
 });
 export type AppSettingsUpdate = z.infer<typeof AppSettingsUpdateSchema>;
 
@@ -261,6 +264,9 @@ export const AppSettingsOutSchema = z.object({
   llm_api_format: z.string().nullable(),
   llm_model: z.string().nullable(),
   llm_credential_id: UuidSchema.nullable(),
+  llm_assistance_enabled: z.boolean(),
+  llm_triage_token_budget: z.number().int(),
+  reachability_cvss_threshold: z.number(),
   updated_at: IsoDateTimeSchema,
 });
 export type AppSettingsOut = z.infer<typeof AppSettingsOutSchema>;
@@ -271,6 +277,13 @@ export type AppSettingsOut = z.infer<typeof AppSettingsOutSchema>;
 
 export const ScanStatusSchema = z.enum(["pending", "running", "success", "failed"]);
 export const ScanTriggeredBySchema = z.enum(["user", "api", "schedule"]);
+
+export const ScanWarningSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  context: z.record(z.unknown()).optional(),
+});
+export type ScanWarning = z.infer<typeof ScanWarningSchema>;
 
 export const ScanRunOutSchema = z.object({
   id: UuidSchema,
@@ -290,6 +303,12 @@ export const ScanRunOutSchema = z.object({
   high_count: z.number().int().nonnegative(),
   medium_count: z.number().int().nonnegative(),
   low_count: z.number().int().nonnegative(),
+  warnings: z.array(ScanWarningSchema),
+  llm_input_tokens: z.number().int().nonnegative(),
+  llm_output_tokens: z.number().int().nonnegative(),
+  llm_request_count: z.number().int().nonnegative(),
+  sast_finding_count: z.number().int().nonnegative(),
+  confirmed_reachable_count: z.number().int().nonnegative(),
   created_at: IsoDateTimeSchema,
 });
 export type ScanRunOut = z.infer<typeof ScanRunOutSchema>;
@@ -348,6 +367,11 @@ export const ScanFindingOutSchema = z.object({
   aliases: z.array(z.string()),
   actively_exploited: z.boolean(),
   eol_date: IsoDateTimeSchema.nullable(),
+  confirmed_reachable: z.boolean(),
+  reachable_via_sast_fingerprint: z.string().nullable(),
+  reachable_reasoning: z.string().nullable(),
+  reachable_assessed_at: IsoDateTimeSchema.nullable(),
+  reachable_model: z.string().nullable(),
   created_at: IsoDateTimeSchema,
 });
 export type ScanFindingOut = z.infer<typeof ScanFindingOutSchema>;
@@ -360,7 +384,69 @@ export const FindingsQuerySchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// SAST findings (M4)
+// ---------------------------------------------------------------------------
+
+export const SastTriageStatusSchema = z.enum([
+  "pending",
+  "confirmed",
+  "false_positive",
+  "suppressed",
+  "error",
+]);
+export type SastTriageStatus = z.infer<typeof SastTriageStatusSchema>;
+
+export const SastSeveritySchema = z.enum(["critical", "high", "medium", "low", "info"]);
+export type SastSeverity = z.infer<typeof SastSeveritySchema>;
+
+export const SastFindingOutSchema = z.object({
+  id: UuidSchema,
+  scan_run_id: UuidSchema,
+  scope_id: UuidSchema,
+  fingerprint: z.string(),
+  rule_id: z.string(),
+  rule_name: z.string().nullable(),
+  rule_message: z.string().nullable(),
+  cwe_ids: z.array(z.string()),
+  severity: SastSeveritySchema,
+  file_path: z.string(),
+  start_line: z.number().int(),
+  end_line: z.number().int().nullable(),
+  snippet: z.string().nullable(),
+  triage_status: SastTriageStatusSchema,
+  triage_confidence: z.number().nullable(),
+  triage_reasoning: z.string().nullable(),
+  triage_model: z.string().nullable(),
+  triage_input_tokens: z.number().int().nullable(),
+  triage_output_tokens: z.number().int().nullable(),
+  suppressed_at: IsoDateTimeSchema.nullable(),
+  suppressed_by_user_id: UuidSchema.nullable(),
+  suppressed_reason: z.string().nullable(),
+  created_at: IsoDateTimeSchema,
+});
+export type SastFindingOut = z.infer<typeof SastFindingOutSchema>;
+
+export const SastFindingListSchema = z.array(SastFindingOutSchema);
+
+export const SastTriageBodySchema = z.object({
+  status: z.enum(["confirmed", "false_positive", "suppressed"]),
+  reason: z.string().optional(),
+});
+export type SastTriageBody = z.infer<typeof SastTriageBodySchema>;
+
+export const SastFindingsQuerySchema = z.object({
+  severity: SastSeveritySchema.optional(),
+  triage_status: SastTriageStatusSchema.optional(),
+  file_path: z.string().optional(),
+});
+
+// ---------------------------------------------------------------------------
 // Common params
 // ---------------------------------------------------------------------------
 
 export const IdParamsSchema = z.object({ id: UuidSchema });
+
+export const SastFindingParamsSchema = z.object({
+  id: UuidSchema,
+  fid: UuidSchema,
+});

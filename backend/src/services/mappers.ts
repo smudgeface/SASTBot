@@ -2,6 +2,7 @@ import type {
   AppSettings,
   Credential,
   Repo,
+  SastFinding,
   SbomComponent,
   ScanFinding,
   ScanRun,
@@ -15,10 +16,14 @@ import type {
   CredentialReferences,
   FindingType,
   RepoOut,
+  SastFindingOut,
+  SastSeverity,
+  SastTriageStatus,
   SbomComponentOut,
   ScanFindingOut,
   ScanRunOut,
   ScanScopeOut,
+  ScanWarning,
   Severity,
   UserOut,
 } from "../schemas.js";
@@ -152,6 +157,9 @@ export function appSettingsToOut(s: AppSettings): AppSettingsOut {
     llm_api_format: s.llmApiFormat,
     llm_model: s.llmModel,
     llm_credential_id: s.llmCredentialId,
+    llm_assistance_enabled: s.llmAssistanceEnabled,
+    llm_triage_token_budget: s.llmTriageTokenBudget,
+    reachability_cvss_threshold: s.reachabilityCvssThreshold,
     updated_at: s.updatedAt.toISOString(),
   };
 }
@@ -190,6 +198,12 @@ export function scanRunToOut(
     high_count: s.highCount,
     medium_count: s.mediumCount,
     low_count: s.lowCount,
+    warnings: Array.isArray(s.warnings) ? (s.warnings as ScanWarning[]) : [],
+    llm_input_tokens: s.llmInputTokens,
+    llm_output_tokens: s.llmOutputTokens,
+    llm_request_count: s.llmRequestCount,
+    sast_finding_count: s.sastFindingCount,
+    confirmed_reachable_count: s.confirmedReachableCount,
     created_at: s.createdAt.toISOString(),
   };
 }
@@ -245,6 +259,67 @@ export function scanFindingToOut(
     aliases: f.aliases,
     actively_exploited: f.activelyExploited,
     eol_date: f.eolDate ? f.eolDate.toISOString() : null,
+    confirmed_reachable: f.confirmedReachable,
+    reachable_via_sast_fingerprint: f.reachableViaSastFingerprint,
+    reachable_reasoning: f.reachableReasoning,
+    reachable_assessed_at: f.reachableAssessedAt ? f.reachableAssessedAt.toISOString() : null,
+    reachable_model: f.reachableModel,
+    created_at: f.createdAt.toISOString(),
+  };
+}
+
+const ALLOWED_SAST_SEVERITY: ReadonlyArray<SastSeverity> = [
+  "critical",
+  "high",
+  "medium",
+  "low",
+  "info",
+];
+
+function toSastSeverity(value: string): SastSeverity {
+  return (ALLOWED_SAST_SEVERITY as ReadonlyArray<string>).includes(value)
+    ? (value as SastSeverity)
+    : "info";
+}
+
+const ALLOWED_TRIAGE_STATUS: ReadonlyArray<SastTriageStatus> = [
+  "pending",
+  "confirmed",
+  "false_positive",
+  "suppressed",
+  "error",
+];
+
+function toTriageStatus(value: string): SastTriageStatus {
+  return (ALLOWED_TRIAGE_STATUS as ReadonlyArray<string>).includes(value)
+    ? (value as SastTriageStatus)
+    : "pending";
+}
+
+export function sastFindingToOut(f: SastFinding): SastFindingOut {
+  return {
+    id: f.id,
+    scan_run_id: f.scanRunId,
+    scope_id: f.scopeId,
+    fingerprint: f.fingerprint,
+    rule_id: f.ruleId,
+    rule_name: f.ruleName,
+    rule_message: f.ruleMessage,
+    cwe_ids: f.cweIds,
+    severity: toSastSeverity(f.severity),
+    file_path: f.filePath,
+    start_line: f.startLine,
+    end_line: f.endLine,
+    snippet: f.snippet,
+    triage_status: toTriageStatus(f.triageStatus),
+    triage_confidence: f.triageConfidence,
+    triage_reasoning: f.triageReasoning,
+    triage_model: f.triageModel,
+    triage_input_tokens: f.triageInputTokens,
+    triage_output_tokens: f.triageOutputTokens,
+    suppressed_at: f.suppressedAt ? f.suppressedAt.toISOString() : null,
+    suppressed_by_user_id: f.suppressedByUserId,
+    suppressed_reason: f.suppressedReason,
     created_at: f.createdAt.toISOString(),
   };
 }
