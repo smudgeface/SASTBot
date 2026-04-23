@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   AlertTriangle,
+  ArrowLeft,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -358,7 +359,7 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
         <ToggleGroup
           items={[{
             key: "include_resolved",
-            label: "Include resolved",
+            label: "include resolved",
             active: !!filters.include_resolved,
             onToggle: () => setFilters((f) => ({ ...f, page: 1, include_resolved: !f.include_resolved })),
           }]}
@@ -382,23 +383,25 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
         <p className="text-sm text-muted-foreground py-6 text-center">No SAST issues match the current filters.</p>
       ) : (
         <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-6" />
-                <TableHead>Severity</TableHead>
-                <TableHead>Rule</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Last seen</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.items.map((issue) => (
-                <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} />
-              ))}
-            </TableBody>
-          </Table>
+          <Card>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-6" />
+                  <TableHead>Severity</TableHead>
+                  <TableHead>Rule</TableHead>
+                  <TableHead>Location</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Last seen</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.items.map((issue) => (
+                  <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} />
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
           <Pager
             page={filters.page ?? 1}
             pageSize={filters.page_size ?? 50}
@@ -563,7 +566,7 @@ function ScaIssuesTab({ scopeId }: { scopeId: string }) {
     setFilters((f) => ({ ...f, page: 1, [key]: next.size > 0 ? [...next] : undefined }));
   }
 
-  const TYPE_LABELS: Record<string, string> = { cve: "CVE", eol: "EOL", deprecated: "Deprecated" };
+  const TYPE_LABELS: Record<string, string> = { cve: "cve", eol: "eol", deprecated: "deprecated" };
 
   const hasScaFilter = !!(
     filters.severities?.length || filters.finding_types?.length ||
@@ -589,16 +592,16 @@ function ScaIssuesTab({ scopeId }: { scopeId: string }) {
         <Pipe />
         <ToggleGroup
           items={[
-            { key: "reachable", label: "Reachable", active: !!filters.reachable, onToggle: () => setFilters((f) => ({ ...f, page: 1, reachable: !f.reachable })) },
-            { key: "has_fix",   label: "Has fix",   active: !!filters.has_fix,   onToggle: () => setFilters((f) => ({ ...f, page: 1, has_fix: !f.has_fix })) },
-            { key: "hide_dev",  label: "Hide dev",  active: !!filters.hide_dev,  onToggle: () => setFilters((f) => ({ ...f, page: 1, hide_dev: !f.hide_dev })) },
+            { key: "reachable", label: "reachable", active: !!filters.reachable, onToggle: () => setFilters((f) => ({ ...f, page: 1, reachable: !f.reachable })) },
+            { key: "has_fix",   label: "has fix",   active: !!filters.has_fix,   onToggle: () => setFilters((f) => ({ ...f, page: 1, has_fix: !f.has_fix })) },
+            { key: "hide_dev",  label: "hide dev",  active: !!filters.hide_dev,  onToggle: () => setFilters((f) => ({ ...f, page: 1, hide_dev: !f.hide_dev })) },
           ]}
         />
         <Pipe />
         <ToggleGroup
           items={[{
             key: "include_resolved",
-            label: "Include resolved",
+            label: "include resolved",
             active: !!filters.include_resolved,
             onToggle: () => setFilters((f) => ({ ...f, page: 1, include_resolved: !f.include_resolved })),
           }]}
@@ -622,23 +625,25 @@ function ScaIssuesTab({ scopeId }: { scopeId: string }) {
         <p className="text-sm text-muted-foreground py-6 text-center">No SCA issues match the current filters.</p>
       ) : (
         <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-6" />
-                <TableHead>Severity</TableHead>
-                <TableHead>Package</TableHead>
-                <TableHead>Summary</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Last seen</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.items.map((issue) => (
-                <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} />
-              ))}
-            </TableBody>
-          </Table>
+          <Card>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-6" />
+                  <TableHead>Severity</TableHead>
+                  <TableHead>Package</TableHead>
+                  <TableHead>Summary</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Last seen</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.items.map((issue) => (
+                  <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} />
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
           <Pager
             page={filters.page ?? 1}
             pageSize={filters.page_size ?? 50}
@@ -680,32 +685,34 @@ function ComponentsTab({ scopeId }: { scopeId: string }) {
         <p className="text-sm text-muted-foreground py-6 text-center">No components in the most recent scan.</p>
       ) : (
         <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Package</TableHead>
-                <TableHead>Version</TableHead>
-                <TableHead>Ecosystem</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Scope</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.items.map((c) => (
-                <TableRow key={c.id}>
-                  <TableCell className="font-mono text-sm">{c.name}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{c.version ?? "—"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{c.ecosystem ?? "—"}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{c.component_type}</TableCell>
-                  <TableCell className="text-xs">
-                    {c.scope === "optional" ? (
-                      <Badge variant="outline" className="text-[9px] text-slate-500">DEV</Badge>
-                    ) : c.scope ?? "—"}
-                  </TableCell>
+          <Card>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Package</TableHead>
+                  <TableHead>Version</TableHead>
+                  <TableHead>Ecosystem</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Scope</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {data.items.map((c) => (
+                  <TableRow key={c.id}>
+                    <TableCell className="font-mono text-sm">{c.name}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{c.version ?? "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{c.ecosystem ?? "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{c.component_type}</TableCell>
+                    <TableCell className="text-xs">
+                      {c.scope === "optional" ? (
+                        <Badge variant="outline" className="text-[9px] text-slate-500">DEV</Badge>
+                      ) : c.scope ?? "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
           <Pager page={page} pageSize={50} total={data.total} onPage={setPage} />
         </>
       )}
@@ -796,7 +803,10 @@ export default function ScopeDetailPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
-        <div>
+        <div className="space-y-1">
+          <Link to="/scopes" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="h-3.5 w-3.5" /> All scopes
+          </Link>
           <h1 className="text-xl font-semibold tracking-tight">
             {scope.repo_name}
             {scope.path !== "/" && (
@@ -900,13 +910,13 @@ export default function ScopeDetailPage() {
           <TabsTrigger value="components">Components</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="sca" className="mt-4">
+        <TabsContent value="sca" className="mt-4 min-h-80">
           {id && <ScaIssuesTab scopeId={id} />}
         </TabsContent>
-        <TabsContent value="sast" className="mt-4">
+        <TabsContent value="sast" className="mt-4 min-h-80">
           {id && <SastIssuesTab scopeId={id} />}
         </TabsContent>
-        <TabsContent value="components" className="mt-4">
+        <TabsContent value="components" className="mt-4 min-h-80">
           {id && <ComponentsTab scopeId={id} />}
         </TabsContent>
       </Tabs>
