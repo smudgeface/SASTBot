@@ -277,9 +277,12 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         where: { id: req.params.fid },
         data: {
           triageStatus: status,
-          suppressedReason: reason ?? null,
+          suppressedReason: status === "pending" ? null : (reason ?? null),
           suppressedAt: status === "suppressed" ? new Date() : null,
           suppressedByUserId: status === "suppressed" ? (req.user?.id ?? null) : null,
+          // Clear LLM triage fields when manually resetting to pending
+          triageConfidence: status === "pending" ? null : undefined,
+          triageReasoning: status === "pending" ? null : undefined,
         },
       });
 

@@ -10,6 +10,7 @@ import {
   Package,
   ShieldAlert,
   ScanSearch,
+  Zap,
 } from "lucide-react";
 
 import {
@@ -37,6 +38,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { severityChipClass, formatDate } from "@/lib/format";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 // ---------------------------------------------------------------------------
 // Vulnerability link helpers
@@ -147,11 +149,19 @@ function FindingTypeBadge({ finding }: { finding: ScanFinding }) {
   return <SeverityBadge severity={finding.severity} />;
 }
 
-function ReachableBadge() {
+function ReachableIcon({ reasoning }: { reasoning?: string | null }) {
   return (
-    <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold bg-yellow-100 text-yellow-700 border-yellow-200 dark:bg-yellow-950 dark:text-yellow-300 dark:border-yellow-900">
-      ⚡ REACHABLE
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">
+          <Zap className="h-3.5 w-3.5 text-blue-500 shrink-0" aria-label="Reachable" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p className="font-medium">Confirmed Reachable</p>
+        {reasoning ? <p className="mt-0.5 text-muted-foreground max-w-xs">{reasoning}</p> : null}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -173,8 +183,10 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
           )}
         </TableCell>
         <TableCell>
-          <div className="flex flex-wrap gap-1">
-            {finding.confirmed_reachable ? <ReachableBadge /> : null}
+          <div className="flex items-center gap-1.5">
+            {finding.confirmed_reachable ? (
+              <ReachableIcon reasoning={finding.reachable_reasoning} />
+            ) : null}
             <FindingTypeBadge finding={finding} />
           </div>
         </TableCell>
@@ -194,9 +206,6 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
               {finding.finding_type === "eol" ? "End of Life" : "Deprecated"}
             </span>
           )}
-        </TableCell>
-        <TableCell className="text-muted-foreground text-sm">
-          {isCve && finding.cvss_score != null ? finding.cvss_score.toFixed(1) : "—"}
         </TableCell>
         <TableCell className="text-sm text-muted-foreground max-w-sm truncate">
           {finding.summary ?? "—"}
@@ -308,7 +317,25 @@ function SastSeverityBadge({ severity }: { severity: string }) {
 // SAST tab
 // ---------------------------------------------------------------------------
 
-function SastTab({ scanId, isAdmin }: { scanId: string; isAdmin: boolean }) {
+// Derive a short, human-readable summary from a SAST finding.
+// Prefers rule_message; falls back to the last segment of rule_id.
+function sastSummary(f: SastFinding): string {
+  if (f.rule_message) return f.rule_message;
+  const parts = f.rule_id.split(".");
+  return parts[parts.length - 1].replace(/-/g, " ");
+}
+
+function SastTab({
+  scanId,
+  isAdmin,
+  hideDismissed,
+  setHideDismissed,
+}: {
+  scanId: string;
+  isAdmin: boolean;
+  hideDismissed: boolean;
+  setHideDismissed: (v: boolean) => void;
+}) {
   const findings = useSastFindings(scanId);
   const triage = useTriageSastFinding(scanId);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -320,7 +347,14 @@ function SastTab({ scanId, isAdmin }: { scanId: string; isAdmin: boolean }) {
       </Card>
     );
   }
-  if (!findings.data || findings.data.length === 0) {
+
+  const allSast = findings.data ?? [];
+  const visible = hideDismissed
+    ? allSast.filter((f) => f.triage_status !== "false_positive" && f.triage_status !== "suppressed")
+    : allSast;
+  const hasDismissed = allSast.some((f) => f.triage_status === "false_positive" || f.triage_status === "suppressed");
+
+  if (allSast.length === 0) {
     return (
       <Card>
         <CardContent className="p-6 flex items-center gap-3 text-sm text-muted-foreground">
@@ -332,126 +366,165 @@ function SastTab({ scanId, isAdmin }: { scanId: string; isAdmin: boolean }) {
   }
 
   return (
-    <Card>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-4" />
-            <TableHead className="w-24">Severity</TableHead>
-            <TableHead>Rule</TableHead>
-            <TableHead>File : Line</TableHead>
-            <TableHead className="w-32">Status</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {findings.data.map((f: SastFinding) => {
-            const isExpanded = expanded === f.id;
-            return (
-              <>
-                <TableRow
-                  key={f.id}
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => setExpanded(isExpanded ? null : f.id)}
-                >
-                  <TableCell className="w-4">
+    <div className="space-y-3">
+      {hasDismissed ? (
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={hideDismissed}
+              onChange={(e) => setHideDismissed(e.target.checked)}
+              className="rounded"
+            />
+            Hide false positives &amp; suppressed
+          </label>
+        </div>
+      ) : null}
+      <Card>
+        {visible.length === 0 ? (
+          <CardContent className="p-6 text-sm text-muted-foreground">
+            All findings are dismissed. Uncheck the filter to see them.
+          </CardContent>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-4" />
+                <TableHead className="w-24">Severity</TableHead>
+                <TableHead>Summary</TableHead>
+                <TableHead className="w-40">File : Line</TableHead>
+                <TableHead className="w-32">Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visible.map((f: SastFinding) => {
+                const isExpanded = expanded === f.id;
+                const isDismissed = f.triage_status === "false_positive" || f.triage_status === "suppressed";
+                return (
+                  <>
+                    <TableRow
+                      key={f.id}
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => setExpanded(isExpanded ? null : f.id)}
+                    >
+                      <TableCell className="w-4">
+                        {isExpanded ? (
+                          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <SastSeverityBadge severity={f.severity} />
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground max-w-sm truncate">
+                        {sastSummary(f)}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {f.file_path}:{f.start_line}
+                      </TableCell>
+                      <TableCell>
+                        <TriageBadge status={f.triage_status} />
+                      </TableCell>
+                    </TableRow>
                     {isExpanded ? (
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <SastSeverityBadge severity={f.severity} />
-                  </TableCell>
-                  <TableCell className="text-sm font-medium">
-                    {f.rule_name ?? f.rule_id}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
-                    {f.file_path}:{f.start_line}
-                  </TableCell>
-                  <TableCell>
-                    <TriageBadge status={f.triage_status} />
-                  </TableCell>
-                </TableRow>
-                {isExpanded ? (
-                  <TableRow key={`${f.id}-detail`}>
-                    <TableCell colSpan={5} className="bg-muted/30 py-3 px-6">
-                      <div className="space-y-3 text-sm">
-                        {f.snippet ? (
-                          <pre className="rounded bg-background border p-3 text-xs overflow-x-auto font-mono whitespace-pre-wrap">
-                            {f.snippet}
-                          </pre>
-                        ) : null}
-                        {f.rule_message ? (
-                          <p className="text-muted-foreground">{f.rule_message}</p>
-                        ) : null}
-                        {f.triage_reasoning ? (
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase text-muted-foreground">LLM reasoning</p>
-                            <p className="text-xs">{f.triage_reasoning}</p>
-                          </div>
-                        ) : null}
-                        {f.cwe_ids.length > 0 ? (
-                          <div className="flex gap-1">
-                            {f.cwe_ids.map((cwe) => (
-                              <Badge key={cwe} variant="outline" className="font-mono text-xs">
-                                {cwe}
-                              </Badge>
-                            ))}
-                          </div>
-                        ) : null}
-                        {isAdmin && f.triage_status !== "suppressed" && f.triage_status !== "false_positive" ? (
-                          <div className="flex gap-2 pt-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-xs h-7"
-                              disabled={triage.isPending}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                triage.mutate({ findingId: f.id, status: "false_positive" });
-                              }}
-                            >
-                              Mark False Positive
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-xs h-7"
-                              disabled={triage.isPending}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                triage.mutate({ findingId: f.id, status: "suppressed" });
-                              }}
-                            >
-                              Suppress
-                            </Button>
-                            {f.triage_status !== "confirmed" ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="text-xs h-7 text-red-600"
-                                disabled={triage.isPending}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  triage.mutate({ findingId: f.id, status: "confirmed" });
-                                }}
-                              >
-                                Confirm
-                              </Button>
+                      <TableRow key={`${f.id}-detail`}>
+                        <TableCell colSpan={5} className="bg-muted/30 py-3 px-6">
+                          <div className="space-y-3 text-sm">
+                            {f.snippet ? (
+                              <pre className="rounded bg-background border p-3 text-xs overflow-x-auto font-mono whitespace-pre-wrap">
+                                {f.snippet}
+                              </pre>
+                            ) : null}
+                            {f.rule_message ? (
+                              <p className="text-muted-foreground">{f.rule_message}</p>
+                            ) : null}
+                            {f.triage_reasoning ? (
+                              <div className="space-y-1">
+                                <p className="text-xs font-medium uppercase text-muted-foreground">LLM reasoning</p>
+                                <p className="text-xs">{f.triage_reasoning}</p>
+                              </div>
+                            ) : null}
+                            {f.cwe_ids.length > 0 ? (
+                              <div className="flex gap-1">
+                                {f.cwe_ids.map((cwe) => (
+                                  <Badge key={cwe} variant="outline" className="font-mono text-xs">
+                                    {cwe}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : null}
+                            {isAdmin ? (
+                              <div className="flex flex-wrap gap-2 pt-1">
+                                {!isDismissed ? (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="text-xs h-7"
+                                      disabled={triage.isPending}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        triage.mutate({ findingId: f.id, status: "false_positive" });
+                                      }}
+                                    >
+                                      Mark False Positive
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="text-xs h-7"
+                                      disabled={triage.isPending}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        triage.mutate({ findingId: f.id, status: "suppressed" });
+                                      }}
+                                    >
+                                      Suppress
+                                    </Button>
+                                    {f.triage_status !== "confirmed" ? (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="text-xs h-7 text-red-600"
+                                        disabled={triage.isPending}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          triage.mutate({ findingId: f.id, status: "confirmed" });
+                                        }}
+                                      >
+                                        Confirm
+                                      </Button>
+                                    ) : null}
+                                  </>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-xs h-7"
+                                    disabled={triage.isPending}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      triage.mutate({ findingId: f.id, status: "pending" });
+                                    }}
+                                  >
+                                    Reset to Pending
+                                  </Button>
+                                )}
+                              </div>
                             ) : null}
                           </div>
-                        ) : null}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ) : null}
-              </>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </Card>
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+    </div>
   );
 }
 
@@ -619,8 +692,17 @@ export default function ScanDetailPage() {
   const currentUser = useAuthStore((s) => s.user);
   const isAdmin = currentUser?.role === "admin";
 
+  // Filter state
+  const [hideNonReachable, setHideNonReachable] = useState(false);
+  const [hideDismissedSast, setHideDismissedSast] = useState(false);
+
   const repoName = repos.data?.find((r) => r.id === scan.data?.repo_id)?.name;
-  const sorted = sortFindings(findings.data ?? []);
+  const allFindings = findings.data ?? [];
+  const sorted = sortFindings(
+    hideNonReachable
+      ? allFindings.filter((f) => f.confirmed_reachable || f.finding_type !== "cve")
+      : allFindings,
+  );
 
   if (scan.isLoading) {
     return (
@@ -638,6 +720,7 @@ export default function ScanDetailPage() {
   const isTerminal = s.status === "success" || s.status === "failed";
 
   return (
+    <TooltipProvider>
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between">
@@ -760,10 +843,10 @@ export default function ScanDetailPage() {
           <TabsList>
             <TabsTrigger value="findings" className="gap-1.5">
               <ShieldAlert className="h-3.5 w-3.5" />
-              Findings
-              {sorted.length > 0 ? (
+              SCA Findings
+              {allFindings.length > 0 ? (
                 <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono">
-                  {sorted.length}
+                  {allFindings.length}
                 </span>
               ) : null}
             </TabsTrigger>
@@ -778,7 +861,7 @@ export default function ScanDetailPage() {
             </TabsTrigger>
             <TabsTrigger value="sast" className="gap-1.5">
               <ScanSearch className="h-3.5 w-3.5" />
-              SAST
+              SAST Findings
               {s.sast_finding_count > 0 ? (
                 <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono">
                   {s.sast_finding_count}
@@ -788,6 +871,21 @@ export default function ScanDetailPage() {
           </TabsList>
 
           <TabsContent value="findings" className="mt-4">
+            {/* Filter bar */}
+            {allFindings.some((f) => f.reachable_assessed_at !== null) ? (
+              <div className="mb-3 flex items-center gap-2">
+                <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={hideNonReachable}
+                    onChange={(e) => setHideNonReachable(e.target.checked)}
+                    className="rounded"
+                  />
+                  <Zap className="h-3 w-3 text-blue-500" />
+                  Show only reachable
+                </label>
+              </div>
+            ) : null}
             {findings.isLoading ? (
               <Card>
                 <CardContent className="p-6 text-sm text-muted-foreground">
@@ -798,7 +896,7 @@ export default function ScanDetailPage() {
               <Card>
                 <CardContent className="p-6 flex items-center gap-3 text-sm text-muted-foreground">
                   <Package className="h-4 w-4 shrink-0" />
-                  No vulnerabilities found in this scan.
+                  {hideNonReachable ? "No reachable vulnerabilities in this scan." : "No vulnerabilities found in this scan."}
                 </CardContent>
               </Card>
             ) : (
@@ -807,10 +905,9 @@ export default function ScanDetailPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-4" />
-                      <TableHead className="w-28">Severity</TableHead>
+                      <TableHead className="w-32">Severity</TableHead>
                       <TableHead>Package</TableHead>
                       <TableHead>CVE / ID</TableHead>
-                      <TableHead className="w-16">CVSS</TableHead>
                       <TableHead>Summary</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -833,7 +930,12 @@ export default function ScanDetailPage() {
           </TabsContent>
 
           <TabsContent value="sast" className="mt-4">
-            <SastTab scanId={id!} isAdmin={isAdmin} />
+            <SastTab
+              scanId={id!}
+              isAdmin={isAdmin}
+              hideDismissed={hideDismissedSast}
+              setHideDismissed={setHideDismissedSast}
+            />
           </TabsContent>
         </Tabs>
       ) : null}
@@ -853,6 +955,7 @@ export default function ScanDetailPage() {
         </Card>
       ) : null}
     </div>
+    </TooltipProvider>
   );
 }
 
