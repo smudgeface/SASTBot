@@ -4,6 +4,7 @@ import {
   FileSearch,
   Home,
   KeyRound,
+  Layers,
   LogOut,
   Moon,
   Settings,
@@ -25,8 +26,9 @@ interface NavItem {
 }
 
 const MAIN_NAV: NavItem[] = [
+  { to: "/scopes", label: "Scopes", icon: Layers },
   { to: "/dashboard", label: "Dashboard", icon: Home },
-  { to: "/scans", label: "Scan Results", icon: FileSearch },
+  { to: "/scans", label: "Scans (audit)", icon: FileSearch },
 ];
 
 const ADMIN_NAV: NavItem[] = [

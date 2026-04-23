@@ -343,12 +343,16 @@ export interface paths {
                             kind: "https_token";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "https_basic";
                             name: string;
                             username: string;
                             password: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "ssh_key";
@@ -356,16 +360,22 @@ export interface paths {
                             private_key: string;
                             passphrase?: string | null;
                             known_hosts?: string | null;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "jira_token";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "llm_api_key";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         }) | null;
                     };
                 };
@@ -552,12 +562,16 @@ export interface paths {
                             kind: "https_token";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "https_basic";
                             name: string;
                             username: string;
                             password: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "ssh_key";
@@ -565,16 +579,22 @@ export interface paths {
                             private_key: string;
                             passphrase?: string | null;
                             known_hosts?: string | null;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "jira_token";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "llm_api_key";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         }) | null;
                     };
                 };
@@ -809,6 +829,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/repos/{id}/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List active scan scopes for a repo */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            repo_id: string;
+                            path: string;
+                            display_name: string | null;
+                            is_active: boolean;
+                            created_at: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/repos/{id}/scan": {
         parameters: {
             query?: never;
@@ -819,8 +919,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Trigger a scan for this repo
-         * @description Creates a scan_runs row in `pending` and enqueues a BullMQ job. M1/M2 handler is a 2-second stub; M3 fills in the real SCA work.
+         * Trigger a scan for all active scopes of this repo
+         * @description Creates one scan_runs row per active ScanScope and enqueues a BullMQ job for each.
          */
         post: {
             parameters: {
@@ -846,6 +946,9 @@ export interface paths {
                             org_id: string | null;
                             /** Format: uuid */
                             repo_id: string;
+                            /** Format: uuid */
+                            scope_id: string;
+                            scope_path: string;
                             /** @enum {string} */
                             status: "pending" | "running" | "success" | "failed";
                             /** @enum {string} */
@@ -855,8 +958,25 @@ export interface paths {
                             started_at: string | null;
                             finished_at: string | null;
                             error: string | null;
+                            component_count: number;
+                            critical_count: number;
+                            high_count: number;
+                            medium_count: number;
+                            low_count: number;
+                            warnings: {
+                                code: string;
+                                message: string;
+                                context?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                            llm_input_tokens: number;
+                            llm_output_tokens: number;
+                            llm_request_count: number;
+                            sast_finding_count: number;
+                            confirmed_reachable_count: number;
                             created_at: string;
-                        };
+                        }[];
                     };
                 };
                 /** @description Default Response */
@@ -929,6 +1049,7 @@ export interface paths {
                             /** Format: uuid */
                             org_id: string | null;
                             jira_base_url: string | null;
+                            jira_email: string | null;
                             /** Format: uuid */
                             jira_credential_id: string | null;
                             llm_base_url: string | null;
@@ -936,6 +1057,9 @@ export interface paths {
                             llm_model: string | null;
                             /** Format: uuid */
                             llm_credential_id: string | null;
+                            llm_assistance_enabled: boolean;
+                            llm_triage_token_budget: number;
+                            reachability_cvss_threshold: number;
                             updated_at: string;
                         };
                     };
@@ -976,6 +1100,8 @@ export interface paths {
                 content: {
                     "application/json": {
                         jira_base_url?: string | null;
+                        /** Format: email */
+                        jira_email?: string | null;
                         /** Format: uuid */
                         jira_credential_id?: string | null;
                         jira_credential?: ({
@@ -983,12 +1109,16 @@ export interface paths {
                             kind: "https_token";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "https_basic";
                             name: string;
                             username: string;
                             password: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "ssh_key";
@@ -996,16 +1126,22 @@ export interface paths {
                             private_key: string;
                             passphrase?: string | null;
                             known_hosts?: string | null;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "jira_token";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "llm_api_key";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         }) | null;
                         llm_base_url?: string | null;
                         llm_api_format?: string | null;
@@ -1017,12 +1153,16 @@ export interface paths {
                             kind: "https_token";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "https_basic";
                             name: string;
                             username: string;
                             password: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "ssh_key";
@@ -1030,17 +1170,26 @@ export interface paths {
                             private_key: string;
                             passphrase?: string | null;
                             known_hosts?: string | null;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "jira_token";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         } | {
                             /** @enum {string} */
                             kind: "llm_api_key";
                             name: string;
                             value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         }) | null;
+                        llm_assistance_enabled?: boolean;
+                        llm_triage_token_budget?: number;
+                        reachability_cvss_threshold?: number;
                     };
                 };
             };
@@ -1057,6 +1206,7 @@ export interface paths {
                             /** Format: uuid */
                             org_id: string | null;
                             jira_base_url: string | null;
+                            jira_email: string | null;
                             /** Format: uuid */
                             jira_credential_id: string | null;
                             llm_base_url: string | null;
@@ -1064,6 +1214,9 @@ export interface paths {
                             llm_model: string | null;
                             /** Format: uuid */
                             llm_credential_id: string | null;
+                            llm_assistance_enabled: boolean;
+                            llm_triage_token_budget: number;
+                            reachability_cvss_threshold: number;
                             updated_at: string;
                         };
                     };
@@ -1093,6 +1246,71 @@ export interface paths {
             };
         };
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings/llm/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check LLM connection with current settings */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            success: boolean;
+                            latency_ms: number;
+                            model: string;
+                            input_tokens: number;
+                            output_tokens: number;
+                            error?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -1142,6 +1360,7 @@ export interface paths {
                                 llm_settings: boolean;
                             };
                             reference_count: number;
+                            expires_at: string | null;
                             created_at: string;
                         }[];
                     };
@@ -1189,12 +1408,16 @@ export interface paths {
                         kind: "https_token";
                         name: string;
                         value: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     } | {
                         /** @enum {string} */
                         kind: "https_basic";
                         name: string;
                         username: string;
                         password: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     } | {
                         /** @enum {string} */
                         kind: "ssh_key";
@@ -1202,16 +1425,22 @@ export interface paths {
                         private_key: string;
                         passphrase?: string | null;
                         known_hosts?: string | null;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     } | {
                         /** @enum {string} */
                         kind: "jira_token";
                         name: string;
                         value: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     } | {
                         /** @enum {string} */
                         kind: "llm_api_key";
                         name: string;
                         value: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     };
                 };
             };
@@ -1242,6 +1471,7 @@ export interface paths {
                                 llm_settings: boolean;
                             };
                             reference_count: number;
+                            expires_at: string | null;
                             created_at: string;
                         };
                     };
@@ -1380,6 +1610,8 @@ export interface paths {
                 content: {
                     "application/json": {
                         name: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     };
                 };
             };
@@ -1410,6 +1642,7 @@ export interface paths {
                                 llm_settings: boolean;
                             };
                             reference_count: number;
+                            expires_at: string | null;
                             created_at: string;
                         };
                     };
@@ -1479,25 +1712,35 @@ export interface paths {
                         /** @enum {string} */
                         kind: "https_token";
                         value: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     } | {
                         /** @enum {string} */
                         kind: "https_basic";
                         username: string;
                         password: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     } | {
                         /** @enum {string} */
                         kind: "ssh_key";
                         private_key: string;
                         passphrase?: string | null;
                         known_hosts?: string | null;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     } | {
                         /** @enum {string} */
                         kind: "jira_token";
                         value: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     } | {
                         /** @enum {string} */
                         kind: "llm_api_key";
                         value: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     };
                 };
             };
@@ -1528,6 +1771,7 @@ export interface paths {
                                 llm_settings: boolean;
                             };
                             reference_count: number;
+                            expires_at: string | null;
                             created_at: string;
                         };
                     };
@@ -1614,6 +1858,9 @@ export interface paths {
                             org_id: string | null;
                             /** Format: uuid */
                             repo_id: string;
+                            /** Format: uuid */
+                            scope_id: string;
+                            scope_path: string;
                             /** @enum {string} */
                             status: "pending" | "running" | "success" | "failed";
                             /** @enum {string} */
@@ -1623,6 +1870,23 @@ export interface paths {
                             started_at: string | null;
                             finished_at: string | null;
                             error: string | null;
+                            component_count: number;
+                            critical_count: number;
+                            high_count: number;
+                            medium_count: number;
+                            low_count: number;
+                            warnings: {
+                                code: string;
+                                message: string;
+                                context?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                            llm_input_tokens: number;
+                            llm_output_tokens: number;
+                            llm_request_count: number;
+                            sast_finding_count: number;
+                            confirmed_reachable_count: number;
                             created_at: string;
                         }[];
                     };
@@ -1655,7 +1919,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a scan run by id */
+        /** Get a scan run by id (includes SCA summary counters) */
         get: {
             parameters: {
                 query?: never;
@@ -1680,6 +1944,9 @@ export interface paths {
                             org_id: string | null;
                             /** Format: uuid */
                             repo_id: string;
+                            /** Format: uuid */
+                            scope_id: string;
+                            scope_path: string;
                             /** @enum {string} */
                             status: "pending" | "running" | "success" | "failed";
                             /** @enum {string} */
@@ -1689,6 +1956,23 @@ export interface paths {
                             started_at: string | null;
                             finished_at: string | null;
                             error: string | null;
+                            component_count: number;
+                            critical_count: number;
+                            high_count: number;
+                            medium_count: number;
+                            low_count: number;
+                            warnings: {
+                                code: string;
+                                message: string;
+                                context?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                            llm_input_tokens: number;
+                            llm_output_tokens: number;
+                            llm_request_count: number;
+                            sast_finding_count: number;
+                            confirmed_reachable_count: number;
                             created_at: string;
                         };
                     };
@@ -1718,6 +2002,1362 @@ export interface paths {
             };
         };
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scans/{id}/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List vulnerability findings for a scan run */
+        get: {
+            parameters: {
+                query?: {
+                    severity?: "critical" | "high" | "medium" | "low" | "unknown";
+                    package?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            scan_run_id: string;
+                            /** Format: uuid */
+                            component_id: string;
+                            /** Format: uuid */
+                            issue_id: string;
+                            component_name: string;
+                            component_version: string | null;
+                            component_scope: string | null;
+                            /** @enum {string} */
+                            finding_type: "cve" | "eol" | "deprecated";
+                            osv_id: string;
+                            cve_id: string | null;
+                            /** @enum {string} */
+                            severity: "critical" | "high" | "medium" | "low" | "unknown";
+                            cvss_score: number | null;
+                            cvss_vector: string | null;
+                            summary: string | null;
+                            aliases: string[];
+                            actively_exploited: boolean;
+                            eol_date: string | null;
+                            has_fix: boolean;
+                            created_at: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scans/{id}/sbom": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scans/{id}/components": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List SBOM components for a scan run */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            name: string;
+                            version: string | null;
+                            purl: string;
+                            ecosystem: string | null;
+                            licenses: string[];
+                            component_type: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scans/{id}/sast-findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List SAST findings for a scan run */
+        get: {
+            parameters: {
+                query?: {
+                    severity?: "critical" | "high" | "medium" | "low" | "info";
+                    file_path?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            scan_run_id: string;
+                            /** Format: uuid */
+                            scope_id: string;
+                            /** Format: uuid */
+                            issue_id: string;
+                            fingerprint: string;
+                            rule_id: string;
+                            rule_name: string | null;
+                            rule_message: string | null;
+                            cwe_ids: string[];
+                            /** @enum {string} */
+                            severity: "critical" | "high" | "medium" | "low" | "info";
+                            file_path: string;
+                            start_line: number;
+                            end_line: number | null;
+                            snippet: string | null;
+                            created_at: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scans/{id}/sast-findings/{fid}/triage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Update triage status for a SAST finding (admin-only) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    fid: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "confirmed" | "false_positive" | "suppressed" | "pending";
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            scan_run_id: string;
+                            /** Format: uuid */
+                            scope_id: string;
+                            /** Format: uuid */
+                            issue_id: string;
+                            fingerprint: string;
+                            rule_id: string;
+                            rule_name: string | null;
+                            rule_message: string | null;
+                            cwe_ids: string[];
+                            /** @enum {string} */
+                            severity: "critical" | "high" | "medium" | "low" | "info";
+                            file_path: string;
+                            start_line: number;
+                            end_line: number | null;
+                            snippet: string | null;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List scan scopes with issue summary counts */
+        get: {
+            parameters: {
+                query?: {
+                    repo_id?: string;
+                    include_inactive?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            /** Format: uuid */
+                            repo_id: string;
+                            repo_name: string;
+                            repo_branch: string;
+                            path: string;
+                            display_name: string | null;
+                            is_active: boolean;
+                            /** Format: uuid */
+                            last_scan_run_id: string | null;
+                            last_scan_completed_at: string | null;
+                            active_sast_issue_count: number;
+                            active_sca_issue_count: number;
+                            critical_count: number;
+                            high_count: number;
+                            pending_triage_count: number;
+                            created_at: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scopes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a scan scope by id with full counts */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            /** Format: uuid */
+                            repo_id: string;
+                            repo_name: string;
+                            repo_branch: string;
+                            path: string;
+                            display_name: string | null;
+                            is_active: boolean;
+                            /** Format: uuid */
+                            last_scan_run_id: string | null;
+                            last_scan_completed_at: string | null;
+                            active_sast_issue_count: number;
+                            active_sca_issue_count: number;
+                            critical_count: number;
+                            high_count: number;
+                            pending_triage_count: number;
+                            created_at: string;
+                            resolved_sast_count: number;
+                            resolved_sca_count: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scopes/{id}/sast-issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List SAST issues for a scope (paginated) */
+        get: {
+            parameters: {
+                query?: {
+                    page?: number;
+                    page_size?: number;
+                    severity?: "critical" | "high" | "medium" | "low" | "info";
+                    triage_status?: "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
+                    has_jira_ticket?: "yes" | "no";
+                    seen_since_last_scan?: "new" | "unchanged" | "resolved";
+                    include_resolved?: boolean;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                org_id: string | null;
+                                /** Format: uuid */
+                                scope_id: string;
+                                fingerprint: string;
+                                /** @enum {string} */
+                                triage_status: "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
+                                triage_confidence: number | null;
+                                triage_reasoning: string | null;
+                                triage_model: string | null;
+                                triage_input_tokens: number | null;
+                                triage_output_tokens: number | null;
+                                suppressed_at: string | null;
+                                /** Format: uuid */
+                                suppressed_by_user_id: string | null;
+                                suppressed_reason: string | null;
+                                notes: string | null;
+                                /** Format: uuid */
+                                jira_ticket_id: string | null;
+                                latest_rule_id: string;
+                                latest_rule_name: string | null;
+                                latest_rule_message: string | null;
+                                /** @enum {string} */
+                                latest_severity: "critical" | "high" | "medium" | "low" | "info";
+                                latest_cwe_ids: string[];
+                                latest_file_path: string;
+                                latest_start_line: number;
+                                latest_snippet: string | null;
+                                first_seen_at: string;
+                                last_seen_at: string;
+                                created_at: string;
+                                updated_at: string;
+                            }[];
+                            total: number;
+                            page: number;
+                            page_size: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scopes/{id}/sca-issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List SCA issues for a scope (paginated) */
+        get: {
+            parameters: {
+                query?: {
+                    page?: number;
+                    page_size?: number;
+                    severity?: "critical" | "high" | "medium" | "low" | "unknown";
+                    finding_type?: "cve" | "eol" | "deprecated";
+                    dismissed_status?: "active" | "acknowledged" | "wont_fix" | "false_positive";
+                    has_jira_ticket?: "yes" | "no";
+                    reachable?: boolean;
+                    has_fix?: boolean;
+                    hide_dev?: boolean;
+                    seen_since_last_scan?: "new" | "unchanged" | "resolved";
+                    include_resolved?: boolean;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                org_id: string | null;
+                                /** Format: uuid */
+                                scope_id: string;
+                                package_name: string;
+                                osv_id: string;
+                                /** @enum {string} */
+                                dismissed_status: "active" | "acknowledged" | "wont_fix" | "false_positive";
+                                dismissed_at: string | null;
+                                /** Format: uuid */
+                                dismissed_by_user_id: string | null;
+                                dismissed_reason: string | null;
+                                notes: string | null;
+                                /** Format: uuid */
+                                jira_ticket_id: string | null;
+                                latest_package_version: string | null;
+                                latest_ecosystem: string | null;
+                                latest_component_scope: string | null;
+                                /** @enum {string} */
+                                latest_finding_type: "cve" | "eol" | "deprecated";
+                                latest_cve_id: string | null;
+                                /** @enum {string} */
+                                latest_severity: "critical" | "high" | "medium" | "low" | "unknown";
+                                latest_cvss_score: number | null;
+                                latest_cvss_vector: string | null;
+                                latest_summary: string | null;
+                                latest_aliases: string[];
+                                latest_actively_exploited: boolean;
+                                latest_eol_date: string | null;
+                                latest_has_fix: boolean;
+                                confirmed_reachable: boolean;
+                                reachable_via_sast_fingerprint: string | null;
+                                reachable_reasoning: string | null;
+                                reachable_assessed_at: string | null;
+                                reachable_model: string | null;
+                                first_seen_at: string;
+                                last_seen_at: string;
+                                created_at: string;
+                                updated_at: string;
+                            }[];
+                            total: number;
+                            page: number;
+                            page_size: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scopes/{id}/components": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List SBOM components for the most recent scan of this scope */
+        get: {
+            parameters: {
+                query?: {
+                    page?: number;
+                    page_size?: number;
+                    has_findings?: boolean;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                id: string;
+                                scan_run_id: string;
+                                name: string;
+                                version: string | null;
+                                purl: string;
+                                ecosystem: string | null;
+                                licenses: string[];
+                                component_type: string;
+                                scope: string | null;
+                            }[];
+                            total: number;
+                            page: number;
+                            page_size: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scopes/{id}/scans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List recent scan runs for a scope */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            status: string;
+                            triggered_by: string;
+                            started_at: string | null;
+                            finished_at: string | null;
+                            error: string | null;
+                            component_count: number;
+                            critical_count: number;
+                            high_count: number;
+                            sast_finding_count: number;
+                            created_at: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sast-issues/{id}/triage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Triage a SAST issue (admin-only) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "confirmed" | "false_positive" | "suppressed" | "pending";
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            /** Format: uuid */
+                            scope_id: string;
+                            fingerprint: string;
+                            /** @enum {string} */
+                            triage_status: "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
+                            triage_confidence: number | null;
+                            triage_reasoning: string | null;
+                            triage_model: string | null;
+                            triage_input_tokens: number | null;
+                            triage_output_tokens: number | null;
+                            suppressed_at: string | null;
+                            /** Format: uuid */
+                            suppressed_by_user_id: string | null;
+                            suppressed_reason: string | null;
+                            notes: string | null;
+                            /** Format: uuid */
+                            jira_ticket_id: string | null;
+                            latest_rule_id: string;
+                            latest_rule_name: string | null;
+                            latest_rule_message: string | null;
+                            /** @enum {string} */
+                            latest_severity: "critical" | "high" | "medium" | "low" | "info";
+                            latest_cwe_ids: string[];
+                            latest_file_path: string;
+                            latest_start_line: number;
+                            latest_snippet: string | null;
+                            first_seen_at: string;
+                            last_seen_at: string;
+                            created_at: string;
+                            updated_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sca-issues/{id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss a SCA issue (admin-only) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "active" | "acknowledged" | "wont_fix" | "false_positive";
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            /** Format: uuid */
+                            scope_id: string;
+                            package_name: string;
+                            osv_id: string;
+                            /** @enum {string} */
+                            dismissed_status: "active" | "acknowledged" | "wont_fix" | "false_positive";
+                            dismissed_at: string | null;
+                            /** Format: uuid */
+                            dismissed_by_user_id: string | null;
+                            dismissed_reason: string | null;
+                            notes: string | null;
+                            /** Format: uuid */
+                            jira_ticket_id: string | null;
+                            latest_package_version: string | null;
+                            latest_ecosystem: string | null;
+                            latest_component_scope: string | null;
+                            /** @enum {string} */
+                            latest_finding_type: "cve" | "eol" | "deprecated";
+                            latest_cve_id: string | null;
+                            /** @enum {string} */
+                            latest_severity: "critical" | "high" | "medium" | "low" | "unknown";
+                            latest_cvss_score: number | null;
+                            latest_cvss_vector: string | null;
+                            latest_summary: string | null;
+                            latest_aliases: string[];
+                            latest_actively_exploited: boolean;
+                            latest_eol_date: string | null;
+                            latest_has_fix: boolean;
+                            confirmed_reachable: boolean;
+                            reachable_via_sast_fingerprint: string | null;
+                            reachable_reasoning: string | null;
+                            reachable_assessed_at: string | null;
+                            reachable_model: string | null;
+                            first_seen_at: string;
+                            last_seen_at: string;
+                            created_at: string;
+                            updated_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sast-issues/{id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set notes on a SAST issue */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        notes: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            /** Format: uuid */
+                            scope_id: string;
+                            fingerprint: string;
+                            /** @enum {string} */
+                            triage_status: "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
+                            triage_confidence: number | null;
+                            triage_reasoning: string | null;
+                            triage_model: string | null;
+                            triage_input_tokens: number | null;
+                            triage_output_tokens: number | null;
+                            suppressed_at: string | null;
+                            /** Format: uuid */
+                            suppressed_by_user_id: string | null;
+                            suppressed_reason: string | null;
+                            notes: string | null;
+                            /** Format: uuid */
+                            jira_ticket_id: string | null;
+                            latest_rule_id: string;
+                            latest_rule_name: string | null;
+                            latest_rule_message: string | null;
+                            /** @enum {string} */
+                            latest_severity: "critical" | "high" | "medium" | "low" | "info";
+                            latest_cwe_ids: string[];
+                            latest_file_path: string;
+                            latest_start_line: number;
+                            latest_snippet: string | null;
+                            first_seen_at: string;
+                            last_seen_at: string;
+                            created_at: string;
+                            updated_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sca-issues/{id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set notes on a SCA issue */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        notes: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            /** Format: uuid */
+                            scope_id: string;
+                            package_name: string;
+                            osv_id: string;
+                            /** @enum {string} */
+                            dismissed_status: "active" | "acknowledged" | "wont_fix" | "false_positive";
+                            dismissed_at: string | null;
+                            /** Format: uuid */
+                            dismissed_by_user_id: string | null;
+                            dismissed_reason: string | null;
+                            notes: string | null;
+                            /** Format: uuid */
+                            jira_ticket_id: string | null;
+                            latest_package_version: string | null;
+                            latest_ecosystem: string | null;
+                            latest_component_scope: string | null;
+                            /** @enum {string} */
+                            latest_finding_type: "cve" | "eol" | "deprecated";
+                            latest_cve_id: string | null;
+                            /** @enum {string} */
+                            latest_severity: "critical" | "high" | "medium" | "low" | "unknown";
+                            latest_cvss_score: number | null;
+                            latest_cvss_vector: string | null;
+                            latest_summary: string | null;
+                            latest_aliases: string[];
+                            latest_actively_exploited: boolean;
+                            latest_eol_date: string | null;
+                            latest_has_fix: boolean;
+                            confirmed_reachable: boolean;
+                            reachable_via_sast_fingerprint: string | null;
+                            reachable_reasoning: string | null;
+                            reachable_assessed_at: string | null;
+                            reachable_model: string | null;
+                            first_seen_at: string;
+                            last_seen_at: string;
+                            created_at: string;
+                            updated_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
         post?: never;
         delete?: never;
         options?: never;
