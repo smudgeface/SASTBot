@@ -393,6 +393,8 @@ export interface ScopeListItem {
   active_sca_issue_count: number;
   critical_count: number;
   high_count: number;
+  medium_count: number;
+  low_count: number;
   pending_triage_count: number;
   created_at: string;
 }

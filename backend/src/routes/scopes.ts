@@ -40,6 +40,8 @@ const ScopeListItemSchema = z.object({
   active_sca_issue_count: z.number().int().nonnegative(),
   critical_count: z.number().int().nonnegative(),
   high_count: z.number().int().nonnegative(),
+  medium_count: z.number().int().nonnegative(),
+  low_count: z.number().int().nonnegative(),
   pending_triage_count: z.number().int().nonnegative(),
   created_at: z.string(),
 });
@@ -130,38 +132,39 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       return Promise.all(scopes.map(async (scope) => {
         const repo = scope.repo as { name: string; defaultBranch: string };
 
+        const activeWhere = (sev: string) => ({
+          scopeId: scope.id, dismissedStatus: "active", latestSeverity: sev,
+        });
+        const activeSastWhere = (sev: string) => ({
+          scopeId: scope.id, latestSeverity: sev,
+          triageStatus: { notIn: ["suppressed", "false_positive"] as string[] },
+        });
+        const combined = async (sev: string) => {
+          const [sca, sast] = await Promise.all([
+            prisma.scaIssue.count({ where: activeWhere(sev) }),
+            prisma.sastIssue.count({ where: activeSastWhere(sev) }),
+          ]);
+          return sca + sast;
+        };
+
         const [
           activeSastCount,
           activeSCACount,
           criticalCount,
           highCount,
+          mediumCount,
+          lowCount,
           pendingTriageCount,
         ] = await Promise.all([
           prisma.sastIssue.count({
             where: { scopeId: scope.id, triageStatus: { notIn: ["suppressed", "false_positive"] } },
           }),
-          prisma.scaIssue.count({
-            where: { scopeId: scope.id, dismissedStatus: "active" },
-          }),
-          prisma.scaIssue.count({
-            where: { scopeId: scope.id, dismissedStatus: "active", latestSeverity: "critical" },
-          }).then(async (n) => {
-            const sast = await prisma.sastIssue.count({
-              where: { scopeId: scope.id, latestSeverity: "critical", triageStatus: { notIn: ["suppressed", "false_positive"] } },
-            });
-            return n + sast;
-          }),
-          prisma.scaIssue.count({
-            where: { scopeId: scope.id, dismissedStatus: "active", latestSeverity: "high" },
-          }).then(async (n) => {
-            const sast = await prisma.sastIssue.count({
-              where: { scopeId: scope.id, latestSeverity: "high", triageStatus: { notIn: ["suppressed", "false_positive"] } },
-            });
-            return n + sast;
-          }),
-          prisma.sastIssue.count({
-            where: { scopeId: scope.id, triageStatus: "pending" },
-          }),
+          prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "active" } }),
+          combined("critical"),
+          combined("high"),
+          combined("medium"),
+          combined("low"),
+          prisma.sastIssue.count({ where: { scopeId: scope.id, triageStatus: "pending" } }),
         ]);
 
         return {
@@ -179,6 +182,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           active_sca_issue_count: activeSCACount,
           critical_count: criticalCount,
           high_count: highCount,
+          medium_count: mediumCount,
+          low_count: lowCount,
           pending_triage_count: pendingTriageCount,
           created_at: scope.createdAt.toISOString(),
         };
@@ -216,11 +221,28 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       const repo = scope.repo as { name: string; defaultBranch: string };
       const lastScanRunId = scope.lastScanRunId;
 
+      const activeWhereD = (sev: string) => ({
+        scopeId: scope.id, dismissedStatus: "active", latestSeverity: sev,
+      });
+      const activeSastWhereD = (sev: string) => ({
+        scopeId: scope.id, latestSeverity: sev,
+        triageStatus: { notIn: ["suppressed", "false_positive"] as string[] },
+      });
+      const combinedD = async (sev: string) => {
+        const [sca, sast] = await Promise.all([
+          prisma.scaIssue.count({ where: activeWhereD(sev) }),
+          prisma.sastIssue.count({ where: activeSastWhereD(sev) }),
+        ]);
+        return sca + sast;
+      };
+
       const [
         activeSastCount,
         activeSCACount,
         criticalCount,
         highCount,
+        mediumCount,
+        lowCount,
         pendingTriageCount,
         resolvedSastCount,
         resolvedScaCount,
@@ -229,22 +251,10 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           where: { scopeId: scope.id, triageStatus: { notIn: ["suppressed", "false_positive"] } },
         }),
         prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "active" } }),
-        prisma.scaIssue.count({
-          where: { scopeId: scope.id, dismissedStatus: "active", latestSeverity: "critical" },
-        }).then(async (n) => {
-          const sast = await prisma.sastIssue.count({
-            where: { scopeId: scope.id, latestSeverity: "critical", triageStatus: { notIn: ["suppressed", "false_positive"] } },
-          });
-          return n + sast;
-        }),
-        prisma.scaIssue.count({
-          where: { scopeId: scope.id, dismissedStatus: "active", latestSeverity: "high" },
-        }).then(async (n) => {
-          const sast = await prisma.sastIssue.count({
-            where: { scopeId: scope.id, latestSeverity: "high", triageStatus: { notIn: ["suppressed", "false_positive"] } },
-          });
-          return n + sast;
-        }),
+        combinedD("critical"),
+        combinedD("high"),
+        combinedD("medium"),
+        combinedD("low"),
         prisma.sastIssue.count({ where: { scopeId: scope.id, triageStatus: "pending" } }),
         lastScanRunId
           ? prisma.sastIssue.count({ where: { scopeId: scope.id, lastSeenScanRunId: { not: lastScanRunId } } })
@@ -269,6 +279,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         active_sca_issue_count: activeSCACount,
         critical_count: criticalCount,
         high_count: highCount,
+        medium_count: mediumCount,
+        low_count: lowCount,
         pending_triage_count: pendingTriageCount,
         resolved_sast_count: resolvedSastCount,
         resolved_sca_count: resolvedScaCount,
