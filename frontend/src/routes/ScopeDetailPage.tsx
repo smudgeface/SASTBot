@@ -78,6 +78,84 @@ function TriageBadge({ status }: { status: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Filter bar primitives
+// ---------------------------------------------------------------------------
+
+/** Thin vertical line used to separate filter groups. */
+function Pipe() {
+  return <div className="self-stretch w-px bg-border mx-1" />;
+}
+
+/**
+ * A group of mutually-exclusive filter chips joined by "|" separators.
+ * Clicking an active chip deselects it (nothing selected = show all).
+ */
+function RadioGroup<T extends string>({
+  items,
+  active,
+  onToggle,
+  label,
+  colorFn,
+}: {
+  items: readonly T[];
+  active: T | undefined;
+  onToggle: (v: T) => void;
+  label?: (v: T) => string;
+  colorFn?: (v: T) => string;
+}) {
+  const baseInactive = "border-transparent text-muted-foreground hover:border-border hover:text-foreground";
+  return (
+    <div className="flex items-center gap-0">
+      {items.map((item, i) => (
+        <div key={item} className="flex items-center">
+          {i > 0 && (
+            <span className="mx-1 text-[10px] text-muted-foreground/50 select-none">|</span>
+          )}
+          <button
+            onClick={() => onToggle(item)}
+            className={`rounded px-2 py-0.5 text-xs font-medium border transition-colors ${
+              active === item
+                ? (colorFn ? colorFn(item) : "bg-accent text-accent-foreground border-border")
+                : baseInactive
+            }`}
+          >
+            {label ? label(item) : item}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A group of independent boolean toggles — multiple can be active at once.
+ * No "|" separators; items sit side by side with a small gap.
+ */
+function ToggleGroup({
+  items,
+}: {
+  items: { key: string; label: string; active: boolean; onToggle: () => void }[];
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      {items.map(({ key, label, active, onToggle }) => (
+        <button
+          key={key}
+          onClick={onToggle}
+          className={`rounded px-2 py-0.5 text-xs border transition-colors ${
+            active
+              ? "bg-accent text-accent-foreground border-border"
+              : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Pagination control
 // ---------------------------------------------------------------------------
 
@@ -206,62 +284,47 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
 
   const { data, isLoading } = useScopeSastIssues(scopeId, filters);
 
-  const SEVERITIES = ["critical", "high", "medium", "low", "info"];
-  const STATUSES = ["pending", "confirmed", "false_positive", "suppressed"];
+  const SAST_SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
+  const SAST_STATUSES = ["pending", "confirmed", "false_positive", "suppressed"] as const;
 
-  const toggleSeverity = (s: string) =>
-    setFilters((f) => ({ ...f, page: 1, severity: f.severity === s ? undefined : s }));
-  const toggleStatus = (s: string) =>
-    setFilters((f) => ({ ...f, page: 1, triage_status: f.triage_status === s ? undefined : s }));
+  const hasFilter = !!(filters.severity || filters.triage_status || filters.include_resolved);
 
   return (
     <div className="space-y-3">
-      {/* Filter bar */}
-      <div className="flex flex-wrap gap-2">
-        {SEVERITIES.map((s) => (
-          <button
-            key={s}
-            onClick={() => toggleSeverity(s)}
-            className={`rounded px-2 py-0.5 text-xs font-medium border transition-colors ${
-              filters.severity === s
-                ? SEVERITY_COLORS[s]
-                : "border-transparent text-muted-foreground hover:border-border"
-            }`}
-          >
-            {s}
-          </button>
-        ))}
-        <div className="ml-2 w-px bg-border" />
-        {STATUSES.map((s) => (
-          <button
-            key={s}
-            onClick={() => toggleStatus(s)}
-            className={`rounded px-2 py-0.5 text-xs border transition-colors capitalize ${
-              filters.triage_status === s
-                ? "bg-accent text-accent-foreground border-border"
-                : "border-transparent text-muted-foreground hover:border-border"
-            }`}
-          >
-            {s.replace("_", " ")}
-          </button>
-        ))}
-        <button
-          onClick={() => setFilters((f) => ({ ...f, page: 1, include_resolved: !f.include_resolved }))}
-          className={`rounded px-2 py-0.5 text-xs border transition-colors ${
-            filters.include_resolved
-              ? "bg-accent text-accent-foreground border-border"
-              : "border-transparent text-muted-foreground hover:border-border"
-          }`}
-        >
-          Include resolved
-        </button>
-        {(filters.severity || filters.triage_status) && (
-          <button
-            className="text-xs text-muted-foreground underline"
-            onClick={() => setFilters({ page: 1, page_size: 50 })}
-          >
-            Clear
-          </button>
+      {/* Filter bar — | separates radio groups; toggle groups have no | */}
+      <div className="flex flex-wrap items-center gap-y-2 gap-x-0">
+        <RadioGroup
+          items={SAST_SEVERITIES}
+          active={filters.severity as typeof SAST_SEVERITIES[number] | undefined}
+          onToggle={(s) => setFilters((f) => ({ ...f, page: 1, severity: f.severity === s ? undefined : s }))}
+          colorFn={(s) => SEVERITY_COLORS[s] ?? ""}
+        />
+        <Pipe />
+        <RadioGroup
+          items={SAST_STATUSES}
+          active={filters.triage_status as typeof SAST_STATUSES[number] | undefined}
+          onToggle={(s) => setFilters((f) => ({ ...f, page: 1, triage_status: f.triage_status === s ? undefined : s }))}
+          label={(s) => s.replace(/_/g, " ")}
+        />
+        <Pipe />
+        <ToggleGroup
+          items={[{
+            key: "include_resolved",
+            label: "Include resolved",
+            active: !!filters.include_resolved,
+            onToggle: () => setFilters((f) => ({ ...f, page: 1, include_resolved: !f.include_resolved })),
+          }]}
+        />
+        {hasFilter && (
+          <>
+            <Pipe />
+            <button
+              className="text-xs text-muted-foreground underline underline-offset-2 px-1"
+              onClick={() => setFilters({ page: 1, page_size: 50 })}
+            >
+              Clear
+            </button>
+          </>
         )}
       </div>
 
@@ -426,77 +489,58 @@ function ScaIssuesTab({ scopeId }: { scopeId: string }) {
 
   const { data, isLoading } = useScopeScaIssues(scopeId, filters);
 
-  const SEVERITIES = ["critical", "high", "medium", "low"];
-  const TYPES = ["cve", "eol", "deprecated"];
+  const SCA_SEVERITIES = ["critical", "high", "medium", "low"] as const;
+  const SCA_TYPES = ["cve", "eol", "deprecated"] as const;
 
-  const toggle = <K extends keyof ScaIssueFilters>(key: K, val: ScaIssueFilters[K]) =>
-    setFilters((f) => ({ ...f, page: 1, [key]: f[key] === val ? undefined : val }));
-
-  const toggleBool = (key: "reachable" | "has_fix" | "hide_dev") =>
-    setFilters((f) => ({ ...f, page: 1, [key]: !f[key] }));
+  const hasScaFilter = !!(
+    filters.severity || filters.finding_type ||
+    filters.reachable || filters.has_fix || filters.hide_dev || filters.include_resolved
+  );
 
   return (
     <div className="space-y-3">
-      {/* Filter bar */}
-      <div className="flex flex-wrap gap-2">
-        {SEVERITIES.map((s) => (
-          <button
-            key={s}
-            onClick={() => toggle("severity", s)}
-            className={`rounded px-2 py-0.5 text-xs font-medium border transition-colors ${
-              filters.severity === s
-                ? SEVERITY_COLORS[s]
-                : "border-transparent text-muted-foreground hover:border-border"
-            }`}
-          >
-            {s}
-          </button>
-        ))}
-        <div className="ml-1 w-px bg-border" />
-        {TYPES.map((t) => (
-          <button
-            key={t}
-            onClick={() => toggle("finding_type", t)}
-            className={`rounded px-2 py-0.5 text-xs border uppercase transition-colors ${
-              filters.finding_type === t
-                ? "bg-accent text-accent-foreground border-border"
-                : "border-transparent text-muted-foreground hover:border-border"
-            }`}
-          >
-            {t}
-          </button>
-        ))}
-        <div className="ml-1 w-px bg-border" />
-        {(["reachable", "has_fix", "hide_dev"] as const).map((key) => (
-          <button
-            key={key}
-            onClick={() => toggleBool(key)}
-            className={`rounded px-2 py-0.5 text-xs border transition-colors ${
-              filters[key]
-                ? "bg-accent text-accent-foreground border-border"
-                : "border-transparent text-muted-foreground hover:border-border"
-            }`}
-          >
-            {key === "reachable" ? "Reachable" : key === "has_fix" ? "Has fix" : "Hide dev"}
-          </button>
-        ))}
-        <button
-          onClick={() => setFilters((f) => ({ ...f, page: 1, include_resolved: !f.include_resolved }))}
-          className={`rounded px-2 py-0.5 text-xs border transition-colors ${
-            filters.include_resolved
-              ? "bg-accent text-accent-foreground border-border"
-              : "border-transparent text-muted-foreground hover:border-border"
-          }`}
-        >
-          Include resolved
-        </button>
-        {(filters.severity || filters.finding_type || filters.reachable || filters.has_fix || filters.hide_dev) && (
-          <button
-            className="text-xs text-muted-foreground underline"
-            onClick={() => setFilters({ page: 1, page_size: 50 })}
-          >
-            Clear
-          </button>
+      {/* Filter bar — | = radio (pick one); no | = stackable toggles */}
+      <div className="flex flex-wrap items-center gap-y-2 gap-x-0">
+        <RadioGroup
+          items={SCA_SEVERITIES}
+          active={filters.severity as typeof SCA_SEVERITIES[number] | undefined}
+          onToggle={(s) => setFilters((f) => ({ ...f, page: 1, severity: f.severity === s ? undefined : s }))}
+          colorFn={(s) => SEVERITY_COLORS[s] ?? ""}
+        />
+        <Pipe />
+        <RadioGroup
+          items={SCA_TYPES}
+          active={filters.finding_type as typeof SCA_TYPES[number] | undefined}
+          onToggle={(s) => setFilters((f) => ({ ...f, page: 1, finding_type: f.finding_type === s ? undefined : s }))}
+          label={(t) => t.toUpperCase()}
+        />
+        <Pipe />
+        <ToggleGroup
+          items={[
+            { key: "reachable", label: "Reachable", active: !!filters.reachable, onToggle: () => setFilters((f) => ({ ...f, page: 1, reachable: !f.reachable })) },
+            { key: "has_fix",   label: "Has fix",   active: !!filters.has_fix,   onToggle: () => setFilters((f) => ({ ...f, page: 1, has_fix: !f.has_fix })) },
+            { key: "hide_dev",  label: "Hide dev",  active: !!filters.hide_dev,  onToggle: () => setFilters((f) => ({ ...f, page: 1, hide_dev: !f.hide_dev })) },
+          ]}
+        />
+        <Pipe />
+        <ToggleGroup
+          items={[{
+            key: "include_resolved",
+            label: "Include resolved",
+            active: !!filters.include_resolved,
+            onToggle: () => setFilters((f) => ({ ...f, page: 1, include_resolved: !f.include_resolved })),
+          }]}
+        />
+        {hasScaFilter && (
+          <>
+            <Pipe />
+            <button
+              className="text-xs text-muted-foreground underline underline-offset-2 px-1"
+              onClick={() => setFilters({ page: 1, page_size: 50 })}
+            >
+              Clear
+            </button>
+          </>
         )}
       </div>
 
