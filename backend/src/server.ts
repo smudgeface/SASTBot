@@ -21,6 +21,7 @@ import adminSettingsRoutes from "./routes/adminSettings.js";
 import authRoutes from "./routes/auth.js";
 import healthRoutes from "./routes/health.js";
 import scansRoutes from "./routes/scans.js";
+import scopesRoutes from "./routes/scopes.js";
 import { ensureCanary } from "./security/crypto.js";
 import { bootstrapIfEmpty } from "./services/bootstrap.js";
 
@@ -91,6 +92,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(adminSettingsRoutes);
   await app.register(adminCredentialsRoutes);
   await app.register(scansRoutes);
+  await app.register(scopesRoutes);
 
   app.setErrorHandler((err, _req, reply) => {
     // Zod validation errors come through with a `.issues` array; let

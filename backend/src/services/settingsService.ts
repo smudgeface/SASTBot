@@ -51,6 +51,9 @@ export async function updateSettings(
     if (Object.prototype.hasOwnProperty.call(input, "jira_base_url")) {
       data.jiraBaseUrl = input.jira_base_url ?? null;
     }
+    if (Object.prototype.hasOwnProperty.call(input, "jira_email")) {
+      data.jiraEmail = input.jira_email ?? null;
+    }
     if (jiraCredentialId !== undefined) {
       data.jiraCredential = jiraCredentialId
         ? { connect: { id: jiraCredentialId } }
