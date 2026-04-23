@@ -910,13 +910,16 @@ export default function ScopeDetailPage() {
           <TabsTrigger value="components">Components</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="sca" className="mt-4 min-h-80">
+        {/* forceMount keeps all panels in the DOM so queries fire at page load,
+            not on first click. data-[state=inactive]:hidden hides inactive panels
+            without unmounting them — eliminates the loading-flash layout shift. */}
+        <TabsContent forceMount value="sca" className="mt-4 min-h-80 data-[state=inactive]:hidden">
           {id && <ScaIssuesTab scopeId={id} />}
         </TabsContent>
-        <TabsContent value="sast" className="mt-4 min-h-80">
+        <TabsContent forceMount value="sast" className="mt-4 min-h-80 data-[state=inactive]:hidden">
           {id && <SastIssuesTab scopeId={id} />}
         </TabsContent>
-        <TabsContent value="components" className="mt-4 min-h-80">
+        <TabsContent forceMount value="components" className="mt-4 min-h-80 data-[state=inactive]:hidden">
           {id && <ComponentsTab scopeId={id} />}
         </TabsContent>
       </Tabs>
