@@ -429,7 +429,7 @@ export type SastFindingOut = z.infer<typeof SastFindingOutSchema>;
 export const SastFindingListSchema = z.array(SastFindingOutSchema);
 
 export const SastTriageBodySchema = z.object({
-  status: z.enum(["confirmed", "false_positive", "suppressed"]),
+  status: z.enum(["confirmed", "false_positive", "suppressed", "pending"]),
   reason: z.string().optional(),
 });
 export type SastTriageBody = z.infer<typeof SastTriageBodySchema>;

@@ -116,7 +116,7 @@ export function useTriageSastFinding(scanId: string | undefined) {
       reason,
     }: {
       findingId: string;
-      status: "confirmed" | "false_positive" | "suppressed";
+      status: "confirmed" | "false_positive" | "suppressed" | "pending";
       reason?: string;
     }) =>
       apiFetch<SastFinding>(`/scans/${scanId}/sast-findings/${findingId}/triage`, {
