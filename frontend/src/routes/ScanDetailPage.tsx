@@ -702,6 +702,30 @@ export default function ScanDetailPage() {
         </div>
       ) : null}
 
+      {/* LLM usage card — only when at least one LLM call was made */}
+      {isTerminal && s.status === "success" && s.llm_request_count > 0 ? (
+        <Card>
+          <CardContent className="p-4 flex flex-wrap gap-6 text-sm">
+            <div>
+              <p className="text-xs uppercase text-muted-foreground mb-0.5">LLM requests</p>
+              <p className="font-semibold">{s.llm_request_count}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase text-muted-foreground mb-0.5">Tokens (in/out)</p>
+              <p className="font-semibold font-mono">
+                {s.llm_input_tokens.toLocaleString()} / {s.llm_output_tokens.toLocaleString()}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase text-muted-foreground mb-0.5">Budget used</p>
+              <p className="font-semibold">
+                {Math.round(((s.llm_input_tokens + s.llm_output_tokens) / 50000) * 100)}%
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* Tabbed content: Findings + Components */}
       {isTerminal && s.status === "success" ? (
         <Tabs defaultValue="findings">

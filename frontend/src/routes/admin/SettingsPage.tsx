@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { useCredentials } from "@/api/queries/credentials";
-import { useSettings, useUpdateSettings } from "@/api/queries/settings";
+import { useSettings, useUpdateSettings, useCheckLlm } from "@/api/queries/settings";
 import type { AdminSettingsUpdate, LlmApiFormat } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/components/ui/use-toast";
+import { cn } from "@/lib/utils";
 
 const LLM_DEFAULTS = {
   base_url: "https://api.ai.mytkhgroup.com",
@@ -29,6 +30,7 @@ export default function SettingsPage() {
   const settings = useSettings();
   const credentials = useCredentials();
   const updateSettings = useUpdateSettings();
+  const checkLlm = useCheckLlm();
   const { toast } = useToast();
 
   // Jira section state
@@ -38,7 +40,7 @@ export default function SettingsPage() {
   const [jiraNewName, setJiraNewName] = useState("");
   const [jiraNewValue, setJiraNewValue] = useState("");
 
-  // LLM section state
+  // LLM connection section state
   const [llmBaseUrl, setLlmBaseUrl] = useState(LLM_DEFAULTS.base_url);
   const [llmApiFormat, setLlmApiFormat] = useState<LlmApiFormat>(LLM_DEFAULTS.api_format);
   const [llmModel, setLlmModel] = useState(LLM_DEFAULTS.model);
@@ -46,6 +48,11 @@ export default function SettingsPage() {
   const [llmCredId, setLlmCredId] = useState<string>("");
   const [llmNewName, setLlmNewName] = useState("");
   const [llmNewValue, setLlmNewValue] = useState("");
+
+  // LLM assistance section state
+  const [llmEnabled, setLlmEnabled] = useState(false);
+  const [llmTokenBudget, setLlmTokenBudget] = useState(50000);
+  const [reachabilityCvss, setReachabilityCvss] = useState(7.0);
 
   // When the settings query completes, hydrate the form.
   useEffect(() => {
@@ -60,6 +67,10 @@ export default function SettingsPage() {
     setLlmModel(data.llm_model || LLM_DEFAULTS.model);
     setLlmCredId(data.llm_credential_id ?? "");
     setLlmCredChoice(data.llm_credential_id ? "existing" : "new");
+
+    setLlmEnabled(data.llm_assistance_enabled ?? false);
+    setLlmTokenBudget(data.llm_triage_token_budget ?? 50000);
+    setReachabilityCvss(data.reachability_cvss_threshold ?? 7.0);
   }, [settings.data]);
 
   const jiraOptions = credentials.data?.filter((c) => c.kind.startsWith("jira")) ?? [];
@@ -96,6 +107,9 @@ export default function SettingsPage() {
       llm_model: llmModel.trim() || null,
       llm_credential_id: llmCredChoice === "existing" ? llmCredId || null : null,
       llm_credential: buildLlmCred(),
+      llm_assistance_enabled: llmEnabled,
+      llm_triage_token_budget: llmTokenBudget,
+      reachability_cvss_threshold: reachabilityCvss,
     };
 
     try {
@@ -219,6 +233,128 @@ export default function SettingsPage() {
               valuePlaceholder="API key"
               kindLabel="LLM API key"
             />
+
+        {/* LLM-assisted analysis */}
+        <Card>
+          <CardHeader>
+            <CardTitle>LLM-assisted analysis</CardTitle>
+            <CardDescription>
+              Enable AI triage of SAST findings and reachability analysis for SCA findings.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {/* Toggle */}
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Enable LLM assistance</p>
+                <p className="text-xs text-muted-foreground">
+                  Automatically triage SAST findings and assess CVE reachability during scans.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={llmEnabled}
+                onClick={() => setLlmEnabled((v) => !v)}
+                className={cn(
+                  "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  llmEnabled
+                    ? "bg-primary"
+                    : "bg-input",
+                )}
+              >
+                <span
+                  className={cn(
+                    "pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform",
+                    llmEnabled ? "translate-x-5" : "translate-x-0",
+                  )}
+                />
+              </button>
+            </div>
+
+            {/* Warn if enabled but no credential */}
+            {llmEnabled && !settings.data?.llm_credential_id && llmCredChoice !== "new" ? (
+              <p className="text-xs text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-900 rounded px-3 py-2 bg-amber-50 dark:bg-amber-950">
+                LLM credentials not configured — set up a credential in the LLM gateway section above.
+              </p>
+            ) : null}
+
+            <Separator />
+
+            {/* Budget + threshold */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="llm-budget">Token budget per scan</Label>
+                <Input
+                  id="llm-budget"
+                  type="number"
+                  min={1000}
+                  step={1000}
+                  value={llmTokenBudget}
+                  onChange={(e) => setLlmTokenBudget(Number(e.target.value))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Combined input + output tokens. Triage stops when exceeded.
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="llm-cvss">Reachability CVSS threshold</Label>
+                <Input
+                  id="llm-cvss"
+                  type="number"
+                  min={0}
+                  max={10}
+                  step={0.5}
+                  value={reachabilityCvss}
+                  onChange={(e) => setReachabilityCvss(Number(e.target.value))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Only assess reachability for CVEs at or above this CVSS score.
+                </p>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Connection check */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={checkLlm.isPending}
+                  onClick={() => checkLlm.mutate()}
+                >
+                  {checkLlm.isPending ? "Checking…" : "Check connection"}
+                </Button>
+                {checkLlm.data ? (
+                  <span
+                    className={cn(
+                      "text-xs font-medium",
+                      checkLlm.data.success
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-destructive",
+                    )}
+                  >
+                    {checkLlm.data.success ? "Connected" : "Failed"}
+                  </span>
+                ) : null}
+              </div>
+              {checkLlm.data ? (
+                <div className="rounded border bg-muted/40 px-3 py-2 text-xs space-y-0.5">
+                  {checkLlm.data.success ? (
+                    <>
+                      <p>Model: <span className="font-mono">{checkLlm.data.model}</span></p>
+                      <p>Latency: {checkLlm.data.latency_ms}ms</p>
+                      <p>Tokens: {checkLlm.data.input_tokens} in / {checkLlm.data.output_tokens} out</p>
+                    </>
+                  ) : (
+                    <p className="text-destructive">{checkLlm.data.error}</p>
+                  )}
+                </div>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
 
