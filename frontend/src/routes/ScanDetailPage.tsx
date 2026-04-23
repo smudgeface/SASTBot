@@ -274,14 +274,34 @@ export default function ScanDetailPage() {
   const sbom = useSbomJson(id);
   const sast = useSastFindings(id);
 
-  const [filterSeverity, setFilterSeverity] = useState<string>("");
+  const [scaSeverities, setScaSeverities] = useState<Set<string>>(new Set());
+  const [scaTypes, setScaTypes]         = useState<Set<string>>(new Set());
+  const [sastSeverities, setSastSeverities] = useState<Set<string>>(new Set());
+
+  function toggleSet(current: Set<string>, value: string, setter: (s: Set<string>) => void) {
+    const next = new Set(current);
+    next.has(value) ? next.delete(value) : next.add(value);
+    setter(next);
+  }
 
   const repoName = repos.data?.find((r) => r.id === scan.data?.repo_id)?.name;
   const allFindings = findings.data ?? [];
-  const filteredFindings = filterSeverity
-    ? allFindings.filter((f) => f.severity === filterSeverity)
-    : allFindings;
-  const sorted = [...filteredFindings].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || (b.cvss_score ?? 0) - (a.cvss_score ?? 0));
+  const sortedFindings = [...allFindings].sort(
+    (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || (b.cvss_score ?? 0) - (a.cvss_score ?? 0),
+  );
+  const filteredFindings = sortedFindings.filter((f) => {
+    if (scaSeverities.size > 0 && !scaSeverities.has(f.severity)) return false;
+    if (scaTypes.size > 0 && !scaTypes.has(f.finding_type)) return false;
+    return true;
+  });
+
+  const allSast = sast.data ?? [];
+  const sortedSast = [...allSast].sort(
+    (a, b) => (SEVERITY_ORDER[a.severity as FindingSeverity] ?? 9) - (SEVERITY_ORDER[b.severity as FindingSeverity] ?? 9),
+  );
+  const filteredSast = sastSeverities.size > 0
+    ? sortedSast.filter((f) => sastSeverities.has(f.severity))
+    : sortedSast;
 
   if (scan.isLoading) return <div className="p-8 text-sm text-muted-foreground">Loading scan…</div>;
   if (!scan.data) return <div className="p-8 text-sm text-destructive">Scan not found.</div>;
@@ -381,19 +401,40 @@ export default function ScanDetailPage() {
             </TabsList>
 
             <TabsContent value="findings" className="mt-4">
-              <div className="flex flex-wrap gap-1 mb-3">
-                {(["critical", "high", "medium", "low"] as const).map((sev) => (
-                  <button key={sev} onClick={() => setFilterSeverity(filterSeverity === sev ? "" : sev)}
-                    className={cn("rounded border px-2 py-0.5 text-xs font-semibold uppercase transition-colors",
-                      filterSeverity === sev ? severityChipClass(sev) : "border-transparent text-muted-foreground hover:border-border")}>
-                    {sev}
-                  </button>
+              {/* Filter bar — same pipe-group pattern as scope detail */}
+              <div className="flex flex-wrap items-center gap-y-2 gap-x-0 mb-3">
+                {(["critical", "high", "medium", "low"] as const).map((sev, i) => (
+                  <div key={sev} className="flex items-center">
+                    {i > 0 && <span className="mx-1 text-[10px] text-muted-foreground/50 select-none">|</span>}
+                    <button onClick={() => toggleSet(scaSeverities, sev, setScaSeverities)}
+                      className={cn("rounded px-2 py-0.5 text-xs font-medium border transition-colors",
+                        scaSeverities.has(sev) ? severityChipClass(sev) : "border-transparent text-muted-foreground hover:border-border")}>
+                      {sev}
+                    </button>
+                  </div>
                 ))}
-                {filterSeverity && <button onClick={() => setFilterSeverity("")} className="text-xs text-muted-foreground underline ml-1">Clear</button>}
+                <div className="self-stretch w-px bg-border mx-1" />
+                {(["cve", "eol", "deprecated"] as const).map((t, i) => (
+                  <div key={t} className="flex items-center">
+                    {i > 0 && <span className="mx-1 text-[10px] text-muted-foreground/50 select-none">|</span>}
+                    <button onClick={() => toggleSet(scaTypes, t, setScaTypes)}
+                      className={cn("rounded px-2 py-0.5 text-xs font-medium border transition-colors",
+                        scaTypes.has(t) ? "bg-accent text-accent-foreground border-border" : "border-transparent text-muted-foreground hover:border-border")}>
+                      {t === "deprecated" ? "Deprecated" : t.toUpperCase()}
+                    </button>
+                  </div>
+                ))}
+                {(scaSeverities.size > 0 || scaTypes.size > 0) && (
+                  <>
+                    <div className="self-stretch w-px bg-border mx-1" />
+                    <button onClick={() => { setScaSeverities(new Set()); setScaTypes(new Set()); }}
+                      className="text-xs text-muted-foreground underline underline-offset-2 px-1">Clear</button>
+                  </>
+                )}
               </div>
               {findings.isLoading ? (
                 <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading…</CardContent></Card>
-              ) : sorted.length === 0 ? (
+              ) : filteredFindings.length === 0 ? (
                 <Card><CardContent className="p-6 text-sm text-muted-foreground">No findings match.</CardContent></Card>
               ) : (
                 <Card>
@@ -407,17 +448,37 @@ export default function ScanDetailPage() {
                         <TableHead>Summary</TableHead>
                       </TableRow>
                     </TableHeader>
-                    <TableBody>{sorted.map((f) => <FindingRow key={f.id} finding={f} />)}</TableBody>
+                    <TableBody>{filteredFindings.map((f) => <FindingRow key={f.id} finding={f} />)}</TableBody>
                   </Table>
                 </Card>
               )}
             </TabsContent>
 
             <TabsContent value="sast" className="mt-4">
+              {/* Severity filter */}
+              <div className="flex flex-wrap items-center gap-y-2 gap-x-0 mb-3">
+                {(["critical", "high", "medium", "low", "info"] as const).map((sev, i) => (
+                  <div key={sev} className="flex items-center">
+                    {i > 0 && <span className="mx-1 text-[10px] text-muted-foreground/50 select-none">|</span>}
+                    <button onClick={() => toggleSet(sastSeverities, sev, setSastSeverities)}
+                      className={cn("rounded px-2 py-0.5 text-xs font-medium border transition-colors",
+                        sastSeverities.has(sev) ? severityChipClass(sev) : "border-transparent text-muted-foreground hover:border-border")}>
+                      {sev}
+                    </button>
+                  </div>
+                ))}
+                {sastSeverities.size > 0 && (
+                  <>
+                    <div className="self-stretch w-px bg-border mx-1" />
+                    <button onClick={() => setSastSeverities(new Set())}
+                      className="text-xs text-muted-foreground underline underline-offset-2 px-1">Clear</button>
+                  </>
+                )}
+              </div>
               {sast.isLoading ? (
                 <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading…</CardContent></Card>
-              ) : !sast.data || sast.data.length === 0 ? (
-                <Card><CardContent className="p-6 text-sm text-muted-foreground">No SAST detections.</CardContent></Card>
+              ) : filteredSast.length === 0 ? (
+                <Card><CardContent className="p-6 text-sm text-muted-foreground">No SAST detections match.</CardContent></Card>
               ) : (
                 <Card>
                   <Table>
@@ -429,7 +490,7 @@ export default function ScanDetailPage() {
                         <TableHead>Location</TableHead>
                       </TableRow>
                     </TableHeader>
-                    <TableBody>{sast.data.map((f) => <SastRow key={f.id} finding={f} />)}</TableBody>
+                    <TableBody>{filteredSast.map((f) => <SastRow key={f.id} finding={f} />)}</TableBody>
                   </Table>
                 </Card>
               )}

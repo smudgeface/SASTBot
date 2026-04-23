@@ -827,21 +827,29 @@ export default function ScopeDetailPage() {
             </div>
           </CardContent>
         </Card>
-        {(scope.critical_count > 0 || scope.high_count > 0) && (
+        {(scope.critical_count > 0 || scope.high_count > 0 || scope.medium_count > 0 || scope.low_count > 0) && (
           <Card className="flex-none">
-            <CardContent className="px-4 py-3 flex items-center gap-2">
-              <div className="flex gap-1.5">
-                {scope.critical_count > 0 && (
-                  <Badge variant="outline" className={SEVERITY_COLORS.critical}>
-                    {scope.critical_count} Critical
-                  </Badge>
-                )}
-                {scope.high_count > 0 && (
-                  <Badge variant="outline" className={SEVERITY_COLORS.high}>
-                    {scope.high_count} High
-                  </Badge>
-                )}
-              </div>
+            <CardContent className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
+              {scope.critical_count > 0 && (
+                <Badge variant="outline" className={SEVERITY_COLORS.critical}>
+                  {scope.critical_count} Critical
+                </Badge>
+              )}
+              {scope.high_count > 0 && (
+                <Badge variant="outline" className={SEVERITY_COLORS.high}>
+                  {scope.high_count} High
+                </Badge>
+              )}
+              {scope.medium_count > 0 && (
+                <Badge variant="outline" className={SEVERITY_COLORS.medium}>
+                  {scope.medium_count} Medium
+                </Badge>
+              )}
+              {scope.low_count > 0 && (
+                <Badge variant="outline" className={SEVERITY_COLORS.low}>
+                  {scope.low_count} Low
+                </Badge>
+              )}
             </CardContent>
           </Card>
         )}
