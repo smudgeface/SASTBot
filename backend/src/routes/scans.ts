@@ -7,11 +7,16 @@ import {
   ErrorSchema,
   FindingsQuerySchema,
   IdParamsSchema,
+  SastFindingListSchema,
+  SastFindingParamsSchema,
+  SastFindingOutSchema,
+  SastFindingsQuerySchema,
+  SastTriageBodySchema,
   ScanFindingListSchema,
   ScanRunListSchema,
   ScanRunOutSchema,
 } from "../schemas.js";
-import { scanFindingToOut, scanRunToOut } from "../services/mappers.js";
+import { scanFindingToOut, scanRunToOut, sastFindingToOut } from "../services/mappers.js";
 
 const scansRoutes: FastifyPluginAsync = async (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
@@ -193,6 +198,92 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         licenses: c.licenses,
         component_type: c.componentType,
       }));
+    },
+  );
+  // ── SAST findings ──────────────────────────────────────────────────────────
+
+  typed.get(
+    "/scans/:id/sast-findings",
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ["scans"],
+        summary: "List SAST findings for a scan run",
+        params: IdParamsSchema,
+        querystring: SastFindingsQuerySchema,
+        response: {
+          200: SastFindingListSchema,
+          401: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const run = await prisma.scanRun.findFirst({
+        where: { id: req.params.id, orgId: orgId ?? null },
+        select: { id: true },
+      });
+      if (!run) return reply.code(404).send({ detail: "Scan run not found" });
+
+      const where: Record<string, unknown> = { scanRunId: req.params.id };
+      if (req.query.severity) where.severity = req.query.severity;
+      if (req.query.triage_status) where.triageStatus = req.query.triage_status;
+      if (req.query.file_path) {
+        where.filePath = { startsWith: req.query.file_path };
+      }
+
+      const findings = await prisma.sastFinding.findMany({
+        where,
+        orderBy: [{ severity: "asc" }, { startLine: "asc" }],
+      });
+
+      return findings.map(sastFindingToOut);
+    },
+  );
+
+  typed.post(
+    "/scans/:id/sast-findings/:fid/triage",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["scans"],
+        summary: "Update triage status for a SAST finding (admin-only)",
+        params: SastFindingParamsSchema,
+        body: SastTriageBodySchema,
+        response: {
+          200: SastFindingOutSchema,
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const run = await prisma.scanRun.findFirst({
+        where: { id: req.params.id, orgId: orgId ?? null },
+        select: { id: true },
+      });
+      if (!run) return reply.code(404).send({ detail: "Scan run not found" });
+
+      const finding = await prisma.sastFinding.findFirst({
+        where: { id: req.params.fid, scanRunId: req.params.id },
+      });
+      if (!finding) return reply.code(404).send({ detail: "SAST finding not found" });
+
+      const { status, reason } = req.body;
+      const updated = await prisma.sastFinding.update({
+        where: { id: req.params.fid },
+        data: {
+          triageStatus: status,
+          suppressedReason: reason ?? null,
+          suppressedAt: status === "suppressed" ? new Date() : null,
+          suppressedByUserId: status === "suppressed" ? (req.user?.id ?? null) : null,
+        },
+      });
+
+      return sastFindingToOut(updated);
     },
   );
 };

@@ -168,6 +168,9 @@ export interface AdminSettings {
   llm_api_format: LlmApiFormat | null;
   llm_model: string | null;
   llm_credential_id: string | null;
+  llm_assistance_enabled: boolean;
+  llm_triage_token_budget: number;
+  reachability_cvss_threshold: number;
   updated_at: string;
 }
 
@@ -180,6 +183,9 @@ export interface AdminSettingsUpdate {
   llm_model?: string | null;
   llm_credential_id?: string | null;
   llm_credential?: CredentialCreateInput | null;
+  llm_assistance_enabled?: boolean;
+  llm_triage_token_budget?: number;
+  reachability_cvss_threshold?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +194,12 @@ export interface AdminSettingsUpdate {
 
 export type ScanStatus = "pending" | "running" | "success" | "failed";
 export type ScanTrigger = "user" | "api" | "schedule";
+
+export interface ScanWarning {
+  code: string;
+  message: string;
+  context?: Record<string, unknown>;
+}
 
 export interface Scan {
   id: string;
@@ -207,6 +219,12 @@ export interface Scan {
   high_count: number;
   medium_count: number;
   low_count: number;
+  warnings: ScanWarning[];
+  llm_input_tokens: number;
+  llm_output_tokens: number;
+  llm_request_count: number;
+  sast_finding_count: number;
+  confirmed_reachable_count: number;
   created_at: string;
 }
 
@@ -244,5 +262,43 @@ export interface ScanFinding {
   aliases: string[];
   actively_exploited: boolean;
   eol_date: string | null;
+  confirmed_reachable: boolean;
+  reachable_via_sast_fingerprint: string | null;
+  reachable_reasoning: string | null;
+  reachable_assessed_at: string | null;
+  reachable_model: string | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// SAST findings (M4)
+// ---------------------------------------------------------------------------
+
+export type SastTriageStatus = "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
+export type SastSeverity = "critical" | "high" | "medium" | "low" | "info";
+
+export interface SastFinding {
+  id: string;
+  scan_run_id: string;
+  scope_id: string;
+  fingerprint: string;
+  rule_id: string;
+  rule_name: string | null;
+  rule_message: string | null;
+  cwe_ids: string[];
+  severity: SastSeverity;
+  file_path: string;
+  start_line: number;
+  end_line: number | null;
+  snippet: string | null;
+  triage_status: SastTriageStatus;
+  triage_confidence: number | null;
+  triage_reasoning: string | null;
+  triage_model: string | null;
+  triage_input_tokens: number | null;
+  triage_output_tokens: number | null;
+  suppressed_at: string | null;
+  suppressed_by_user_id: string | null;
+  suppressed_reason: string | null;
   created_at: string;
 }

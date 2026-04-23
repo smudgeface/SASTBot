@@ -12,9 +12,30 @@ import { cloneOrRefresh } from "./services/repoCache.js";
 import { persistComponents, runCdxgen } from "./services/sbomService.js";
 import { queryAndPersistFindings } from "./services/osvService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
+import { runOpengrep, parseSarif, persistSastFindings } from "./services/sastService.js";
+import type { ScanWarning } from "./schemas.js";
+import type { Prisma } from "@prisma/client";
 
 const config = loadConfig();
 const logger = pino({ level: config.logLevel, name: "sastbot-worker" });
+
+// ---------------------------------------------------------------------------
+// Warning helper
+// ---------------------------------------------------------------------------
+
+async function appendWarning(scanRunId: string, warning: ScanWarning): Promise<void> {
+  // Read-modify-write: Prisma's JSONB doesn't support || concat natively, so we
+  // fetch the current array and push the new entry.
+  const run = await prisma.scanRun.findUnique({
+    where: { id: scanRunId },
+    select: { warnings: true },
+  });
+  const current = Array.isArray(run?.warnings) ? (run!.warnings as ScanWarning[]) : [];
+  await prisma.scanRun.update({
+    where: { id: scanRunId },
+    data: { warnings: [...current, warning] as unknown as Prisma.InputJsonValue },
+  });
+}
 
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
@@ -92,7 +113,39 @@ const worker = new Worker<ScanJobData>(
 
       const findings = [...cveFindings, ...eolFindings];
 
-      // ── Step 6: update severity summary counters ─────────────────────────
+      // ── Step 6: SAST via Opengrep ─────────────────────────────────────────
+      const analysisTypes = Array.isArray(repo.analysisTypes)
+        ? (repo.analysisTypes as string[])
+        : [];
+      if (analysisTypes.includes("sast")) {
+        log.info({ scanDir }, "[worker] running opengrep SAST");
+        const sarif = await runOpengrep(scanDir);
+        if (sarif === null) {
+          log.warn("[worker] opengrep binary missing — SAST skipped");
+          await appendWarning(scanRunId, {
+            code: "opengrep_missing",
+            message:
+              "Opengrep binary not found; SAST analysis skipped. Install opengrep in the backend image.",
+          });
+        } else {
+          const inputs = parseSarif(sarif, scanDir);
+          log.info({ inputCount: inputs.length }, "[worker] SARIF parsed");
+          const sastFindings = await persistSastFindings(
+            scanRunId,
+            run.scopeId,
+            run.orgId,
+            inputs,
+            prisma,
+          );
+          log.info({ count: sastFindings.length }, "[worker] SAST findings persisted");
+          await prisma.scanRun.update({
+            where: { id: scanRunId },
+            data: { sastFindingCount: sastFindings.length },
+          });
+        }
+      }
+
+      // ── Step 7: update SCA severity summary counters ─────────────────────
       const counts = { critical: 0, high: 0, medium: 0, low: 0 };
       for (const f of findings) {
         if (f.severity === "critical") counts.critical++;
