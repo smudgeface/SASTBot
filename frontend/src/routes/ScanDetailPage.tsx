@@ -588,7 +588,7 @@ function ScaFilterBar({
 }: ScaFilterBarProps) {
   const hasDevDeps = findings.some((f) => f.component_scope === "optional");
   const hasNoFix = findings.some((f) => f.finding_type === "cve" && !f.has_fix);
-  const hasReachability = findings.some((f) => f.reachable_assessed_at !== null);
+  const hasReachable = findings.some((f) => f.confirmed_reachable);
   const isFiltered =
     filterSeverities.size > 0 ||
     filterTypes.size > 0 ||
@@ -669,7 +669,7 @@ function ScaFilterBar({
               Has fix available
             </label>
           ) : null}
-          {hasReachability ? (
+          {hasReachable ? (
             <label className="flex items-center gap-1.5 cursor-pointer select-none">
               <input type="checkbox" checked={hideNonReachable} onChange={(e) => setHideNonReachable(e.target.checked)} className="rounded" />
               <Zap className="h-3 w-3 text-blue-500" />
@@ -904,7 +904,7 @@ export default function ScanDetailPage() {
       if (filterTypes.size > 0 && !filterTypes.has(f.finding_type)) return false;
       if (hideDevDeps && f.component_scope === "optional") return false;
       if (hideNoFix && f.finding_type === "cve" && !f.has_fix) return false;
-      if (hideNonReachable && f.finding_type === "cve" && f.reachable_assessed_at !== null && !f.confirmed_reachable) return false;
+      if (hideNonReachable && !f.confirmed_reachable) return false;
       return true;
     }),
   );
