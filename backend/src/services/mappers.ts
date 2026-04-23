@@ -229,7 +229,26 @@ export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
     ecosystem: c.ecosystem,
     licenses: c.licenses,
     component_type: c.componentType,
+    scope: c.scope,
   };
+}
+
+/**
+ * Returns true when the OSV advisory contains at least one "fixed" event,
+ * meaning a patched version is publicly available.
+ */
+function computeHasFix(detailJson: unknown): boolean {
+  if (!detailJson || typeof detailJson !== "object") return false;
+  const vuln = detailJson as Record<string, unknown>;
+  const affected = vuln.affected as Array<{
+    ranges?: Array<{ events?: Array<Record<string, unknown>> }>;
+  }> | undefined;
+  if (!Array.isArray(affected)) return false;
+  return affected.some((a) =>
+    a.ranges?.some((r) =>
+      r.events?.some((e) => "fixed" in e && e.fixed !== undefined),
+    ),
+  );
 }
 
 const ALLOWED_FINDING_TYPES: ReadonlyArray<FindingType> = ["cve", "eol", "deprecated"];
@@ -241,7 +260,7 @@ function toFindingType(value: string): FindingType {
 }
 
 export function scanFindingToOut(
-  f: ScanFinding & { component: Pick<SbomComponent, "name" | "version"> },
+  f: ScanFinding & { component: Pick<SbomComponent, "name" | "version" | "scope"> },
 ): ScanFindingOut {
   return {
     id: f.id,
@@ -249,6 +268,7 @@ export function scanFindingToOut(
     component_id: f.componentId,
     component_name: f.component.name,
     component_version: f.component.version,
+    component_scope: f.component.scope,
     finding_type: toFindingType(f.findingType),
     osv_id: f.osvId,
     cve_id: f.cveId,
@@ -259,6 +279,7 @@ export function scanFindingToOut(
     aliases: f.aliases,
     actively_exploited: f.activelyExploited,
     eol_date: f.eolDate ? f.eolDate.toISOString() : null,
+    has_fix: computeHasFix(f.detailJson),
     confirmed_reachable: f.confirmedReachable,
     reachable_via_sast_fingerprint: f.reachableViaSastFingerprint,
     reachable_reasoning: f.reachableReasoning,

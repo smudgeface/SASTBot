@@ -131,6 +131,9 @@ export async function persistComponents(
       ecosystem: extractEcosystem(c.purl),
       licenses: extractLicenses(c.licenses),
       componentType: c.type ?? "library",
+      // CycloneDX scope: "required" | "optional" | "excluded"
+      // npm devDependencies → scope="optional"
+      scope: (c as { scope?: string }).scope ?? null,
     })),
     skipDuplicates: true,
   });

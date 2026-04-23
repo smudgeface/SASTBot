@@ -128,25 +128,49 @@ function SummaryCard({
   );
 }
 
+function OptionalBadge() {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-zinc-100 text-zinc-500 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 cursor-default">
+          DEV
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Optional scope — dev dependency or indirect dependency not required for production</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function FindingTypeBadge({ finding }: { finding: ScanFinding }) {
   if (finding.finding_type === "eol") {
     return (
-      <span className={cn(
-        "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase",
-        severityChipClass(finding.severity),
-      )}>
-        EOL
-      </span>
+      <div className="flex items-center gap-1">
+        {finding.component_scope === "optional" ? <OptionalBadge /> : null}
+        <span className={cn(
+          "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase",
+          severityChipClass(finding.severity),
+        )}>
+          EOL
+        </span>
+      </div>
     );
   }
   if (finding.finding_type === "deprecated") {
     return (
-      <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900">
-        DEPRECATED
-      </span>
+      <div className="flex items-center gap-1">
+        {finding.component_scope === "optional" ? <OptionalBadge /> : null}
+        <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900">
+          DEPRECATED
+        </span>
+      </div>
     );
   }
-  return <SeverityBadge severity={finding.severity} />;
+  return (
+    <div className="flex items-center gap-1">
+      {finding.component_scope === "optional" ? <OptionalBadge /> : null}
+      <SeverityBadge severity={finding.severity} />
+    </div>
+  );
 }
 
 function ReachableIcon({ reasoning }: { reasoning?: string | null }) {
@@ -175,20 +199,20 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
         className="cursor-pointer hover:bg-muted/50"
         onClick={() => setExpanded((x) => !x)}
       >
-        <TableCell className="w-4">
-          {expanded ? (
-            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-          )}
-        </TableCell>
-        <TableCell>
-          <div className="flex items-center gap-1.5">
+        <TableCell className="w-8">
+          <div className="flex items-center gap-1">
+            {expanded ? (
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            )}
             {finding.confirmed_reachable ? (
               <ReachableIcon reasoning={finding.reachable_reasoning} />
             ) : null}
-            <FindingTypeBadge finding={finding} />
           </div>
+        </TableCell>
+        <TableCell>
+          <FindingTypeBadge finding={finding} />
         </TableCell>
         <TableCell className="font-medium">
           {finding.component_name}
@@ -529,6 +553,157 @@ function SastTab({
 }
 
 // ---------------------------------------------------------------------------
+// SCA filter bar
+// ---------------------------------------------------------------------------
+
+const SCA_SEVERITIES: FindingSeverity[] = ["critical", "high", "medium", "low", "unknown"];
+const SCA_TYPES: Array<{ value: string; label: string }> = [
+  { value: "cve", label: "CVE" },
+  { value: "eol", label: "EOL" },
+  { value: "deprecated", label: "Deprecated" },
+];
+
+interface ScaFilterBarProps {
+  findings: ScanFinding[];
+  filterSeverities: Set<string>;
+  setFilterSeverities: (s: Set<string>) => void;
+  filterTypes: Set<string>;
+  setFilterTypes: (s: Set<string>) => void;
+  hideDevDeps: boolean;
+  setHideDevDeps: (v: boolean) => void;
+  hideNoFix: boolean;
+  setHideNoFix: (v: boolean) => void;
+  hideNonReachable: boolean;
+  setHideNonReachable: (v: boolean) => void;
+}
+
+function ScaFilterBar({
+  findings,
+  filterSeverities,
+  setFilterSeverities,
+  filterTypes,
+  setFilterTypes,
+  hideDevDeps,
+  setHideDevDeps,
+  hideNoFix,
+  setHideNoFix,
+  hideNonReachable,
+  setHideNonReachable,
+}: ScaFilterBarProps) {
+  const hasDevDeps = findings.some((f) => f.component_scope === "optional");
+  const hasNoFix = findings.some((f) => f.finding_type === "cve" && !f.has_fix);
+  const hasReachability = findings.some((f) => f.reachable_assessed_at !== null);
+  const isFiltered =
+    filterSeverities.size > 0 ||
+    filterTypes.size > 0 ||
+    hideDevDeps ||
+    hideNoFix ||
+    hideNonReachable;
+
+  function toggleSeverity(s: string) {
+    const next = new Set(filterSeverities);
+    next.has(s) ? next.delete(s) : next.add(s);
+    setFilterSeverities(next);
+  }
+
+  function toggleType(t: string) {
+    const next = new Set(filterTypes);
+    next.has(t) ? next.delete(t) : next.add(t);
+    setFilterTypes(next);
+  }
+
+  return (
+    <div className="mb-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+        {/* Severity chips */}
+        <div className="flex items-center gap-1">
+          <span className="text-muted-foreground uppercase font-medium tracking-wide mr-1">Severity</span>
+          {SCA_SEVERITIES.map((s) => {
+            const active = filterSeverities.has(s);
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => toggleSeverity(s)}
+                className={cn(
+                  "rounded border px-2 py-0.5 text-xs font-semibold uppercase transition-opacity",
+                  active ? severityChipClass(s) : "bg-muted text-muted-foreground border-border opacity-50",
+                )}
+              >
+                {s}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Type chips */}
+        <div className="flex items-center gap-1">
+          <span className="text-muted-foreground uppercase font-medium tracking-wide mr-1">Type</span>
+          {SCA_TYPES.map(({ value, label }) => {
+            const active = filterTypes.has(value);
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => toggleType(value)}
+                className={cn(
+                  "rounded border px-2 py-0.5 text-xs font-medium transition-opacity",
+                  active
+                    ? "bg-foreground text-background border-foreground"
+                    : "bg-muted text-muted-foreground border-border opacity-50",
+                )}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Toggle filters */}
+        <div className="flex items-center gap-3">
+          {hasDevDeps ? (
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <input type="checkbox" checked={hideDevDeps} onChange={(e) => setHideDevDeps(e.target.checked)} className="rounded" />
+              Hide dev-only deps
+            </label>
+          ) : null}
+          {hasNoFix ? (
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <input type="checkbox" checked={hideNoFix} onChange={(e) => setHideNoFix(e.target.checked)} className="rounded" />
+              Has fix available
+            </label>
+          ) : null}
+          {hasReachability ? (
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <input type="checkbox" checked={hideNonReachable} onChange={(e) => setHideNonReachable(e.target.checked)} className="rounded" />
+              <Zap className="h-3 w-3 text-blue-500" />
+              Reachable only
+            </label>
+          ) : null}
+        </div>
+
+        {/* Clear */}
+        {isFiltered ? (
+          <button
+            type="button"
+            className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            onClick={() => {
+              setFilterSeverities(new Set());
+              setFilterTypes(new Set());
+              setHideDevDeps(false);
+              setHideNoFix(false);
+              setHideNonReachable(false);
+            }}
+          >
+            Clear filters
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Components tab
 // ---------------------------------------------------------------------------
 
@@ -692,16 +867,27 @@ export default function ScanDetailPage() {
   const currentUser = useAuthStore((s) => s.user);
   const isAdmin = currentUser?.role === "admin";
 
-  // Filter state
+  // SCA filter state
+  const [filterSeverities, setFilterSeverities] = useState<Set<string>>(new Set());
+  const [filterTypes, setFilterTypes] = useState<Set<string>>(new Set());
+  const [hideDevDeps, setHideDevDeps] = useState(false);
+  const [hideNoFix, setHideNoFix] = useState(false);
   const [hideNonReachable, setHideNonReachable] = useState(false);
+  // SAST filter state
   const [hideDismissedSast, setHideDismissedSast] = useState(false);
 
   const repoName = repos.data?.find((r) => r.id === scan.data?.repo_id)?.name;
   const allFindings = findings.data ?? [];
+
   const sorted = sortFindings(
-    hideNonReachable
-      ? allFindings.filter((f) => f.confirmed_reachable || f.finding_type !== "cve")
-      : allFindings,
+    allFindings.filter((f) => {
+      if (filterSeverities.size > 0 && !filterSeverities.has(f.severity)) return false;
+      if (filterTypes.size > 0 && !filterTypes.has(f.finding_type)) return false;
+      if (hideDevDeps && f.component_scope === "optional") return false;
+      if (hideNoFix && f.finding_type === "cve" && !f.has_fix) return false;
+      if (hideNonReachable && f.finding_type === "cve" && f.reachable_assessed_at !== null && !f.confirmed_reachable) return false;
+      return true;
+    }),
   );
 
   if (scan.isLoading) {
@@ -871,21 +1057,20 @@ export default function ScanDetailPage() {
           </TabsList>
 
           <TabsContent value="findings" className="mt-4">
-            {/* Filter bar */}
-            {allFindings.some((f) => f.reachable_assessed_at !== null) ? (
-              <div className="mb-3 flex items-center gap-2">
-                <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={hideNonReachable}
-                    onChange={(e) => setHideNonReachable(e.target.checked)}
-                    className="rounded"
-                  />
-                  <Zap className="h-3 w-3 text-blue-500" />
-                  Show only reachable
-                </label>
-              </div>
-            ) : null}
+            {/* Unified SCA filter bar */}
+            <ScaFilterBar
+              findings={allFindings}
+              filterSeverities={filterSeverities}
+              setFilterSeverities={setFilterSeverities}
+              filterTypes={filterTypes}
+              setFilterTypes={setFilterTypes}
+              hideDevDeps={hideDevDeps}
+              setHideDevDeps={setHideDevDeps}
+              hideNoFix={hideNoFix}
+              setHideNoFix={setHideNoFix}
+              hideNonReachable={hideNonReachable}
+              setHideNonReachable={setHideNonReachable}
+            />
             {findings.isLoading ? (
               <Card>
                 <CardContent className="p-6 text-sm text-muted-foreground">
@@ -896,7 +1081,7 @@ export default function ScanDetailPage() {
               <Card>
                 <CardContent className="p-6 flex items-center gap-3 text-sm text-muted-foreground">
                   <Package className="h-4 w-4 shrink-0" />
-                  {hideNonReachable ? "No reachable vulnerabilities in this scan." : "No vulnerabilities found in this scan."}
+                  No findings match the current filters.
                 </CardContent>
               </Card>
             ) : (
@@ -904,8 +1089,8 @@ export default function ScanDetailPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-4" />
-                      <TableHead className="w-32">Severity</TableHead>
+                      <TableHead className="w-8" />
+                      <TableHead className="w-28">Severity</TableHead>
                       <TableHead>Package</TableHead>
                       <TableHead>CVE / ID</TableHead>
                       <TableHead>Summary</TableHead>
