@@ -9,11 +9,20 @@ import {
   FileCode2,
   Package,
   ShieldAlert,
+  ScanSearch,
 } from "lucide-react";
 
-import { useScanDetail, useScanComponents, useScanFindings, useSbomJson } from "@/api/queries/scans";
+import {
+  useScanDetail,
+  useScanComponents,
+  useScanFindings,
+  useSbomJson,
+  useSastFindings,
+  useTriageSastFinding,
+} from "@/api/queries/scans";
 import { useRepos } from "@/api/queries/repos";
-import type { FindingSeverity, SbomComponent, ScanFinding } from "@/api/types";
+import type { FindingSeverity, SastFinding, SastTriageStatus, SbomComponent, ScanFinding } from "@/api/types";
+import { useAuthStore } from "@/stores/auth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -224,6 +233,202 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
 }
 
 // ---------------------------------------------------------------------------
+// SAST triage helpers
+// ---------------------------------------------------------------------------
+
+const TRIAGE_STATUS_LABEL: Record<SastTriageStatus, string> = {
+  pending: "Pending",
+  confirmed: "Confirmed",
+  false_positive: "False Positive",
+  suppressed: "Suppressed",
+  error: "Error",
+};
+
+function TriageBadge({ status }: { status: SastTriageStatus }) {
+  const cls = {
+    pending: "bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700",
+    confirmed: "bg-red-100 text-red-700 border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-900",
+    false_positive: "bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-900",
+    suppressed: "bg-zinc-100 text-zinc-400 border-zinc-200 line-through dark:bg-zinc-900 dark:text-zinc-500",
+    error: "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-900",
+  }[status];
+  return (
+    <span className={cn("inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-medium", cls)}>
+      {TRIAGE_STATUS_LABEL[status]}
+    </span>
+  );
+}
+
+function SastSeverityBadge({ severity }: { severity: string }) {
+  const cls =
+    severity === "high"
+      ? "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-900"
+      : severity === "medium"
+      ? "bg-yellow-100 text-yellow-700 border-yellow-200 dark:bg-yellow-950 dark:text-yellow-300 dark:border-yellow-900"
+      : severity === "low"
+      ? "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-900"
+      : severity === "critical"
+      ? "bg-red-100 text-red-700 border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-900"
+      : "bg-zinc-100 text-zinc-500 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700";
+  return (
+    <span className={cn("inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase", cls)}>
+      {severity}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SAST tab
+// ---------------------------------------------------------------------------
+
+function SastTab({ scanId, isAdmin }: { scanId: string; isAdmin: boolean }) {
+  const findings = useSastFindings(scanId);
+  const triage = useTriageSastFinding(scanId);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  if (findings.isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-sm text-muted-foreground">Loading SAST findings…</CardContent>
+      </Card>
+    );
+  }
+  if (!findings.data || findings.data.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-6 flex items-center gap-3 text-sm text-muted-foreground">
+          <ScanSearch className="h-4 w-4 shrink-0" />
+          No SAST findings for this scan.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-4" />
+            <TableHead className="w-24">Severity</TableHead>
+            <TableHead>Rule</TableHead>
+            <TableHead>File : Line</TableHead>
+            <TableHead className="w-32">Status</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {findings.data.map((f: SastFinding) => {
+            const isExpanded = expanded === f.id;
+            return (
+              <>
+                <TableRow
+                  key={f.id}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => setExpanded(isExpanded ? null : f.id)}
+                >
+                  <TableCell className="w-4">
+                    {isExpanded ? (
+                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <SastSeverityBadge severity={f.severity} />
+                  </TableCell>
+                  <TableCell className="text-sm font-medium">
+                    {f.rule_name ?? f.rule_id}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {f.file_path}:{f.start_line}
+                  </TableCell>
+                  <TableCell>
+                    <TriageBadge status={f.triage_status} />
+                  </TableCell>
+                </TableRow>
+                {isExpanded ? (
+                  <TableRow key={`${f.id}-detail`}>
+                    <TableCell colSpan={5} className="bg-muted/30 py-3 px-6">
+                      <div className="space-y-3 text-sm">
+                        {f.snippet ? (
+                          <pre className="rounded bg-background border p-3 text-xs overflow-x-auto font-mono whitespace-pre-wrap">
+                            {f.snippet}
+                          </pre>
+                        ) : null}
+                        {f.rule_message ? (
+                          <p className="text-muted-foreground">{f.rule_message}</p>
+                        ) : null}
+                        {f.triage_reasoning ? (
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase text-muted-foreground">LLM reasoning</p>
+                            <p className="text-xs">{f.triage_reasoning}</p>
+                          </div>
+                        ) : null}
+                        {f.cwe_ids.length > 0 ? (
+                          <div className="flex gap-1">
+                            {f.cwe_ids.map((cwe) => (
+                              <Badge key={cwe} variant="outline" className="font-mono text-xs">
+                                {cwe}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : null}
+                        {isAdmin && f.triage_status !== "suppressed" && f.triage_status !== "false_positive" ? (
+                          <div className="flex gap-2 pt-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-xs h-7"
+                              disabled={triage.isPending}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                triage.mutate({ findingId: f.id, status: "false_positive" });
+                              }}
+                            >
+                              Mark False Positive
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-xs h-7"
+                              disabled={triage.isPending}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                triage.mutate({ findingId: f.id, status: "suppressed" });
+                              }}
+                            >
+                              Suppress
+                            </Button>
+                            {f.triage_status !== "confirmed" ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-xs h-7 text-red-600"
+                                disabled={triage.isPending}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  triage.mutate({ findingId: f.id, status: "confirmed" });
+                                }}
+                              >
+                                Confirm
+                              </Button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Components tab
 // ---------------------------------------------------------------------------
 
@@ -384,6 +589,8 @@ export default function ScanDetailPage() {
   const components = useScanComponents(id);
   const repos = useRepos();
   const sbom = useSbomJson(id);
+  const currentUser = useAuthStore((s) => s.user);
+  const isAdmin = currentUser?.role === "admin";
 
   const repoName = repos.data?.find((r) => r.id === scan.data?.repo_id)?.name;
   const sorted = sortFindings(findings.data ?? []);
@@ -470,6 +677,20 @@ export default function ScanDetailPage() {
         </Card>
       ) : null}
 
+      {/* Warnings banner */}
+      {s.warnings && s.warnings.length > 0 ? (
+        <Card className="border-amber-200 dark:border-amber-900">
+          <CardContent className="p-4 space-y-1">
+            {s.warnings.map((w, i) => (
+              <div key={i} className="flex gap-2 text-sm text-amber-700 dark:text-amber-300">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{w.message}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* Summary cards */}
       {isTerminal && s.status === "success" ? (
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -500,6 +721,15 @@ export default function ScanDetailPage() {
               {s.component_count > 0 ? (
                 <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono">
                   {s.component_count}
+                </span>
+              ) : null}
+            </TabsTrigger>
+            <TabsTrigger value="sast" className="gap-1.5">
+              <ScanSearch className="h-3.5 w-3.5" />
+              SAST
+              {s.sast_finding_count > 0 ? (
+                <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono">
+                  {s.sast_finding_count}
                 </span>
               ) : null}
             </TabsTrigger>
@@ -548,6 +778,10 @@ export default function ScanDetailPage() {
               findings={findings.data ?? []}
               isLoading={components.isLoading}
             />
+          </TabsContent>
+
+          <TabsContent value="sast" className="mt-4">
+            <SastTab scanId={id!} isAdmin={isAdmin} />
           </TabsContent>
         </Tabs>
       ) : null}
