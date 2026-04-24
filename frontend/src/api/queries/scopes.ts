@@ -159,7 +159,7 @@ export function useDismissScaIssue() {
       reason,
     }: {
       issueId: string;
-      status: "active" | "acknowledged" | "wont_fix" | "false_positive";
+      status: "pending" | "confirmed" | "suppressed" | "false_positive";
       reason?: string;
     }) =>
       apiFetch<ScaIssue>(`/api/sca-issues/${issueId}/dismiss`, {

@@ -134,13 +134,21 @@ export async function linkScaIssueToTicket(
   }
 
   const ticket = await upsertJiraTicket(db, orgId, issueKey, meta, userId);
-  await db.scaIssue.update({ where: { id: scaIssueId }, data: { jiraTicketId: ticket.id } });
+  // Linking a ticket transitions the issue to "planned" regardless of prior status
+  await db.scaIssue.update({
+    where: { id: scaIssueId },
+    data: { jiraTicketId: ticket.id, dismissedStatus: "planned" },
+  });
   logger.info({ scaIssueId, issueKey }, "[jiraTicketService] SCA issue linked to Jira ticket");
   return ticket;
 }
 
 export async function unlinkScaIssue(db: Db, scaIssueId: string): Promise<void> {
-  await db.scaIssue.update({ where: { id: scaIssueId }, data: { jiraTicketId: null } });
+  // Revert to "confirmed" — the issue was real, it just no longer has a ticket
+  await db.scaIssue.update({
+    where: { id: scaIssueId },
+    data: { jiraTicketId: null, dismissedStatus: "confirmed" },
+  });
 }
 
 // ---------------------------------------------------------------------------

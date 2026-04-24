@@ -78,7 +78,7 @@ const SastIssuesQuerySchema = PaginationQuerySchema.extend({
 const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
   severity: toArray(SeveritySchema),
   finding_type: toArray(FindingTypeSchema),
-  dismissed_status: z.enum(["active", "confirmed", "acknowledged", "wont_fix", "false_positive"]).optional(),
+  dismissed_status: ScaDismissedStatusSchema.optional(),
   dismissed_statuses: toArray(ScaDismissedStatusSchema),
   has_jira_ticket: z.enum(["yes", "no"]).optional(),
   reachable: z.coerce.boolean().optional(),
@@ -137,12 +137,13 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       return Promise.all(scopes.map(async (scope) => {
         const repo = scope.repo as { name: string; defaultBranch: string };
 
+        const TERMINAL = ["suppressed", "false_positive", "fixed"] as string[];
         const activeWhere = (sev: string) => ({
-          scopeId: scope.id, dismissedStatus: "active", latestSeverity: sev,
+          scopeId: scope.id, dismissedStatus: { notIn: TERMINAL }, latestSeverity: sev,
         });
         const activeSastWhere = (sev: string) => ({
           scopeId: scope.id, latestSeverity: sev,
-          triageStatus: { notIn: ["suppressed", "false_positive", "fixed"] as string[] },
+          triageStatus: { notIn: TERMINAL },
         });
         const combined = async (sev: string) => {
           const [sca, sast] = await Promise.all([
@@ -159,18 +160,21 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           highCount,
           mediumCount,
           lowCount,
-          pendingTriageCount,
+          sastPendingCount,
+          scaPendingCount,
         ] = await Promise.all([
           prisma.sastIssue.count({
-            where: { scopeId: scope.id, triageStatus: { notIn: ["suppressed", "false_positive", "fixed"] } },
+            where: { scopeId: scope.id, triageStatus: { notIn: TERMINAL } },
           }),
-          prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "active" } }),
+          prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: { notIn: TERMINAL } } }),
           combined("critical"),
           combined("high"),
           combined("medium"),
           combined("low"),
           prisma.sastIssue.count({ where: { scopeId: scope.id, triageStatus: "pending" } }),
+          prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "pending" } }),
         ]);
+        const pendingTriageCount = sastPendingCount + scaPendingCount;
 
         return {
           id: scope.id,
@@ -226,12 +230,13 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       const repo = scope.repo as { name: string; defaultBranch: string };
       const lastScanRunId = scope.lastScanRunId;
 
+      const TERMINAL_D = ["suppressed", "false_positive", "fixed"] as string[];
       const activeWhereD = (sev: string) => ({
-        scopeId: scope.id, dismissedStatus: "active", latestSeverity: sev,
+        scopeId: scope.id, dismissedStatus: { notIn: TERMINAL_D }, latestSeverity: sev,
       });
       const activeSastWhereD = (sev: string) => ({
         scopeId: scope.id, latestSeverity: sev,
-        triageStatus: { notIn: ["suppressed", "false_positive", "fixed"] as string[] },
+        triageStatus: { notIn: TERMINAL_D },
       });
       const combinedD = async (sev: string) => {
         const [sca, sast] = await Promise.all([
@@ -248,19 +253,21 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         highCount,
         mediumCount,
         lowCount,
-        pendingTriageCount,
+        sastPendingCountD,
+        scaPendingCountD,
         resolvedSastCount,
         resolvedScaCount,
       ] = await Promise.all([
         prisma.sastIssue.count({
-          where: { scopeId: scope.id, triageStatus: { notIn: ["suppressed", "false_positive", "fixed"] } },
+          where: { scopeId: scope.id, triageStatus: { notIn: TERMINAL_D } },
         }),
-        prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "active" } }),
+        prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: { notIn: TERMINAL_D } } }),
         combinedD("critical"),
         combinedD("high"),
         combinedD("medium"),
         combinedD("low"),
         prisma.sastIssue.count({ where: { scopeId: scope.id, triageStatus: "pending" } }),
+        prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "pending" } }),
         lastScanRunId
           ? prisma.sastIssue.count({ where: { scopeId: scope.id, lastSeenScanRunId: { not: lastScanRunId } } })
           : 0,
@@ -268,6 +275,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           ? prisma.scaIssue.count({ where: { scopeId: scope.id, lastSeenScanRunId: { not: lastScanRunId } } })
           : 0,
       ]);
+      const pendingTriageCount = sastPendingCountD + scaPendingCountD;
 
       return {
         id: scope.id,
@@ -647,13 +655,14 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       if (!issue) return reply.code(404).send({ detail: "SCA issue not found" });
 
       const { status, reason } = req.body;
+      const isReopen = status === "pending";
       const updated = await prisma.scaIssue.update({
         where: { id: req.params.id },
         data: {
           dismissedStatus: status,
-          dismissedReason: status === "active" ? null : (reason ?? null),
-          dismissedAt: status === "active" ? null : new Date(),
-          dismissedByUserId: status === "active" ? null : (req.user?.id ?? null),
+          dismissedReason: isReopen ? null : (reason ?? null),
+          dismissedAt: isReopen ? null : new Date(),
+          dismissedByUserId: isReopen ? null : (req.user?.id ?? null),
         },
       });
 

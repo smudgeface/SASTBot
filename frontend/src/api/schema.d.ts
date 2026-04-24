@@ -2884,8 +2884,8 @@ export interface paths {
                     page_size?: number;
                     severity?: ("critical" | "high" | "medium" | "low" | "unknown")[];
                     finding_type?: ("cve" | "eol" | "deprecated")[];
-                    dismissed_status?: "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
-                    dismissed_statuses?: ("active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive")[];
+                    dismissed_status?: "pending" | "confirmed" | "planned" | "fixed" | "suppressed" | "false_positive";
+                    dismissed_statuses?: ("pending" | "confirmed" | "planned" | "fixed" | "suppressed" | "false_positive")[];
                     has_jira_ticket?: "yes" | "no";
                     reachable?: boolean;
                     has_fix?: boolean;
@@ -2918,7 +2918,7 @@ export interface paths {
                                 package_name: string;
                                 osv_id: string;
                                 /** @enum {string} */
-                                dismissed_status: "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
+                                dismissed_status: "pending" | "confirmed" | "planned" | "fixed" | "suppressed" | "false_positive";
                                 dismissed_at: string | null;
                                 /** Format: uuid */
                                 dismissed_by_user_id: string | null;
@@ -3282,7 +3282,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        status: "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
+                        status: "pending" | "confirmed" | "planned" | "fixed" | "suppressed" | "false_positive";
                         reason?: string;
                     };
                 };
@@ -3304,7 +3304,7 @@ export interface paths {
                             package_name: string;
                             osv_id: string;
                             /** @enum {string} */
-                            dismissed_status: "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
+                            dismissed_status: "pending" | "confirmed" | "planned" | "fixed" | "suppressed" | "false_positive";
                             dismissed_at: string | null;
                             /** Format: uuid */
                             dismissed_by_user_id: string | null;
@@ -3525,7 +3525,7 @@ export interface paths {
                             package_name: string;
                             osv_id: string;
                             /** @enum {string} */
-                            dismissed_status: "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
+                            dismissed_status: "pending" | "confirmed" | "planned" | "fixed" | "suppressed" | "false_positive";
                             dismissed_at: string | null;
                             /** Format: uuid */
                             dismissed_by_user_id: string | null;

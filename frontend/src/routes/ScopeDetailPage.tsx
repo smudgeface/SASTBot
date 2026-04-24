@@ -76,18 +76,6 @@ function SeverityBadge({ severity }: { severity: string }) {
   );
 }
 
-// Jira statusCategory colors — mirrors issue status palette for visual consistency
-const SC_COLORS: Record<string, string> = {
-  new:          "text-purple-600 border-purple-400 bg-purple-50 dark:bg-purple-950/30",
-  indeterminate:"text-blue-600 border-blue-400 bg-blue-50 dark:bg-blue-950",
-  done:         "text-green-600 border-green-400 bg-green-50 dark:bg-green-950",
-};
-const SC_LABELS: Record<string, string> = {
-  new:          "To do",
-  indeterminate:"In Progress",
-  done:         "Done",
-};
-
 // purple = to do (confirmed), blue = planned/in-progress, green = fixed/done, grey = dismissed
 const TRIAGE_COLORS: Record<string, string> = {
   pending:        "text-amber-600 border-amber-400",
@@ -109,22 +97,27 @@ const TRIAGE_LABELS: Record<string, string> = {
   error:          "Error",
 };
 
-// SCA dismissed status colors (mirrors TRIAGE_COLORS for consistency)
-const SCA_STATUS_COLORS: Record<string, string> = {
-  active:       "",
-  confirmed:    "text-purple-600 border-purple-400 bg-purple-50 dark:bg-purple-950/30",
-  acknowledged: "text-amber-600 border-amber-400",
-  wont_fix:     "text-slate-500 border-slate-400",
-  false_positive: "text-slate-500 border-slate-400",
-};
+// SCA now shares TRIAGE_COLORS/TRIAGE_LABELS — same state vocabulary as SAST.
+const SCA_STATUS_COLORS = TRIAGE_COLORS;
+const SCA_STATUS_LABELS = TRIAGE_LABELS;
 
-const SCA_STATUS_LABELS: Record<string, string> = {
-  active:         "Active",
-  confirmed:      "To do",
-  acknowledged:   "Acknowledged",
-  wont_fix:       "Won't fix",
-  false_positive: "Invalid",
-};
+/** Unified status badge for SAST + SCA rows.
+ *  When a Jira ticket is linked we always show "Planned" (a ticket implies planned/in-progress work).
+ *  Otherwise we render the triage/dismissed status badge. */
+function StatusBadge({
+  status,
+  hasJira,
+}: {
+  status: string;
+  hasJira: boolean;
+}) {
+  const effective = hasJira ? "planned" : status;
+  return (
+    <Badge variant="outline" className={`text-[10px] ${TRIAGE_COLORS[effective] ?? ""}`}>
+      {TRIAGE_LABELS[effective] ?? effective.replace(/_/g, " ")}
+    </Badge>
+  );
+}
 
 function TriageBadge({ status }: { status: string }) {
   return (
@@ -223,23 +216,6 @@ function ContextSnippet({
  * Shows "Planned · {sub-state}" tinted by statusCategory.
  * When Jira is "done" but the issue is still planned, shows an amber ⚠ attention indicator.
  */
-function JiraStatusPill({ ticket }: { ticket: JiraTicket }) {
-  const sc = ticket.status_category ?? "new";
-  const cls = SC_COLORS[sc] ?? SC_COLORS.new;
-  // "planned + done" = needs verification — amber warning
-  const needsAttention = sc === "done";
-  return (
-    <Badge
-      variant="outline"
-      className={`text-[10px] ${needsAttention ? "text-amber-600 border-amber-400 bg-amber-50 dark:bg-amber-950" : cls}`}
-      title={needsAttention ? "Jira ticket is done — confirm fix in next scan" : undefined}
-    >
-      {needsAttention && <AlertTriangle className="h-2.5 w-2.5 mr-0.5 inline" />}
-      {ticket.issue_key} · {SC_LABELS[sc] ?? sc}
-    </Badge>
-  );
-}
-
 /**
  * Full Jira card shown in the expanded row.
  * Displays all metadata plus prominent Refresh + Unlink buttons.
@@ -563,9 +539,7 @@ function SastIssueRow({
         </TableCell>
         <TableCell>
           <div className="flex flex-col gap-1 items-start">
-            {jiraTicket
-              ? <JiraStatusPill ticket={jiraTicket} />
-              : <TriageBadge status={issue.triage_status} />}
+            <StatusBadge status={issue.triage_status} hasJira={!!jiraTicket} />
           </div>
         </TableCell>
         <TableCell className="text-xs text-muted-foreground">
@@ -821,7 +795,7 @@ function ScaIssueRow({
     });
   };
 
-  const act = (status: "active" | "acknowledged" | "wont_fix" | "false_positive") => {
+  const act = (status: "pending" | "confirmed" | "suppressed" | "false_positive") => {
     dismiss.mutate({ issueId: issue.id, status });
   };
 
@@ -887,13 +861,7 @@ function ScaIssueRow({
         </TableCell>
         <TableCell>
           <div className="flex flex-col gap-1 items-start">
-            {jiraTicket
-              ? <JiraStatusPill ticket={jiraTicket} />
-              : issue.dismissed_status !== "active" && (
-                  <Badge variant="outline" className={`text-[10px] ${SCA_STATUS_COLORS[issue.dismissed_status] ?? "text-slate-500 border-slate-400"}`}>
-                    {SCA_STATUS_LABELS[issue.dismissed_status] ?? issue.dismissed_status.replace("_", " ")}
-                  </Badge>
-                )}
+            <StatusBadge status={issue.dismissed_status} hasJira={!!jiraTicket} />
           </div>
         </TableCell>
         <TableCell className="text-xs text-muted-foreground">
@@ -946,16 +914,13 @@ function ScaIssueRow({
             </div>
             {isAdmin && (
               <div className="flex flex-wrap gap-2 pt-1">
-                {issue.dismissed_status === "active" ? (
-                  // Active → show all decision buttons
+                {issue.dismissed_status === "pending" ? (
+                  // Pending → confirm as real issue, or dismiss
                   <>
                     <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("confirmed")}>
                       Confirm
                     </Button>
-                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("acknowledged")}>
-                      Acknowledge
-                    </Button>
-                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("wont_fix")}>
+                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("suppressed")}>
                       Won't fix
                     </Button>
                     <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("false_positive")}>
@@ -963,21 +928,36 @@ function ScaIssueRow({
                     </Button>
                   </>
                 ) : issue.dismissed_status === "confirmed" ? (
-                  // Confirmed (To do) → can dismiss or reopen
+                  // Confirmed (To do), no ticket yet → can still dismiss or reopen
                   <>
-                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("wont_fix")}>
+                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("suppressed")}>
                       Won't fix
                     </Button>
                     <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("false_positive")}>
                       Invalid
                     </Button>
-                    <Button size="sm" variant="ghost" disabled={dismiss.isPending} onClick={() => act("active")}>
+                    <Button size="sm" variant="ghost" disabled={dismiss.isPending} onClick={() => act("pending")}>
                       Reopen
                     </Button>
                   </>
+                ) : issue.dismissed_status === "planned" ? (
+                  // Planned (has Jira ticket) → can dismiss or reopen (unlinking resets to confirmed)
+                  <>
+                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("suppressed")}>
+                      Won't fix
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={dismiss.isPending} onClick={() => act("pending")}>
+                      Reopen
+                    </Button>
+                  </>
+                ) : issue.dismissed_status === "fixed" ? (
+                  // Fixed → can reopen if the fix was incorrect
+                  <Button size="sm" variant="ghost" disabled={dismiss.isPending} onClick={() => act("pending")}>
+                    Reopen
+                  </Button>
                 ) : (
-                  // All other terminal states → just Reopen
-                  <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("active")}>
+                  // suppressed / false_positive → just Reopen
+                  <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("pending")}>
                     Reopen
                   </Button>
                 )}
@@ -1015,7 +995,7 @@ function ScaIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highligh
     setFilters((f) => ({ ...f, page: 1, [key]: next.size > 0 ? [...next] : undefined }));
   }
 
-  const SCA_STATUSES = ["active", "confirmed", "acknowledged", "wont_fix", "false_positive"] as const;
+  const SCA_STATUSES = ["pending", "confirmed", "planned", "fixed", "suppressed", "false_positive"] as const;
   const TYPE_LABELS: Record<string, string> = { cve: "CVE", eol: "EOL", deprecated: "Deprecated" };
 
   const statusSet = new Set(filters.dismissed_statuses ?? []) as ReadonlySet<typeof SCA_STATUSES[number]>;
@@ -1347,7 +1327,7 @@ export default function ScopeDetailPage() {
               <Clock className="h-4 w-4 text-amber-500" />
               <div>
                 <div className="text-lg font-bold leading-none">{scope.pending_triage_count}</div>
-                <div className="text-xs text-muted-foreground">SAST pending</div>
+                <div className="text-xs text-muted-foreground">Pending</div>
               </div>
             </CardContent>
           </Card>

@@ -316,8 +316,8 @@ model ScaIssue {
   packageName                 String    @map("package_name")
   osvId                       String    @map("osv_id")
   // Decisions
-  dismissedStatus             String    @default("active") @map("dismissed_status")
-  // "active" | "acknowledged" | "wont_fix" | "false_positive"
+  dismissedStatus             String    @default("pending") @map("dismissed_status")
+  // "pending" | "confirmed" | "planned" | "fixed" | "suppressed" | "false_positive" — unified with SastIssue.triageStatus
   dismissedAt                 DateTime? @map("dismissed_at") @db.Timestamptz(6)
   dismissedByUserId           String?   @map("dismissed_by_user_id") @db.Uuid
   dismissedReason             String?   @map("dismissed_reason")
