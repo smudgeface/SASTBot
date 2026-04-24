@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowLeft,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -73,6 +74,82 @@ function SeverityBadge({ severity }: { severity: string }) {
     <Badge variant="outline" className={`uppercase text-[10px] px-1.5 ${SEVERITY_COLORS[severity] ?? SEVERITY_COLORS.unknown}`}>
       {severity}
     </Badge>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Severity summary — stacked bar + legend at top of scope page
+// ---------------------------------------------------------------------------
+
+const SEVERITY_BAR_COLOR: Record<"critical" | "high" | "medium" | "low", string> = {
+  critical: "bg-red-500",
+  high:     "bg-orange-500",
+  medium:   "bg-yellow-500",
+  low:      "bg-blue-500",
+};
+
+function SeveritySummary({
+  critical, high, medium, low, sca, sast, pending,
+}: {
+  critical: number; high: number; medium: number; low: number;
+  sca: number; sast: number; pending: number;
+}) {
+  const total = critical + high + medium + low;
+  const segments: { key: "critical" | "high" | "medium" | "low"; label: string; count: number }[] = [
+    { key: "critical", label: "Critical", count: critical },
+    { key: "high",     label: "High",     count: high },
+    { key: "medium",   label: "Medium",   count: medium },
+    { key: "low",      label: "Low",      count: low },
+  ];
+
+  return (
+    <Card>
+      <CardContent className="px-5 py-4 space-y-3">
+        {total === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            No open issues in this scope.
+          </div>
+        ) : (
+          <>
+            <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
+              {segments.filter(s => s.count > 0).map((s) => (
+                <div
+                  key={s.key}
+                  className={SEVERITY_BAR_COLOR[s.key]}
+                  style={{ width: `${(s.count / total) * 100}%` }}
+                  title={`${s.count} ${s.label}`}
+                />
+              ))}
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold leading-none">{total}</span>
+              <span className="text-sm text-muted-foreground">Open Issues</span>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+              {segments.map((s) => (
+                <span key={s.key} className="inline-flex items-center gap-1.5">
+                  <span className={`inline-block h-2.5 w-2.5 rounded-sm ${SEVERITY_BAR_COLOR[s.key]} ${s.count === 0 ? "opacity-30" : ""}`} />
+                  <span className={s.count === 0 ? "text-muted-foreground/60" : ""}>
+                    {s.count} {s.label}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+        <div className="flex flex-wrap gap-x-4 gap-y-1 pt-2 text-xs text-muted-foreground border-t">
+          <span><span className="font-medium text-foreground">{sca}</span> SCA</span>
+          <span><span className="font-medium text-foreground">{sast}</span> SAST</span>
+          {pending > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <Clock className="h-3 w-3 text-amber-500" />
+              <span className="font-medium text-foreground">{pending}</span> Pending triage
+            </span>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1348,64 +1425,17 @@ export default function ScopeDetailPage() {
         </Button>
       </div>
 
-      {/* Summary chips */}
-      <div className="flex flex-wrap gap-3">
-        <Card className="flex-none">
-          <CardContent className="px-4 py-3 flex items-center gap-2">
-            <ShieldAlert className="h-4 w-4 text-destructive" />
-            <div>
-              <div className="text-lg font-bold leading-none">{scope.active_sca_issue_count}</div>
-              <div className="text-xs text-muted-foreground">SCA issues</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="flex-none">
-          <CardContent className="px-4 py-3 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-orange-500" />
-            <div>
-              <div className="text-lg font-bold leading-none">{scope.active_sast_issue_count}</div>
-              <div className="text-xs text-muted-foreground">SAST issues</div>
-            </div>
-          </CardContent>
-        </Card>
-        {(scope.critical_count > 0 || scope.high_count > 0 || scope.medium_count > 0 || scope.low_count > 0) && (
-          <Card className="flex-none">
-            <CardContent className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
-              {scope.critical_count > 0 && (
-                <Badge variant="outline" className={SEVERITY_COLORS.critical}>
-                  {scope.critical_count} Critical
-                </Badge>
-              )}
-              {scope.high_count > 0 && (
-                <Badge variant="outline" className={SEVERITY_COLORS.high}>
-                  {scope.high_count} High
-                </Badge>
-              )}
-              {scope.medium_count > 0 && (
-                <Badge variant="outline" className={SEVERITY_COLORS.medium}>
-                  {scope.medium_count} Medium
-                </Badge>
-              )}
-              {scope.low_count > 0 && (
-                <Badge variant="outline" className={SEVERITY_COLORS.low}>
-                  {scope.low_count} Low
-                </Badge>
-              )}
-            </CardContent>
-          </Card>
-        )}
-        {scope.pending_triage_count > 0 && (
-          <Card className="flex-none">
-            <CardContent className="px-4 py-3 flex items-center gap-2">
-              <Clock className="h-4 w-4 text-amber-500" />
-              <div>
-                <div className="text-lg font-bold leading-none">{scope.pending_triage_count}</div>
-                <div className="text-xs text-muted-foreground">Pending</div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-      </div>
+      {/* Summary: stacked severity bar + totals */}
+      <SeveritySummary
+        critical={scope.critical_count}
+        high={scope.high_count}
+        medium={scope.medium_count}
+        low={scope.low_count}
+        sca={scope.active_sca_issue_count}
+        sast={scope.active_sast_issue_count}
+        pending={scope.pending_triage_count}
+      />
+
 
       {/* Main tabs */}
       <Tabs defaultValue="sca">
