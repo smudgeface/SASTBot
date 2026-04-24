@@ -74,30 +74,53 @@ function SeverityBadge({ severity }: { severity: string }) {
   );
 }
 
+// Jira statusCategory colors — mirrors issue status palette for visual consistency
+const SC_COLORS: Record<string, string> = {
+  new:          "text-purple-600 border-purple-400 bg-purple-50 dark:bg-purple-950/30",
+  indeterminate:"text-blue-600 border-blue-400 bg-blue-50 dark:bg-blue-950",
+  done:         "text-green-600 border-green-400 bg-green-50 dark:bg-green-950",
+};
+const SC_LABELS: Record<string, string> = {
+  new:          "To do",
+  indeterminate:"In Progress",
+  done:         "Done",
+};
+
+// purple = to do (confirmed), blue = planned/in-progress, green = fixed/done, grey = dismissed
 const TRIAGE_COLORS: Record<string, string> = {
-  pending: "text-amber-600 border-amber-400",
-  confirmed: "text-red-600 border-red-400",
-  planned: "text-blue-600 border-blue-400",
-  fixed: "text-green-600 border-green-400",
+  pending:        "text-amber-600 border-amber-400",
+  confirmed:      "text-purple-600 border-purple-400 bg-purple-50 dark:bg-purple-950/30",
+  planned:        "text-blue-600 border-blue-400",
+  fixed:          "text-green-600 border-green-400",
   false_positive: "text-slate-500 border-slate-400",
-  suppressed: "text-slate-500 border-slate-400",
-  error: "text-destructive border-destructive",
+  suppressed:     "text-slate-500 border-slate-400",
+  error:          "text-destructive border-destructive",
 };
 
 const TRIAGE_LABELS: Record<string, string> = {
-  pending: "pending",
-  confirmed: "confirmed",
-  planned: "planned",
-  fixed: "fixed",
+  pending:        "pending",
+  confirmed:      "To do",      // "confirmed" = we know it's real, not yet planned
+  planned:        "planned",
+  fixed:          "fixed",
   false_positive: "invalid",
-  suppressed: "won't fix",
-  error: "error",
+  suppressed:     "won't fix",
+  error:          "error",
+};
+
+// SCA dismissed status colors (mirrors TRIAGE_COLORS for consistency)
+const SCA_STATUS_COLORS: Record<string, string> = {
+  active:       "",
+  confirmed:    "text-purple-600 border-purple-400 bg-purple-50 dark:bg-purple-950/30",
+  acknowledged: "text-amber-600 border-amber-400",
+  wont_fix:     "text-slate-500 border-slate-400",
+  false_positive: "text-slate-500 border-slate-400",
 };
 
 const SCA_STATUS_LABELS: Record<string, string> = {
-  active: "active",
-  acknowledged: "acknowledged",
-  wont_fix: "won't fix",
+  active:         "active",
+  confirmed:      "To do",
+  acknowledged:   "acknowledged",
+  wont_fix:       "won't fix",
   false_positive: "invalid",
 };
 
@@ -192,17 +215,6 @@ function ContextSnippet({
 // ---------------------------------------------------------------------------
 // Jira ticket components
 // ---------------------------------------------------------------------------
-
-const SC_COLORS: Record<string, string> = {
-  new: "text-slate-500 border-slate-400 bg-slate-50 dark:bg-slate-900",
-  indeterminate: "text-blue-600 border-blue-400 bg-blue-50 dark:bg-blue-950",
-  done: "text-green-600 border-green-400 bg-green-50 dark:bg-green-950",
-};
-const SC_LABELS: Record<string, string> = {
-  new: "To do",
-  indeterminate: "In Progress",
-  done: "Done",
-};
 
 /**
  * Compact badge for the Status column when an issue has a linked Jira ticket.
@@ -588,7 +600,7 @@ function SastIssueRow({
                 {(issue.triage_status === "pending" || issue.triage_status === "error") ? (
                   // Open/pending → show decision buttons
                   <>
-                    <Button size="sm" variant="destructive" disabled={triage.isPending} onClick={() => act("confirmed")}>
+                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("confirmed")}>
                       Confirm
                     </Button>
                     <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("suppressed")}>
@@ -861,7 +873,7 @@ function ScaIssueRow({
             {jiraTicket
               ? <JiraStatusPill ticket={jiraTicket} />
               : issue.dismissed_status !== "active" && (
-                  <Badge variant="outline" className="capitalize text-[10px] text-slate-500 border-slate-400">
+                  <Badge variant="outline" className={`capitalize text-[10px] ${SCA_STATUS_COLORS[issue.dismissed_status] ?? "text-slate-500 border-slate-400"}`}>
                     {SCA_STATUS_LABELS[issue.dismissed_status] ?? issue.dismissed_status.replace("_", " ")}
                   </Badge>
                 )}
@@ -917,13 +929,12 @@ function ScaIssueRow({
             </div>
             {isAdmin && (
               <div className="flex flex-wrap gap-2 pt-1">
-                {issue.dismissed_status !== "active" && (
-                  <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("active")}>
-                    Reopen
-                  </Button>
-                )}
-                {issue.dismissed_status === "active" && (
+                {issue.dismissed_status === "active" ? (
+                  // Active → show all decision buttons
                   <>
+                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("confirmed")}>
+                      Confirm
+                    </Button>
                     <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("acknowledged")}>
                       Acknowledge
                     </Button>
@@ -934,6 +945,24 @@ function ScaIssueRow({
                       Invalid
                     </Button>
                   </>
+                ) : issue.dismissed_status === "confirmed" ? (
+                  // Confirmed (To do) → can dismiss or reopen
+                  <>
+                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("wont_fix")}>
+                      Won't fix
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("false_positive")}>
+                      Invalid
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={dismiss.isPending} onClick={() => act("active")}>
+                      Reopen
+                    </Button>
+                  </>
+                ) : (
+                  // All other terminal states → just Reopen
+                  <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("active")}>
+                    Reopen
+                  </Button>
                 )}
               </div>
             )}

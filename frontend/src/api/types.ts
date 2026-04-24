@@ -301,7 +301,7 @@ export interface SastFinding {
 // Issues (M5) — stable identity rows
 // ---------------------------------------------------------------------------
 
-export type ScaDismissedStatus = "active" | "acknowledged" | "wont_fix" | "false_positive";
+export type ScaDismissedStatus = "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
 
 export interface SastIssue {
   id: string;
