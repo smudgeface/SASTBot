@@ -12,7 +12,7 @@ import { cloneOrRefresh } from "./services/repoCache.js";
 import { persistComponents, runCdxgen } from "./services/sbomService.js";
 import { queryAndPersistFindings } from "./services/osvService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
-import { runOpengrep, parseSarif, persistSastFindings } from "./services/sastService.js";
+import { runOpengrep, parseSarif, persistSastFindings, backfillSastContextSnippets } from "./services/sastService.js";
 import { triageFindings } from "./services/llmTriageService.js";
 import { assessReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
@@ -114,6 +114,10 @@ async function backfillLlmSummaries(): Promise<void> {
 
 backfillLlmSummaries().catch((err) => {
   logger.warn({ err }, "[worker] backfill failed — will retry on next scan");
+});
+
+backfillSastContextSnippets(prisma).catch((err) => {
+  logger.warn({ err }, "[worker] SAST context backfill failed");
 });
 
 const worker = new Worker<ScanJobData>(
