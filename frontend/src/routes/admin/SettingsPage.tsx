@@ -98,37 +98,52 @@ export default function SettingsPage() {
     };
   };
 
-  const onSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const payload: AdminSettingsUpdate = {
-      jira_base_url: jiraBaseUrl.trim() || null,
-      jira_email: jiraEmail.trim() || null,
-      jira_credential_id: jiraCredChoice === "existing" ? jiraCredId || null : null,
-      jira_credential: buildJiraCred(),
-      llm_base_url: llmBaseUrl.trim() || null,
-      llm_api_format: llmApiFormat,
-      llm_model: llmModel.trim() || null,
-      llm_credential_id: llmCredChoice === "existing" ? llmCredId || null : null,
-      llm_credential: buildLlmCred(),
-      llm_triage_token_budget: llmTokenBudget,
-      reachability_cvss_threshold: reachabilityCvss,
-    };
+  const buildPayload = (): AdminSettingsUpdate => ({
+    jira_base_url: jiraBaseUrl.trim() || null,
+    jira_email: jiraEmail.trim() || null,
+    jira_credential_id: jiraCredChoice === "existing" ? jiraCredId || null : null,
+    jira_credential: buildJiraCred(),
+    llm_base_url: llmBaseUrl.trim() || null,
+    llm_api_format: llmApiFormat,
+    llm_model: llmModel.trim() || null,
+    llm_credential_id: llmCredChoice === "existing" ? llmCredId || null : null,
+    llm_credential: buildLlmCred(),
+    llm_triage_token_budget: llmTokenBudget,
+    reachability_cvss_threshold: reachabilityCvss,
+  });
 
+  /** Save current form state; used by Save and by the Check-connection buttons
+   *  so users don't need to remember to click Save before testing. */
+  const persist = async (): Promise<boolean> => {
     try {
-      await updateSettings.mutateAsync(payload);
-      toast({ title: "Settings saved" });
-      // Clear fresh credential fields after save to avoid re-submitting.
+      await updateSettings.mutateAsync(buildPayload());
+      // Clear fresh credential fields after save to avoid re-submitting them.
       setJiraNewName("");
       setJiraNewValue("");
       setLlmNewName("");
       setLlmNewValue("");
+      return true;
     } catch (err) {
       toast({
         variant: "destructive",
         title: "Failed to save settings",
         description: err instanceof Error ? err.message : "Unknown error",
       });
+      return false;
     }
+  };
+
+  const onSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (await persist()) toast({ title: "Settings saved" });
+  };
+
+  const onCheckJira = async () => {
+    if (await persist()) checkJira.mutate();
+  };
+
+  const onCheckLlm = async () => {
+    if (await persist()) checkLlm.mutate();
   };
 
   return (
@@ -189,10 +204,11 @@ export default function SettingsPage() {
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={checkJira.isPending}
-                onClick={() => checkJira.mutate()}
+                disabled={checkJira.isPending || updateSettings.isPending}
+                onClick={onCheckJira}
+                title="Saves settings and then tests the connection"
               >
-                {checkJira.isPending ? "Checking…" : "Check connection"}
+                {updateSettings.isPending ? "Saving…" : checkJira.isPending ? "Checking…" : "Save & test connection"}
               </Button>
               {checkJira.data && (
                 <span className={`text-sm ${checkJira.data.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>
@@ -276,10 +292,11 @@ export default function SettingsPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={checkLlm.isPending}
-                  onClick={() => checkLlm.mutate()}
+                  disabled={checkLlm.isPending || updateSettings.isPending}
+                  onClick={onCheckLlm}
+                  title="Saves settings and then tests the connection"
                 >
-                  {checkLlm.isPending ? "Checking…" : "Check connection"}
+                  {updateSettings.isPending ? "Saving…" : checkLlm.isPending ? "Checking…" : "Save & test connection"}
                 </Button>
                 {checkLlm.data ? (
                   <span
