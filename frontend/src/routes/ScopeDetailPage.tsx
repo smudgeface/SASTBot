@@ -173,6 +173,19 @@ function VulnLink({ id, className }: { id: string; className?: string }) {
   );
 }
 
+/**
+ * Derive a short one-line summary from a verbose rule message. Returns the
+ * first sentence, capped at 100 chars. Used when no LLM summary exists yet.
+ */
+function shortRuleSummary(msg: string | null | undefined): string | null {
+  if (!msg) return null;
+  const trimmed = msg.trim();
+  // First sentence: up to first ". " followed by uppercase/backtick, or period at end.
+  const match = trimmed.match(/^[^.!?]*[.!?](?=\s|$)/);
+  const first = match ? match[0] : trimmed;
+  return first.length > 100 ? first.slice(0, 99).trimEnd() + "…" : first;
+}
+
 // ---------------------------------------------------------------------------
 // Code snippet with highlighted match line
 // ---------------------------------------------------------------------------
@@ -197,6 +210,9 @@ function ContextSnippet({
   const lines = snippet.split("\n");
   // If the snippet only has one line (no context), highlight that line.
   const highlightIdx = lines.length === 1 ? 0 : Math.min(CONTEXT_LINES, matchLine - 1);
+  // Absolute file line number of snippet[0]: match line minus the count of
+  // context lines preceding it within the snippet.
+  const firstLineNumber = matchLine - highlightIdx;
 
   return (
     <div className={`overflow-x-auto rounded border bg-background text-xs font-mono ${className ?? ""}`}>
@@ -204,9 +220,13 @@ function ContextSnippet({
         <tbody>
           {lines.map((line, i) => {
             const isMatch = i === highlightIdx;
+            const lineNumber = firstLineNumber + i;
             return (
               <tr key={i} className={isMatch ? "bg-yellow-50 dark:bg-yellow-950/40" : ""}>
-                <td className="select-none px-2 py-0.5 text-right text-muted-foreground/50 w-8 border-r border-border">
+                <td className="select-none px-2 py-0.5 text-right text-muted-foreground/50 w-10 border-r border-border tabular-nums">
+                  {lineNumber}
+                </td>
+                <td className="select-none px-1 py-0.5 text-center text-muted-foreground/60 w-4">
                   {isMatch ? "→" : " "}
                 </td>
                 <td className={`px-3 py-0.5 whitespace-pre ${isMatch ? "font-semibold" : ""}`}>
@@ -525,7 +545,9 @@ function SastIssueRow({
         <TableCell>
           <div className="flex items-center gap-1 group/summary">
             <span className="text-sm truncate">
-              {issue.latest_llm_summary ?? issue.latest_rule_message ?? issue.latest_rule_id.split(".").pop()?.replace(/-/g, " ")}
+              {issue.latest_llm_summary
+                ?? shortRuleSummary(issue.latest_rule_message)
+                ?? issue.latest_rule_id.split(".").pop()?.replace(/-/g, " ")}
             </span>
             <button
               onClick={copyLink}
