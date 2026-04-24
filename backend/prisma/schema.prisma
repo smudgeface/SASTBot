@@ -197,6 +197,7 @@ model SbomComponent {
   licenses      String[]
   componentType String   @default("library") @map("component_type")
   scope         String?
+  manifestFile  String?  @map("manifest_file")  // e.g. "package-lock.json"
 
   scanRun  ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
   findings ScanFinding[]
@@ -338,6 +339,10 @@ model ScaIssue {
   latestActivelyExploited     Boolean   @default(false) @map("latest_actively_exploited")
   latestEolDate               DateTime? @map("latest_eol_date") @db.Timestamptz(6)
   latestHasFix                Boolean   @default(false) @map("latest_has_fix")
+  // Origin: the manifest (e.g. package-lock.json) where this dep is declared.
+  latestManifestFile          String?   @map("latest_manifest_file")
+  latestManifestLine          Int?      @map("latest_manifest_line")
+  latestManifestSnippet       String?   @map("latest_manifest_snippet")
   // Reachability (latest assessment; overwritten each scan the issue is detected in)
   confirmedReachable          Boolean   @default(false) @map("confirmed_reachable")
   reachableViaSastFingerprint String?   @map("reachable_via_sast_fingerprint")

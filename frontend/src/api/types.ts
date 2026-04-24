@@ -357,6 +357,9 @@ export interface ScaIssue {
   latest_actively_exploited: boolean;
   latest_eol_date: string | null;
   latest_has_fix: boolean;
+  latest_manifest_file: string | null;
+  latest_manifest_line: number | null;
+  latest_manifest_snippet: string | null;
   confirmed_reachable: boolean;
   reachable_via_sast_fingerprint: string | null;
   reachable_reasoning: string | null;
