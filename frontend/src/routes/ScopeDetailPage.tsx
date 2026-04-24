@@ -252,14 +252,13 @@ function SastIssueRow({ issue, isAdmin }: { issue: SastIssue; isAdmin: boolean }
         <TableCell>
           <SeverityBadge severity={issue.latest_severity} />
         </TableCell>
-        <TableCell className="max-w-xs">
-          <div className="font-mono text-xs truncate">{issue.latest_rule_id}</div>
-          {issue.latest_rule_message && (
-            <div className="text-xs text-muted-foreground truncate">{issue.latest_rule_message}</div>
-          )}
-        </TableCell>
-        <TableCell className="text-xs text-muted-foreground font-mono">
+        <TableCell className="text-xs text-muted-foreground font-mono whitespace-nowrap">
           {issue.latest_file_path}:{issue.latest_start_line}
+        </TableCell>
+        <TableCell className="max-w-sm">
+          <div className="text-sm text-muted-foreground truncate">
+            {issue.latest_rule_message ?? issue.latest_rule_id.split(".").pop()?.replace(/-/g, " ")}
+          </div>
         </TableCell>
         <TableCell>
           <TriageBadge status={issue.triage_status} />
@@ -282,9 +281,12 @@ function SastIssueRow({ issue, isAdmin }: { issue: SastIssue; isAdmin: boolean }
                 {issue.triage_reasoning}
               </p>
             )}
-            {issue.latest_cwe_ids?.length > 0 && (
-              <p className="mb-3 text-xs text-muted-foreground">CWE: {issue.latest_cwe_ids.join(", ")}</p>
-            )}
+            <div className="mb-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
+              <span><span className="font-medium">Rule: </span><span className="font-mono">{issue.latest_rule_id}</span></span>
+              {issue.latest_cwe_ids?.length > 0 && (
+                <span><span className="font-medium">CWE: </span>{issue.latest_cwe_ids.join(", ")}</span>
+              )}
+            </div>
             {isAdmin && (
               <div className="flex flex-wrap gap-2 pt-1">
                 {/* Open → show action buttons; triaged → show only Reopen */}
@@ -389,8 +391,8 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
                 <TableRow>
                   <TableHead className="w-6" />
                   <TableHead>Severity</TableHead>
-                  <TableHead>Rule</TableHead>
                   <TableHead>Location</TableHead>
+                  <TableHead>Summary</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Last seen</TableHead>
                 </TableRow>
