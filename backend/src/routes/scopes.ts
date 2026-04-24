@@ -6,6 +6,8 @@ import { prisma } from "../db.js";
 import {
   ErrorSchema,
   IdParamsSchema,
+  JiraTicketOutSchema,
+  LinkJiraTicketBodySchema,
   PaginatedSchema,
   PaginationQuerySchema,
   SastIssueListSchema,
@@ -19,7 +21,8 @@ import {
   SeveritySchema,
   FindingTypeSchema,
 } from "../schemas.js";
-import { sastIssueToOut, scaIssueToOut, scanRunToOut, sbomComponentToOut } from "../services/mappers.js";
+import { jiraTicketToOut, sastIssueToOut, scaIssueToOut, scanRunToOut, sbomComponentToOut } from "../services/mappers.js";
+import { linkSastIssueToTicket, linkScaIssueToTicket, refreshTicket, unlinkSastIssue, unlinkScaIssue } from "../services/jiraTicketService.js";
 
 // ---------------------------------------------------------------------------
 // Scope list / detail schemas
@@ -724,6 +727,133 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return scaIssueToOut(updated);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Jira ticket linking — SAST
+  // ---------------------------------------------------------------------------
+
+  typed.post(
+    "/api/sast-issues/:id/jira-ticket",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["issues"],
+        summary: "Link a Jira ticket to a SAST issue (fetches metadata immediately)",
+        params: IdParamsSchema,
+        body: LinkJiraTicketBodySchema,
+        response: { 200: JiraTicketOutSchema, 400: ErrorSchema, 401: ErrorSchema, 403: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const issue = await prisma.sastIssue.findFirst({ where: { id: req.params.id, orgId: orgId ?? null } });
+      if (!issue) return reply.code(404).send({ detail: "SAST issue not found" });
+      try {
+        const ticket = await linkSastIssueToTicket(prisma, orgId, issue.id, req.body.issue_key.toUpperCase(), req.user?.id ?? null);
+        return jiraTicketToOut(ticket);
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        const msg = err instanceof Error ? err.message : String(err);
+        return reply.code(code === "INVALID_KEY" || code === "NOT_CONFIGURED" ? 400 : 400).send({ detail: msg });
+      }
+    },
+  );
+
+  typed.delete(
+    "/api/sast-issues/:id/jira-ticket",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["issues"],
+        summary: "Unlink Jira ticket from a SAST issue",
+        params: IdParamsSchema,
+        response: { 204: z.null(), 401: ErrorSchema, 403: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const issue = await prisma.sastIssue.findFirst({ where: { id: req.params.id, orgId: orgId ?? null } });
+      if (!issue) return reply.code(404).send({ detail: "SAST issue not found" });
+      await unlinkSastIssue(prisma, issue.id);
+      return reply.code(204).send();
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Jira ticket linking — SCA
+  // ---------------------------------------------------------------------------
+
+  typed.post(
+    "/api/sca-issues/:id/jira-ticket",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["issues"],
+        summary: "Link a Jira ticket to a SCA issue (fetches metadata immediately)",
+        params: IdParamsSchema,
+        body: LinkJiraTicketBodySchema,
+        response: { 200: JiraTicketOutSchema, 400: ErrorSchema, 401: ErrorSchema, 403: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const issue = await prisma.scaIssue.findFirst({ where: { id: req.params.id, orgId: orgId ?? null } });
+      if (!issue) return reply.code(404).send({ detail: "SCA issue not found" });
+      try {
+        const ticket = await linkScaIssueToTicket(prisma, orgId, issue.id, req.body.issue_key.toUpperCase(), req.user?.id ?? null);
+        return jiraTicketToOut(ticket);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return reply.code(400).send({ detail: msg });
+      }
+    },
+  );
+
+  typed.delete(
+    "/api/sca-issues/:id/jira-ticket",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["issues"],
+        summary: "Unlink Jira ticket from a SCA issue",
+        params: IdParamsSchema,
+        response: { 204: z.null(), 401: ErrorSchema, 403: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const issue = await prisma.scaIssue.findFirst({ where: { id: req.params.id, orgId: orgId ?? null } });
+      if (!issue) return reply.code(404).send({ detail: "SCA issue not found" });
+      await unlinkScaIssue(prisma, issue.id);
+      return reply.code(204).send();
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Jira ticket on-demand refresh
+  // ---------------------------------------------------------------------------
+
+  typed.post(
+    "/admin/jira-tickets/:key/refresh",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["jira"],
+        summary: "Force-refresh a Jira ticket from the remote API",
+        params: z.object({ key: z.string() }),
+        response: { 200: JiraTicketOutSchema, 401: ErrorSchema, 403: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      try {
+        const ticket = await refreshTicket(prisma, orgId, req.params.key.toUpperCase());
+        return jiraTicketToOut(ticket);
+      } catch (err) {
+        return reply.code(404).send({ detail: err instanceof Error ? err.message : String(err) });
+      }
     },
   );
 };

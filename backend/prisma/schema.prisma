@@ -374,6 +374,7 @@ model JiraTicket {
   summary        String?
   status         String?
   statusCategory String?   @map("status_category") // "new" | "indeterminate" | "done"
+  resolution     String?   // raw resolution name e.g. "Done", "Won't Do", "Invalid"
   assigneeName   String?   @map("assignee_name")
   assigneeEmail  String?   @map("assignee_email")
   fixVersions    String[]  @default([]) @map("fix_versions")
