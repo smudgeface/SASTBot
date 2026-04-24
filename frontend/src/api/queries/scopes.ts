@@ -137,7 +137,7 @@ export function useTriageSastIssue() {
       reason,
     }: {
       issueId: string;
-      status: "confirmed" | "false_positive" | "suppressed" | "pending";
+      status: "confirmed" | "false_positive" | "suppressed" | "pending" | "fixed";
       reason?: string;
     }) =>
       apiFetch<SastIssue>(`/api/sast-issues/${issueId}/triage`, {
@@ -159,7 +159,7 @@ export function useDismissScaIssue() {
       reason,
     }: {
       issueId: string;
-      status: "pending" | "confirmed" | "suppressed" | "false_positive";
+      status: "pending" | "confirmed" | "suppressed" | "false_positive" | "planned" | "fixed";
       reason?: string;
     }) =>
       apiFetch<ScaIssue>(`/api/sca-issues/${issueId}/dismiss`, {

@@ -596,7 +596,7 @@ function SastIssueRow({
     });
   };
 
-  const act = (status: "confirmed" | "false_positive" | "suppressed" | "pending") => {
+  const act = (status: "confirmed" | "false_positive" | "suppressed" | "pending" | "fixed") => {
     triage.mutate({ issueId: issue.id, status });
   };
 
@@ -722,8 +722,11 @@ function SastIssueRow({
                     </Button>
                   </>
                 ) : issue.triage_status === "confirmed" ? (
-                  // Confirmed, no ticket yet → can still dismiss or reopen
+                  // Confirmed (To do) → can mark fixed, dismiss, or reopen
                   <>
+                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("fixed")}>
+                      Mark fixed
+                    </Button>
                     <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("suppressed")}>
                       Won't fix
                     </Button>
@@ -735,10 +738,17 @@ function SastIssueRow({
                     </Button>
                   </>
                 ) : issue.triage_status === "planned" ? (
-                  // Planned (has Jira ticket) → can dismiss or reopen (unlink removes planned state)
+                  // Planned (Jira ticket linked) → can mark fixed, dismiss, or reopen.
+                  // Unlinking the ticket reverts to Confirmed (handled server-side).
                   <>
+                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("fixed")}>
+                      Mark fixed
+                    </Button>
                     <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("suppressed")}>
                       Won't fix
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("false_positive")}>
+                      Invalid
                     </Button>
                     <Button size="sm" variant="ghost" disabled={triage.isPending} onClick={() => act("pending")}>
                       Reopen
@@ -920,7 +930,7 @@ function ScaIssueRow({
     });
   };
 
-  const act = (status: "pending" | "confirmed" | "suppressed" | "false_positive") => {
+  const act = (status: "pending" | "confirmed" | "suppressed" | "false_positive" | "fixed") => {
     dismiss.mutate({ issueId: issue.id, status });
   };
 
@@ -1086,8 +1096,11 @@ function ScaIssueRow({
                     </Button>
                   </>
                 ) : issue.dismissed_status === "confirmed" ? (
-                  // Confirmed (To do), no ticket yet → can still dismiss or reopen
+                  // Confirmed (To do) → can mark fixed, dismiss, or reopen
                   <>
+                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("fixed")}>
+                      Mark fixed
+                    </Button>
                     <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("suppressed")}>
                       Won't fix
                     </Button>
@@ -1099,10 +1112,17 @@ function ScaIssueRow({
                     </Button>
                   </>
                 ) : issue.dismissed_status === "planned" ? (
-                  // Planned (has Jira ticket) → can dismiss or reopen (unlinking resets to confirmed)
+                  // Planned (Jira ticket linked) → can mark fixed, dismiss, or reopen.
+                  // Unlinking the ticket reverts to Confirmed (handled server-side).
                   <>
+                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("fixed")}>
+                      Mark fixed
+                    </Button>
                     <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("suppressed")}>
                       Won't fix
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("false_positive")}>
+                      Invalid
                     </Button>
                     <Button size="sm" variant="ghost" disabled={dismiss.isPending} onClick={() => act("pending")}>
                       Reopen
