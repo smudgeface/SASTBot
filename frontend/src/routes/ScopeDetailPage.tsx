@@ -533,25 +533,32 @@ function SastIssueRow({
           <SeverityBadge severity={issue.latest_severity} />
         </TableCell>
         <TableCell>
-          <div className="flex items-center gap-1">
-            <span
-              className="text-xs text-muted-foreground font-mono"
-              title={`${issue.latest_file_path}:${issue.latest_start_line}`}
-            >
-              {truncateFilePath(issue.latest_file_path)}:{issue.latest_start_line}
+          <div className="flex items-center gap-1 group/summary">
+            <span className="text-sm truncate">
+              {issue.latest_llm_summary ?? issue.latest_rule_message ?? issue.latest_rule_id.split(".").pop()?.replace(/-/g, " ")}
             </span>
             <button
               onClick={copyLink}
-              className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-muted-foreground"
+              className="shrink-0 opacity-0 group-hover/summary:opacity-60 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-muted-foreground"
               title="Copy link to this issue"
             >
               <Link2 className="h-3 w-3" />
             </button>
           </div>
         </TableCell>
-        <TableCell className="max-w-sm">
-          <div className="text-sm text-muted-foreground truncate">
-            {issue.latest_rule_message ?? issue.latest_rule_id.split(".").pop()?.replace(/-/g, " ")}
+        <TableCell>
+          <div>
+            <span
+              className="text-xs text-muted-foreground font-mono"
+              title={`${issue.latest_file_path}:${issue.latest_start_line}`}
+            >
+              {truncateFilePath(issue.latest_file_path)}:{issue.latest_start_line}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1 mt-0.5">
+            <span className="text-[10px] text-muted-foreground font-mono">
+              {issue.latest_rule_id.split(".").pop()}
+            </span>
           </div>
         </TableCell>
         <TableCell>
@@ -748,15 +755,15 @@ function SastIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highlig
       ) : (
         <>
           <Card>
-            <Table>
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-6" />
-                  <TableHead>Severity</TableHead>
-                  <TableHead>Location</TableHead>
+                  <TableHead className="w-24">Severity</TableHead>
                   <TableHead>Summary</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Last seen</TableHead>
+                  <TableHead className="w-64">Location</TableHead>
+                  <TableHead className="w-28">Status</TableHead>
+                  <TableHead className="w-24">Last seen</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -833,19 +840,26 @@ function ScaIssueRow({
         <TableCell>
           <SeverityBadge severity={issue.latest_severity} />
         </TableCell>
-        <TableCell className="max-w-xs">
-          <div className="flex items-center gap-1.5">
-            <div className="font-medium text-sm">
-              {issue.package_name}
-              {issue.latest_package_version ? `@${issue.latest_package_version}` : ""}
-            </div>
+        <TableCell>
+          <div className="flex items-center gap-1 group/summary">
+            <span className="text-sm truncate">
+              {issue.latest_llm_summary ?? issue.latest_summary}
+            </span>
             <button
               onClick={copyLink}
-              className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-muted-foreground"
+              className="shrink-0 opacity-0 group-hover/summary:opacity-60 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-muted-foreground"
               title="Copy link to this issue"
             >
               <Link2 className="h-3 w-3" />
             </button>
+          </div>
+        </TableCell>
+        <TableCell>
+          <div>
+            <span className="text-xs text-muted-foreground font-mono">
+              {issue.package_name}
+              {issue.latest_package_version ? `@${issue.latest_package_version}` : ""}
+            </span>
           </div>
           <div className="flex flex-wrap gap-1 mt-0.5">
             <span className="text-[10px] text-muted-foreground uppercase font-medium">
@@ -870,9 +884,6 @@ function ScaIssueRow({
               </Badge>
             )}
           </div>
-        </TableCell>
-        <TableCell className="text-xs text-muted-foreground max-w-sm truncate">
-          {issue.latest_summary}
         </TableCell>
         <TableCell>
           <div className="flex flex-col gap-1 items-start">
@@ -1076,15 +1087,15 @@ function ScaIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highligh
       ) : (
         <>
           <Card>
-            <Table>
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-6" />
-                  <TableHead>Severity</TableHead>
-                  <TableHead>Package</TableHead>
+                  <TableHead className="w-24">Severity</TableHead>
                   <TableHead>Summary</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Last seen</TableHead>
+                  <TableHead className="w-64">Location</TableHead>
+                  <TableHead className="w-28">Status</TableHead>
+                  <TableHead className="w-24">Last seen</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
