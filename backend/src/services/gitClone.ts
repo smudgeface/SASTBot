@@ -273,9 +273,10 @@ export async function checkGitConnection(options: {
 
     // ls-remote: list remote references without cloning
     const stdout = await new Promise<string>((resolve, reject) => {
-      const proc = spawn(bin, ["ls-remote", "--heads", "--timeout=10", options.url], {
+      const proc = spawn(bin, ["ls-remote", "--heads", options.url], {
         env,
         stdio: ["ignore", "pipe", "pipe"],
+        timeout: 30_000, // 30s
       });
       let out = "";
       let err = "";
