@@ -392,8 +392,10 @@ export const FindingsQuerySchema = z.object({
 export const SastTriageStatusSchema = z.enum([
   "pending",
   "confirmed",
-  "false_positive",
-  "suppressed",
+  "planned",        // linked to a Jira ticket; sub-state comes from jira.statusCategory
+  "fixed",          // issue no longer detected in latest scan (auto-set by worker)
+  "false_positive", // kept for backwards compat; UI calls it "invalid"
+  "suppressed",     // kept for backwards compat; UI calls it "won't fix"
   "error",
 ]);
 export type SastTriageStatus = z.infer<typeof SastTriageStatusSchema>;
@@ -423,7 +425,7 @@ export type SastFindingOut = z.infer<typeof SastFindingOutSchema>;
 export const SastFindingListSchema = z.array(SastFindingOutSchema);
 
 export const SastTriageBodySchema = z.object({
-  status: z.enum(["confirmed", "false_positive", "suppressed", "pending"]),
+  status: z.enum(["confirmed", "false_positive", "suppressed", "pending", "fixed"]),
   reason: z.string().optional(),
 });
 export type SastTriageBody = z.infer<typeof SastTriageBodySchema>;

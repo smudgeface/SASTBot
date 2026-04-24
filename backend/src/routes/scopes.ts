@@ -140,7 +140,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         });
         const activeSastWhere = (sev: string) => ({
           scopeId: scope.id, latestSeverity: sev,
-          triageStatus: { notIn: ["suppressed", "false_positive"] as string[] },
+          triageStatus: { notIn: ["suppressed", "false_positive", "fixed"] as string[] },
         });
         const combined = async (sev: string) => {
           const [sca, sast] = await Promise.all([
@@ -160,7 +160,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           pendingTriageCount,
         ] = await Promise.all([
           prisma.sastIssue.count({
-            where: { scopeId: scope.id, triageStatus: { notIn: ["suppressed", "false_positive"] } },
+            where: { scopeId: scope.id, triageStatus: { notIn: ["suppressed", "false_positive", "fixed"] } },
           }),
           prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "active" } }),
           combined("critical"),
@@ -229,7 +229,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       });
       const activeSastWhereD = (sev: string) => ({
         scopeId: scope.id, latestSeverity: sev,
-        triageStatus: { notIn: ["suppressed", "false_positive"] as string[] },
+        triageStatus: { notIn: ["suppressed", "false_positive", "fixed"] as string[] },
       });
       const combinedD = async (sev: string) => {
         const [sca, sast] = await Promise.all([
@@ -251,7 +251,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         resolvedScaCount,
       ] = await Promise.all([
         prisma.sastIssue.count({
-          where: { scopeId: scope.id, triageStatus: { notIn: ["suppressed", "false_positive"] } },
+          where: { scopeId: scope.id, triageStatus: { notIn: ["suppressed", "false_positive", "fixed"] } },
         }),
         prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "active" } }),
         combinedD("critical"),
