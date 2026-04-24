@@ -238,6 +238,32 @@ export async function queryAndPersistFindings(
         (a, idx, arr) => arr.indexOf(a) === idx,
       );
 
+      // Detect the "two records, same underlying vuln" case: another issue in
+      // the same scope+package whose aliases overlap ours but whose osv_id
+      // differs. We currently don't dedup these — flag it so we'd notice if
+      // OSV starts emitting both GHSA + NVD records (or similar) for one vuln.
+      const aliasOverlap = await (client as PrismaClient).scaIssue.findFirst({
+        where: {
+          scopeId,
+          packageName: component.name,
+          osvId: { not: vuln.id },
+          latestAliases: { hasSome: aliases },
+        },
+        select: { osvId: true, latestCvssScore: true, latestAliases: true },
+      });
+      if (aliasOverlap) {
+        const overlap = aliasOverlap.latestAliases.filter((a) => aliases.includes(a));
+        logger.warn(
+          {
+            package: component.name,
+            existing: { osv_id: aliasOverlap.osvId, cvss: aliasOverlap.latestCvssScore },
+            incoming: { osv_id: vuln.id, cvss: score },
+            overlapping_aliases: overlap,
+          },
+          "[osvService] alias overlap — two OSV records for the same vuln; review needed",
+        );
+      }
+
       const { issue } = await upsertScaIssueFromDetection(
         client,
         scanRunId,
