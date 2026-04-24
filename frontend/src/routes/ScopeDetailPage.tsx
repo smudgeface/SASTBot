@@ -252,7 +252,7 @@ function SastIssueRow({ issue, isAdmin }: { issue: SastIssue; isAdmin: boolean }
         <TableCell>
           <SeverityBadge severity={issue.latest_severity} />
         </TableCell>
-        <TableCell className="text-xs text-muted-foreground font-mono whitespace-nowrap">
+        <TableCell className="w-44 max-w-[11rem] text-xs text-muted-foreground font-mono truncate">
           {issue.latest_file_path}:{issue.latest_start_line}
         </TableCell>
         <TableCell className="max-w-sm">
@@ -391,7 +391,7 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
                 <TableRow>
                   <TableHead className="w-6" />
                   <TableHead>Severity</TableHead>
-                  <TableHead>Location</TableHead>
+                  <TableHead className="w-44">Location</TableHead>
                   <TableHead>Summary</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Last seen</TableHead>
