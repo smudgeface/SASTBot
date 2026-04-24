@@ -284,9 +284,9 @@ const worker = new Worker<ScanJobData>(
       await assessReachability(scanRunId, run.scopeId, scanDir, run.orgId, prisma);
       log.info("[worker] reachability assessment complete");
 
-      // ── Step 8: auto-fix SAST issues no longer detected in this scan ────────
-      // Any non-terminal SAST issue that wasn't seen in this scan is now "fixed".
-      const TERMINAL_STATUSES = ["fixed", "wont_fix", "suppressed", "false_positive"];
+      // ── Step 8: auto-fix SAST and SCA issues no longer detected in this scan ─
+      // Any non-terminal issue that wasn't seen in this scan is now "fixed".
+      const TERMINAL_STATUSES = ["fixed", "suppressed", "false_positive"];
       await prisma.sastIssue.updateMany({
         where: {
           scopeId: run.scopeId,
@@ -295,7 +295,15 @@ const worker = new Worker<ScanJobData>(
         },
         data: { triageStatus: "fixed" },
       });
-      log.info("[worker] auto-fixed resolved SAST issues");
+      await prisma.scaIssue.updateMany({
+        where: {
+          scopeId: run.scopeId,
+          lastSeenScanRunId: { not: scanRunId },
+          dismissedStatus: { notIn: TERMINAL_STATUSES },
+        },
+        data: { dismissedStatus: "fixed" },
+      });
+      log.info("[worker] auto-fixed resolved issues");
 
       // ── Step 9: update SCA severity summary counters ─────────────────────
       const counts = { critical: 0, high: 0, medium: 0, low: 0 };

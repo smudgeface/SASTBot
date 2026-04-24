@@ -155,7 +155,7 @@ export async function upsertScaIssueFromDetection(
       scopeId,
       packageName,
       osvId,
-      dismissedStatus: "active",
+      dismissedStatus: "pending",
       ...latestFields,
       firstSeenScanRunId: scanRunId,
       lastSeenScanRunId: scanRunId,

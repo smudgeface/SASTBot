@@ -374,12 +374,12 @@ export function sastIssueToOut(i: SastIssue): SastIssueOut {
 }
 
 const ALLOWED_DISMISSED: ReadonlyArray<ScaDismissedStatus> = [
-  "active", "acknowledged", "wont_fix", "false_positive",
+  "pending", "confirmed", "planned", "fixed", "suppressed", "false_positive",
 ];
 function toDismissedStatus(value: string): ScaDismissedStatus {
   return (ALLOWED_DISMISSED as ReadonlyArray<string>).includes(value)
     ? (value as ScaDismissedStatus)
-    : "active";
+    : "pending";
 }
 
 export function scaIssueToOut(i: ScaIssue): ScaIssueOut {
