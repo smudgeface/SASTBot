@@ -412,6 +412,8 @@ export function scaIssueToOut(i: ScaIssue): ScaIssueOut {
     confirmed_reachable: i.confirmedReachable,
     reachable_via_sast_fingerprint: i.reachableViaSastFingerprint,
     reachable_reasoning: i.reachableReasoning,
+    reachable_confidence: i.reachableConfidence,
+    reachable_call_sites: (i.reachableCallSites ?? null) as ScaIssueOut["reachable_call_sites"],
     reachable_assessed_at: i.reachableAssessedAt ? i.reachableAssessedAt.toISOString() : null,
     reachable_model: i.reachableModel,
     first_seen_at: i.firstSeenAt.toISOString(),

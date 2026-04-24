@@ -517,6 +517,12 @@ export const ScaIssueOutSchema = z.object({
   confirmed_reachable: z.boolean(),
   reachable_via_sast_fingerprint: z.string().nullable(),
   reachable_reasoning: z.string().nullable(),
+  reachable_confidence: z.number().min(0).max(1).nullable(),
+  reachable_call_sites: z.array(z.object({
+    file: z.string(),
+    line: z.number().int(),
+    snippet: z.string(),
+  })).nullable(),
   reachable_assessed_at: IsoDateTimeSchema.nullable(),
   reachable_model: z.string().nullable(),
   first_seen_at: IsoDateTimeSchema,

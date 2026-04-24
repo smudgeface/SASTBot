@@ -313,6 +313,90 @@ function ContextSnippet({
 }
 
 // ---------------------------------------------------------------------------
+// Reachability verdict — shown in the expanded SCA row when the LLM has
+// assessed whether the vulnerability is reachable in this codebase.
+// ---------------------------------------------------------------------------
+
+const HIGH_CONFIDENCE_DISMISS_THRESHOLD = 0.85;
+
+function ReachabilityVerdict({
+  issue,
+  isAdmin,
+  onDismiss,
+  isPending,
+}: {
+  issue: ScaIssue;
+  isAdmin: boolean;
+  onDismiss: (status: "false_positive" | "suppressed") => void;
+  isPending: boolean;
+}) {
+  const reachable = issue.confirmed_reachable;
+  const conf = issue.reachable_confidence;
+  const sites = issue.reachable_call_sites ?? [];
+
+  // Pre-existing data may have been assessed before we captured confidence —
+  // render a degraded state without the confidence/CTA bits in that case.
+  const hasStructuredVerdict = conf !== null;
+  const highConfidenceNotReachable =
+    hasStructuredVerdict && !reachable && conf! >= HIGH_CONFIDENCE_DISMISS_THRESHOLD;
+
+  const tone = reachable
+    ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30"
+    : "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/30";
+
+  const headlineColor = reachable ? "text-amber-700 dark:text-amber-400" : "text-emerald-700 dark:text-emerald-400";
+
+  const isOpen = issue.dismissed_status !== "false_positive" && issue.dismissed_status !== "suppressed" && issue.dismissed_status !== "fixed";
+
+  return (
+    <div className={`rounded-md border ${tone} px-3 py-2 space-y-2`}>
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className={`text-sm font-semibold ${headlineColor}`}>
+          {reachable ? "Reachable" : "Not reachable"}
+        </span>
+        {hasStructuredVerdict && (
+          <span className="text-xs text-muted-foreground">
+            · {Math.round(conf! * 100)}% confident
+          </span>
+        )}
+        <span className="text-[10px] text-muted-foreground/70 ml-auto">
+          {issue.reachable_model && `via ${issue.reachable_model}`}
+        </span>
+      </div>
+      {issue.reachable_reasoning && (
+        <p className="text-xs">{issue.reachable_reasoning}</p>
+      )}
+      {sites.length > 0 && (
+        <div className="space-y-1">
+          {sites.slice(0, 5).map((s, i) => (
+            <div key={i} className="rounded border bg-background text-xs font-mono overflow-x-auto">
+              <div className="flex items-center justify-between px-2 py-1 border-b text-[10px] text-muted-foreground">
+                <span className="truncate">{s.file}</span>
+                <span className="ml-2 shrink-0">line {s.line}</span>
+              </div>
+              <pre className="px-2 py-1 whitespace-pre">{s.snippet}</pre>
+            </div>
+          ))}
+        </div>
+      )}
+      {isAdmin && highConfidenceNotReachable && isOpen && (
+        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-emerald-200 dark:border-emerald-900/40">
+          <span className="text-xs text-muted-foreground">
+            High-confidence verdict — apply directly:
+          </span>
+          <Button size="sm" variant="outline" disabled={isPending} onClick={() => onDismiss("false_positive")}>
+            Mark Invalid
+          </Button>
+          <Button size="sm" variant="outline" disabled={isPending} onClick={() => onDismiss("suppressed")}>
+            Mark Won't fix
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Jira ticket components
 // ---------------------------------------------------------------------------
 
@@ -1041,7 +1125,11 @@ function ScaIssueRow({
               {(issue.latest_cvss_score != null || issue.latest_cvss_vector) && (
                 <span>
                   <span className="font-medium">CVSS:</span>{" "}
-                  {issue.latest_cvss_score != null ? issue.latest_cvss_score.toFixed(1) : "—"}
+                  {issue.latest_cvss_score != null
+                    ? issue.latest_cvss_score.toFixed(1)
+                    : issue.latest_cvss_vector?.startsWith("CVSS:4.")
+                      ? <span title="CVSS v4.0 score calculation not yet implemented">v4.0</span>
+                      : "—"}
                   {issue.latest_cvss_vector && (
                     <span className="font-mono ml-1 text-[10px]">({issue.latest_cvss_vector})</span>
                   )}
@@ -1054,10 +1142,15 @@ function ScaIssueRow({
                 <span className="font-medium">Scope:</span>{" "}
                 {isDev ? "dev / optional" : issue.latest_component_scope === "required" ? "runtime" : (issue.latest_component_scope ?? "unknown")}
               </span>
-              {issue.reachable_reasoning && (
-                <span><span className="font-medium">Reachability:</span> {issue.reachable_reasoning}</span>
-              )}
             </div>
+            {issue.reachable_assessed_at && (
+              <ReachabilityVerdict
+                issue={issue}
+                isAdmin={isAdmin}
+                onDismiss={(s) => act(s)}
+                isPending={dismiss.isPending}
+              />
+            )}
             {issue.latest_aliases.length > 0 && (
               <div className="flex flex-wrap gap-1.5 items-center text-xs">
                 <span className="text-muted-foreground font-medium">Aliases:</span>
