@@ -30,6 +30,7 @@ First boot prints a bootstrap admin password to the backend logs — `docker com
 | Types | Shared surface via `@fastify/swagger` → `/openapi.json` → frontend can run `npx openapi-typescript` |
 | Package manager | `pnpm` (backend) and `npm` (frontend) |
 | Tests | `vitest` on both sides |
+| Jira | Read-only Jira Cloud integration. Link issue keys; pull status/resolution/assignee/fix-versions. No ticket creation. |
 
 ## Repository layout
 
@@ -53,8 +54,9 @@ SASTBot/
 │       │   ├── sessions.ts      # DB-backed session tokens
 │       │   └── authBackend.ts   # pluggable auth interface
 │       ├── plugins/auth.ts      # Fastify auth plugin (requireAdmin, authenticate)
-│       ├── routes/              # health, auth, adminRepos, adminSettings, adminCredentials, scans
-│       ├── services/            # repoService, settingsService, credentialService, bootstrap
+│       ├── routes/              # health, auth, adminRepos, adminSettings, adminCredentials, scans, scopes (M5)
+│       ├── services/            # repoService, settingsService, credentialService, issueService,
+│       │                        #   jiraClient, jiraTicketService, sbomService, osvService, bootstrap
 │       ├── queue/               # BullMQ queue + connection
 │       └── cli/                 # bootstrap-admin CLI
 ├── frontend/                    # React + Vite + TypeScript
@@ -152,13 +154,17 @@ docker compose -f docker/compose/docker-compose.yml down -v          # stop AND 
 
 ## For AI agents
 
-- Read the approved plan at `/Users/jpaul/.claude/plans/read-users-jpaul-development-personal-sa-effervescent-storm.md` (or the latest plan file) before starting work.
-- Check `docs/PROGRESS.md` for the current milestone.
+- Check `docs/PROGRESS.md` for the current milestone and what was learned.
+- Read `docs/M5_PLAN.md` for the M5 phase checklist (5d Scheduler + 5e Hardening still pending).
+- Orient in ≤3 tool calls: `git log --oneline -10`, `tail -40 docs/PROGRESS.md`, `docker compose ps`.
 - Never commit real secrets. `.env` is gitignored; `.env.example` is the canonical source of variable names.
 - Never push to the GitHub remote without explicit user approval. The user creates the remote (`smudgeface/SASTBot`).
 - Keep generic docs free of the homelab IP (`192.168.20.119`) and internal hostnames.
 - When running commands that touch Docker, use `docker compose -f docker/compose/docker-compose.yml …` — there's no compose file at the repo root by design.
 - The `backend/` and `worker` compose services share the same image; they differ only by `command`.
+- New API routes go in `backend/src/routes/scopes.ts` (issue/scope routes) or their own file; prefix with `/api/` to avoid Vite SPA path collision.
+- The scan detail page (`/scans/:id`) is a demoted audit view since M5b. Primary UX is `/scopes`.
+- Jira integration is read-only. No ticket creation. `jiraClient.ts` handles all Jira HTTP.
 
 ### Model selection and context management
 

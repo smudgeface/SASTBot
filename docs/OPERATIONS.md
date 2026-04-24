@@ -149,3 +149,58 @@ development.
 
 Out of scope for M2. The underlying host's backup policy applies
 (Dokploy volumes live under `/etc/dokploy/`). Revisit in M7.
+
+---
+
+## Issue identity (M5+)
+
+SASTBot stores **Issues** as the stable unit of analysis and **Findings** as per-scan detection events. This separation means:
+
+- Triage decisions (status, Jira link, notes) live on the Issue and survive re-scans.
+- A finding's `issueId` FK links it to the parent Issue. Never delete Issue rows that have active Jira links or non-trivial triage decisions.
+- `lastSeenScanRunId` on each Issue advances every scan where the issue is detected. When it no longer matches `scope.lastScanRunId`, the issue is "resolved" (not seen in latest scan).
+- The worker auto-sets `triageStatus='fixed'` on SAST issues not detected in a scan, unless they're already terminal (`fixed`, `wont_fix`, `suppressed`, `false_positive`).
+
+**Status progression (SAST):**
+```
+pending → [Confirm] → confirmed ("To do")
+confirmed → [Link Jira ticket] → planned
+planned → [scan no longer detects issue] → fixed (auto)
+pending/confirmed → [Won't fix / Invalid] → wont_fix / false_positive
+```
+
+**Status progression (SCA):**  
+`active → confirmed ("To do") → planned (Jira linked) → dismissed (acknowledged/wont_fix/false_positive)`
+
+## Jira integration (M5c+)
+
+SASTBot is **read-only** with respect to Jira — it never creates tickets.
+
+**Setup:**
+1. Settings → Jira section: set Base URL (`https://yourorg.atlassian.net`), Account email, and create a `jira_token` credential with your Atlassian API token.
+2. Click "Check connection" → should show "✓ Connected as Your Name".
+3. From any issue expanded row, click "+ Link Jira ticket" and enter a ticket key (e.g. `SEC-123`).
+
+**Sync cadence:**
+- Open/In-progress tickets: re-synced every 15 minutes (handled by Phase 5d scheduler, not yet wired).
+- Done tickets: re-synced every 60 minutes.
+- On-demand: "Refresh" button in the Jira card on any linked issue.
+
+**Resolutions:** Available via `GET /admin/jira/resolutions`. The resolution name is stored as a raw string and displayed in the Jira card. Common values at lmitechnologies: Done, Fixed, Invalid, Won't Do.
+
+**Attention indicator:** Issues with `triageStatus=planned` where the linked Jira ticket has `statusCategory=done` show an amber ⚠ badge. This means Jira says it's resolved but the scan hasn't confirmed the code fix yet. Either the next scan will mark the issue `fixed`, or the ticket was closed with a dismissal resolution (Invalid/Won't Do) and the SASTBot issue should be manually set to Invalid/Won't fix.
+
+**Troubleshooting:**
+- `401 Unauthorized`: wrong email or API token. Auth uses `Basic base64(email:token)` — both fields are required.
+- `403 Forbidden`: the account lacks permission to view the specific ticket.
+- `404 Not found`: ticket key doesn't exist. The link is rejected and no JiraTicket row is created.
+- `syncError` on a ticket: visible as amber chip in the Jira card. Refresh to retry.
+
+## Git repository connection check
+
+From Repositories → `⋯` menu → "Check access": runs `git ls-remote --heads` against the repo URL with the stored credential. Returns the list of remote branches on success, or a clear error on failure.
+
+Common errors:
+- `Authentication failed`: wrong credential kind or value. Bitbucket Server requires `https_basic` (username + API token as password), not `https_token`.
+- `Remote branch not found`: the configured `default_branch` doesn't exist on the remote. Update the repo's default branch.
+- `not appear to be a git repository`: `file://` URL is wrong path, or the repo hasn't been initialized.

@@ -191,3 +191,69 @@ Note on test 4: `normalizeSnippet` collapses whitespace runs but does not remove
 - `SbomComponent.scope` persisted from CycloneDX; `has_fix` computed from OSV `affected[].ranges[].events` (no DB column needed); both surfaced in `ScanFindingOut`
 
 **Next — M5**
+
+---
+
+## M5 — Issue identity, scope-centric UX, Jira read-only sync (2026-04-24)
+
+### What shipped
+
+**Schema refactor — Issue identity (Phase 5a)**
+- New `SastIssue` and `ScaIssue` tables as stable identity units (one row per `(scope, fingerprint)` or `(scope, packageName, osvId)`). `SastFinding` / `ScanFinding` become detection event rows pointing to their Issue via `issueId` FK.
+- Triage fields (`triageStatus`, `triageConfidence`, `triageReasoning`, suppression) moved from detection rows to `SastIssue`. Reachability fields moved from `ScanFinding` to `ScaIssue`.
+- `JiraTicket` table added — cached Jira ticket metadata synced from Jira Cloud.
+- `ScanScope` gains `lastScanRunId` / `lastScanCompletedAt` denorm; `Repo` gains `lastScheduledScanAt`.
+- Migration `m5_issue_identity_and_jira` + `m5c_jira_resolution` applied cleanly. New `resolution` field on `JiraTicket` stores raw Jira resolution name.
+- All detection services (`sastService`, `osvService`, `eolService`) updated to upsert Issue rows before writing finding rows.
+- `llmTriageService` and `reachabilityService` refactored to write decisions to Issue rows. `inheritTriage` deleted — triage persistence is inherent to the Issue model.
+
+**Scope-centric UX (Phase 5b)**
+- `/scopes` is now the landing page. Table shows each scope with severity breakdown (Critical/High/Medium/Low), SCA/SAST issue counts, pending triage count, last scan age.
+- `/scopes/:id` scope detail page: 3-tab layout (SCA Issues, SAST Issues, Components), summary chips, Scan Now button, Recent Scans collapsible drawer, "← All scopes" back link.
+- SCA Issues tab: filter bar with stackable groups (`critical|high|medium|low`, `cve|eol|deprecated`, `reachable has fix hide dev`, `include resolved`) separated by `|` pipes. Expandable rows with dismiss actions.
+- SAST Issues tab: same filter pattern plus status filter. Expandable rows show ±3 lines of code context with highlighted match line, rule ID, CWE, triage buttons.
+- Both tabs use `forceMount` so all three tab panels pre-fetch on page load — no loading flash when switching tabs.
+- Shareable issue URLs: each row has a copy-link button (appears on hover) that copies `/scopes/:id?issue=:issueId`. Loading that URL auto-expands and scrolls to the issue.
+- All tables wrapped in `<Card>` to match scan audit page. Severity sort: post-fetch SEVERITY_ORDER map fixes alphabetical ordering (`low < medium` bug). Stable sort tiebreaker (`id.localeCompare`) prevents row jumping.
+
+**Jira read-only integration (Phase 5c)**
+- `jiraClient.ts`: Jira Cloud REST API v3 client. `checkJiraConnection()`, `fetchTicket()`, `fetchTicketsBatch()` (JQL IN, max 50/batch), `fetchResolutions()`, `isValidIssueKey()`. Auth: `Basic base64(email:apiToken)`.
+- `jiraTicketService.ts`: `linkSastIssueToTicket()` / `linkScaIssueToTicket()` — validates key, fetches from Jira immediately (fail loudly on missing/inaccessible ticket). `unlinkSastIssue()` reverts to `confirmed`. `refreshTicket()` for on-demand sync. `reconcileJiraSync()` for 15m/60m cadence batch sync (wired for Phase 5d scheduler).
+- Routes: `POST/DELETE /api/sast-issues/:id/jira-ticket`, same for SCA, `POST /admin/jira-tickets/:key/refresh`, `GET /api/scopes/:id/jira-tickets`, `POST /admin/settings/jira/check`, `GET /admin/jira/resolutions`.
+- Settings page: Account email field + "Check connection" button → "✓ Connected as Jordan Paul".
+- JiraCard in expanded rows: key as external link, statusCategory + resolution, assignee, fix version, sync time. Visible **Refresh** + **Unlink** buttons.
+- Jira status pill in STATUS column: `GOS-14158 · Done`, `GOS-15261 · To do`, colored by statusCategory.
+
+**SAST issue lifecycle & status model**
+- Status model: `pending → confirmed → planned → fixed` (main flow) + `wont_fix` / `invalid` (terminal).
+- Linking a Jira ticket sets `triageStatus = "planned"`. Unlinking reverts to `confirmed`.
+- Worker auto-marks undetected non-terminal SAST issues as `fixed` after each scan.
+- SCA adds `confirmed` state for consistency with SAST.
+- "Confirmed" renamed to **"To do"** everywhere (purple). Planned = blue. Fixed/Jira Done = green. Invalid/Won't fix = grey. Jira "To do" statusCategory = purple (matches issue To do).
+- Attention indicator: "⚠ N need attention" appears when `planned` issues have Jira `statusCategory=done` — jira closed but scan not yet confirmed the fix.
+- SAST code context: `persistSastFindings()` reads ±3 lines from source file during scan. `ContextSnippet` component renders with highlighted match line (yellow row + `→` arrow).
+
+**Operational improvements**
+- `checkGitConnection()`: `git ls-remote --heads` to verify URL + credentials without cloning. "Check access" item in repo actions dropdown.
+- `sbomService`: removed `--no-recurse` (blocked manifests in subdirs); gracefully handles cdxgen producing no output (returns empty SBOM, scan succeeds with 0 components instead of ENOENT).
+- Vite proxy routing fixed: all new API routes prefixed `/api/` to avoid SPA path collision.
+- `ScopeDetail.tsx` `forceMount` + `data-[state=inactive]:hidden` eliminates tab layout shift.
+
+### What we learned
+
+- **Issue identity vs. detection events** is the right model for any scan-based security tool. The pain of the M5 backfill (even though our DB was tiny) validated that the exercise would be necessary at scale too. Worth doing early.
+- **Vite bind-mount cache is sticky.** The browser's HTTP disk cache retained a stale 404 response for `/scopes` from before the proxy was configured. `ignoreCache: true` reloads didn't help — needed a truly fresh browser context. The fix (prefix `/api/`) is cleaner anyway.
+- **Prisma string-sorts enums alphabetically.** `low < medium` alphabetically. Post-fetch sort with an explicit SEVERITY_ORDER map is the right approach at M5 scale; add a DB enum or expression index if the list grows to thousands.
+- **Jira Basic auth requires `base64(email:apiToken)`, not `base64(apiToken)`.** Silent 401 with no body if wrong. Pitfall documented.
+- **`git ls-remote --timeout=10` is not a valid flag** — caused immediate failure silently. Use Node spawn `timeout` option instead.
+- **cdxgen exits non-zero for some project types** even when it writes the SBOM successfully. `sbomService` now checks for file existence before treating non-zero as failure.
+- **`contextRegion`** in SARIF (standard surrounding-context field) is not emitted by Opengrep. We fall back to reading the source file directly during `persistSastFindings()` while the clone is on disk — correct approach, just not in SARIF.
+- **LMI Bitbucket Server needs `https_basic`** (username + token as password), not `https_token`. GoPxL BE scan: 583 components, 5 critical, 24 high CVEs on first successful run.
+- **Stable sort tiebreaker**: UUID `localeCompare` as final tiebreaker prevents rows from jumping positions when identical-score items are updated (Acknowledge → Reopen). Small but impactful UX fix.
+
+### GoPxL BE verified results (2026-04-24)
+- 583 npm + NuGet components, 5 critical CVEs, 24 high CVEs, 57 medium, 2 low.
+- 46 SAST issues (Opengrep Python rules), severity properly mapped via `rule.defaultConfiguration.level` fallback (Opengrep omits `result.level`).
+- Jira integration live: linked `GOS-14158` (Complete · Fixed · 1.4, 1.5), `GOS-15261` (In Progress · To do).
+
+**Next — M5 remaining (5d Scheduler + 5e Hardening) or M6**
