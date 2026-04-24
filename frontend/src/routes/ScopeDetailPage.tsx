@@ -96,6 +96,14 @@ function TriageBadge({ status }: { status: string }) {
 // Vuln link helpers
 // ---------------------------------------------------------------------------
 
+/** Show only the last two path segments to keep the Location column compact.
+ *  Full path is always available in the row's title tooltip. */
+function truncateFilePath(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/");
+  if (parts.length <= 2) return path;
+  return "…/" + parts.slice(-2).join("/");
+}
+
 function vulnUrl(id: string): string {
   if (id.startsWith("CVE-")) return `https://nvd.nist.gov/vuln/detail/${id}`;
   if (id.startsWith("GHSA-")) return `https://github.com/advisories/${id}`;
@@ -252,8 +260,13 @@ function SastIssueRow({ issue, isAdmin }: { issue: SastIssue; isAdmin: boolean }
         <TableCell>
           <SeverityBadge severity={issue.latest_severity} />
         </TableCell>
-        <TableCell className="w-44 max-w-[11rem] text-xs text-muted-foreground font-mono truncate">
-          {issue.latest_file_path}:{issue.latest_start_line}
+        <TableCell>
+          <span
+            className="text-xs text-muted-foreground font-mono"
+            title={`${issue.latest_file_path}:${issue.latest_start_line}`}
+          >
+            {truncateFilePath(issue.latest_file_path)}:{issue.latest_start_line}
+          </span>
         </TableCell>
         <TableCell className="max-w-sm">
           <div className="text-sm text-muted-foreground truncate">
@@ -391,7 +404,7 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
                 <TableRow>
                   <TableHead className="w-6" />
                   <TableHead>Severity</TableHead>
-                  <TableHead className="w-44">Location</TableHead>
+                  <TableHead>Location</TableHead>
                   <TableHead>Summary</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Last seen</TableHead>
