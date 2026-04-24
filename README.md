@@ -4,9 +4,11 @@ LLM-augmented SAST/SCA tool for EU Cyber Resilience Act (CRA) compliance.
 
 SASTBot scans git repositories for security issues using:
 
-- **SCA** (Software Composition Analysis) — dependency extraction, CycloneDX 1.7 SBOM generation, CVE/license checks via OSV.dev
-- **SAST** (Static Application Security Testing) — [Opengrep](https://opengrep.dev/) with LLM-augmented triage to suppress false positives and prioritize real risks
-- **Defect tracking** — persistent defect database with "not a defect" suppressions that survive rescans; optional Jira link-out
+- **SCA** (Software Composition Analysis) — dependency extraction, CycloneDX 1.7 SBOM generation, CVE/EOL/deprecated checks via OSV.dev and endoflife.date
+- **SAST** (Static Application Security Testing) — [Opengrep](https://opengrep.dev/) with LLM-augmented triage, reachability analysis, and code context
+- **Issue identity** — stable Issue rows (not per-scan findings) so triage decisions, Jira links, and status survive repeated scans
+- **Jira read-only sync** — link Jira ticket keys to issues; SASTBot pulls status, resolution, assignee, and fix versions from Jira Cloud
+- **Scope-centric views** — `/scopes` landing page with severity breakdown, per-issue status workflow (pending → To do → planned → fixed), shareable issue links
 
 ## Architecture
 
@@ -59,7 +61,8 @@ SASTBot/
 │   └── compose/             # docker-compose.yml for dev & deploy
 ├── docs/
 │   ├── PROGRESS.md          # milestone log
-│   └── OPERATIONS.md        # ops/runbook (M2+)
+│   ├── OPERATIONS.md        # ops/runbook
+│   └── M5_PLAN.md           # M5 implementation plan (phases 5a–5f)
 ├── CLAUDE.md                # contributor + AI-agent guide
 └── README.md
 ```
@@ -76,13 +79,15 @@ See [`CLAUDE.md`](CLAUDE.md) for detailed developer and AI-agent guidance, inclu
 
 Progress is tracked in [`docs/PROGRESS.md`](docs/PROGRESS.md). Rough roadmap:
 
-1. **M1 — Skeleton** — auth, admin UI, repo CRUD, encrypted credentials (walking skeleton, no scanning yet)
-2. **M2 — CI + BullMQ + deploy** — GitHub Actions, deployable stack, scan pipeline plumbing
-3. **M3 — SCA vertical slice** — cdxgen + OSV.dev + findings UI
-4. **M4 — SAST vertical slice** — Opengrep + LLM triage + persistent suppressions
-5. **M5 — Jira + defect browser** — ticket link-out + cached status, Aikido-inspired filters
-6. **M6 — API hardening + CRA exports** — API keys, audit log, CRA bundle export
-7. **M7 — Scheduling + ops polish**
+1. **M1 — Skeleton** ✓ auth, admin UI, repo CRUD, encrypted credentials
+2. **M2 — CI + BullMQ + deploy** ✓ deployable stack, scan pipeline plumbing
+3. **M3 — SCA vertical slice** ✓ cdxgen + OSV.dev + findings UI
+4. **M4 — SAST vertical slice** ✓ Opengrep + LLM triage + reachability
+5. **M5 — Issue identity + scope UX + Jira** ✓ stable issue model, scope-centric views, Jira read-only sync, status lifecycle
+6. **M5d — Scheduled scans** ⬜ BullMQ cron, scheduler process, UI preset + preview
+7. **M5e — Operational hardening** ⬜ rate limiting, pagination audit, worker concurrency
+8. **M6 — API hardening + CRA exports** ⬜ API keys, audit log, CRA bundle
+9. **M7 — Scheduling + ops polish** ⬜
 
 ## Security
 
