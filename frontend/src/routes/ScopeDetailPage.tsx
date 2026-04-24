@@ -76,6 +76,8 @@ function SeverityBadge({ severity }: { severity: string }) {
 const TRIAGE_COLORS: Record<string, string> = {
   pending: "text-amber-600 border-amber-400",
   confirmed: "text-red-600 border-red-400",
+  planned: "text-blue-600 border-blue-400",
+  fixed: "text-green-600 border-green-400",
   false_positive: "text-slate-500 border-slate-400",
   suppressed: "text-slate-500 border-slate-400",
   error: "text-destructive border-destructive",
@@ -84,6 +86,8 @@ const TRIAGE_COLORS: Record<string, string> = {
 const TRIAGE_LABELS: Record<string, string> = {
   pending: "pending",
   confirmed: "confirmed",
+  planned: "planned",
+  fixed: "fixed",
   false_positive: "invalid",
   suppressed: "won't fix",
   error: "error",
@@ -137,6 +141,54 @@ function VulnLink({ id, className }: { id: string; className?: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Code snippet with highlighted match line
+// ---------------------------------------------------------------------------
+
+const CONTEXT_LINES = 3;
+
+/**
+ * Renders a multi-line code snippet with the matching line highlighted.
+ * `matchLine` is the 1-indexed line number in the original file.
+ * The snippet starts at max(0, matchLine - 1 - CONTEXT_LINES) so the
+ * highlight index within the snippet is min(CONTEXT_LINES, matchLine - 1).
+ */
+function ContextSnippet({
+  snippet,
+  matchLine,
+  className,
+}: {
+  snippet: string;
+  matchLine: number;
+  className?: string;
+}) {
+  const lines = snippet.split("\n");
+  // If the snippet only has one line (no context), highlight that line.
+  const highlightIdx = lines.length === 1 ? 0 : Math.min(CONTEXT_LINES, matchLine - 1);
+
+  return (
+    <div className={`overflow-x-auto rounded border bg-background text-xs font-mono ${className ?? ""}`}>
+      <table className="w-full border-collapse">
+        <tbody>
+          {lines.map((line, i) => {
+            const isMatch = i === highlightIdx;
+            return (
+              <tr key={i} className={isMatch ? "bg-yellow-50 dark:bg-yellow-950/40" : ""}>
+                <td className="select-none px-2 py-0.5 text-right text-muted-foreground/50 w-8 border-r border-border">
+                  {isMatch ? "→" : " "}
+                </td>
+                <td className={`px-3 py-0.5 whitespace-pre ${isMatch ? "font-semibold" : ""}`}>
+                  {line || " "}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Jira ticket components
 // ---------------------------------------------------------------------------
 
@@ -151,12 +203,23 @@ const SC_LABELS: Record<string, string> = {
   done: "Done",
 };
 
-/** Compact badge for the Status column — shows Jira statusCategory as a tinted pill. */
+/**
+ * Compact badge for the Status column when an issue has a linked Jira ticket.
+ * Shows "Planned · {sub-state}" tinted by statusCategory.
+ * When Jira is "done" but the issue is still planned, shows an amber ⚠ attention indicator.
+ */
 function JiraStatusPill({ ticket }: { ticket: JiraTicket }) {
   const sc = ticket.status_category ?? "new";
   const cls = SC_COLORS[sc] ?? SC_COLORS.new;
+  // "planned + done" = needs verification — amber warning
+  const needsAttention = sc === "done";
   return (
-    <Badge variant="outline" className={`text-[10px] ${cls}`}>
+    <Badge
+      variant="outline"
+      className={`text-[10px] ${needsAttention ? "text-amber-600 border-amber-400 bg-amber-50 dark:bg-amber-950" : cls}`}
+      title={needsAttention ? "Jira ticket is done — confirm fix in next scan" : undefined}
+    >
+      {needsAttention && <AlertTriangle className="h-2.5 w-2.5 mr-0.5 inline" />}
       {ticket.issue_key} · {SC_LABELS[sc] ?? sc}
     </Badge>
   );
@@ -460,9 +523,11 @@ function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmi
         <TableRow>
           <TableCell colSpan={6} className="bg-muted/30 p-4">
             {issue.latest_snippet && (
-              <pre className="mb-3 overflow-x-auto rounded bg-background p-3 text-xs font-mono border whitespace-pre-wrap">
-                {issue.latest_snippet}
-              </pre>
+              <ContextSnippet
+                snippet={issue.latest_snippet}
+                matchLine={issue.latest_start_line}
+                className="mb-3"
+              />
             )}
             {issue.triage_reasoning && (
               <p className="mb-3 text-sm">
@@ -491,8 +556,8 @@ function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmi
             </div>
             {isAdmin && (
               <div className="flex flex-wrap gap-2 pt-1">
-                {/* Open → show action buttons; triaged → show only Reopen */}
                 {(issue.triage_status === "pending" || issue.triage_status === "error") ? (
+                  // Open/pending → show decision buttons
                   <>
                     <Button size="sm" variant="destructive" disabled={triage.isPending} onClick={() => act("confirmed")}>
                       Confirm
@@ -504,7 +569,36 @@ function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmi
                       Invalid
                     </Button>
                   </>
+                ) : issue.triage_status === "confirmed" ? (
+                  // Confirmed, no ticket yet → can still dismiss or reopen
+                  <>
+                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("suppressed")}>
+                      Won't fix
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("false_positive")}>
+                      Invalid
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={triage.isPending} onClick={() => act("pending")}>
+                      Reopen
+                    </Button>
+                  </>
+                ) : issue.triage_status === "planned" ? (
+                  // Planned (has Jira ticket) → can dismiss or reopen (unlink removes planned state)
+                  <>
+                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("suppressed")}>
+                      Won't fix
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={triage.isPending} onClick={() => act("pending")}>
+                      Reopen
+                    </Button>
+                  </>
+                ) : issue.triage_status === "fixed" ? (
+                  // Fixed → can reopen if the fix was incorrect
+                  <Button size="sm" variant="ghost" disabled={triage.isPending} onClick={() => act("pending")}>
+                    Reopen
+                  </Button>
                 ) : (
+                  // wont_fix / invalid → just Reopen
                   <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("pending")}>
                     Reopen
                   </Button>
@@ -528,7 +622,7 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
   const ticketById = new Map((jiraTickets ?? []).map((t) => [t.id, t]));
 
   const SAST_SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
-  const SAST_STATUSES = ["pending", "confirmed", "false_positive", "suppressed"] as const;
+  const SAST_STATUSES = ["pending", "confirmed", "planned", "fixed", "false_positive", "suppressed"] as const;
 
   const severitySet = new Set(filters.severities ?? []) as ReadonlySet<typeof SAST_SEVERITIES[number]>;
   const statusSet   = new Set(filters.triage_statuses ?? []) as ReadonlySet<typeof SAST_STATUSES[number]>;
@@ -542,6 +636,11 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
     next.has(value) ? next.delete(value) : next.add(value);
     setFilters((f) => ({ ...f, page: 1, [key]: next.size > 0 ? [...next] : undefined }));
   }
+
+  // Count issues that need attention: planned + Jira ticket statusCategory = "done"
+  const attentionCount = (data?.items ?? []).filter(
+    (i) => i.triage_status === "planned" && ticketById.get(i.jira_ticket_id ?? "")?.status_category === "done",
+  ).length;
 
   const hasFilter = !!(filters.severities?.length || filters.triage_statuses?.length || filters.include_resolved);
 
@@ -578,6 +677,18 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
               onClick={() => setFilters({ page: 1, page_size: 50 })}
             >
               Clear
+            </button>
+          </>
+        )}
+        {attentionCount > 0 && (
+          <>
+            <Pipe />
+            <button
+              className="flex items-center gap-1 text-xs text-amber-600 font-medium"
+              title="Planned issues whose Jira ticket is marked Done — awaiting scan confirmation"
+              onClick={() => setFilters({ page: 1, page_size: 50, triage_statuses: ["planned"] })}
+            >
+              <AlertTriangle className="h-3 w-3" /> {attentionCount} need{attentionCount === 1 ? "s" : ""} attention
             </button>
           </>
         )}

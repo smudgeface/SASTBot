@@ -95,13 +95,18 @@ export async function linkSastIssueToTicket(
   }
 
   const ticket = await upsertJiraTicket(db, orgId, issueKey, meta, userId);
-  await db.sastIssue.update({ where: { id: sastIssueId }, data: { jiraTicketId: ticket.id } });
+  // Linking a ticket transitions the issue to "planned" regardless of prior triage state
+  await db.sastIssue.update({
+    where: { id: sastIssueId },
+    data: { jiraTicketId: ticket.id, triageStatus: "planned" },
+  });
   logger.info({ sastIssueId, issueKey }, "[jiraTicketService] SAST issue linked to Jira ticket");
   return ticket;
 }
 
 export async function unlinkSastIssue(db: Db, sastIssueId: string): Promise<void> {
-  await db.sastIssue.update({ where: { id: sastIssueId }, data: { jiraTicketId: null } });
+  // Revert to "confirmed" — the issue was real, it just no longer has a ticket
+  await db.sastIssue.update({ where: { id: sastIssueId }, data: { jiraTicketId: null, triageStatus: "confirmed" } });
 }
 
 export async function linkScaIssueToTicket(

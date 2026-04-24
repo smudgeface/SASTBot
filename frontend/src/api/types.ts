@@ -276,7 +276,7 @@ export interface ScanFinding {
 // SAST findings (M4 — detection rows; triage now lives on SastIssue)
 // ---------------------------------------------------------------------------
 
-export type SastTriageStatus = "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
+export type SastTriageStatus = "pending" | "confirmed" | "planned" | "fixed" | "false_positive" | "suppressed" | "error";
 export type SastSeverity = "critical" | "high" | "medium" | "low" | "info";
 
 export interface SastFinding {
