@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   ChevronUp,
   Clock,
   ExternalLink,
+  Link2,
   Loader2,
   RefreshCw,
   ShieldAlert,
@@ -198,7 +199,7 @@ const SC_COLORS: Record<string, string> = {
   done: "text-green-600 border-green-400 bg-green-50 dark:bg-green-950",
 };
 const SC_LABELS: Record<string, string> = {
-  new: "Planned",
+  new: "To do",
   indeterminate: "In Progress",
   done: "Done",
 };
@@ -464,9 +465,27 @@ function Pager({
 // SAST issues tab
 // ---------------------------------------------------------------------------
 
-function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null }) {
-  const [expanded, setExpanded] = useState(false);
+function SastIssueRow({
+  issue, isAdmin, jiraTicket, scopeId, autoExpand,
+}: {
+  issue: SastIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null;
+  scopeId: string; autoExpand?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(autoExpand ?? false);
   const [linkError, setLinkError] = useState<string>();
+  const rowRef = useRef<HTMLTableRowElement>(null);
+
+  // Scroll into view when auto-expanded from a shared link
+  useEffect(() => {
+    if (autoExpand && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [autoExpand]);
+
+  const copyLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(`${window.location.origin}/scopes/${scopeId}?issue=${issue.id}`);
+  };
   const triage = useTriageSastIssue();
   const linkJira = useLinkSastIssueToJira();
   const unlinkJira = useUnlinkSastIssueFromJira();
@@ -486,7 +505,8 @@ function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmi
   return (
     <>
       <TableRow
-        className="cursor-pointer hover:bg-muted/40"
+        ref={rowRef}
+        className="group cursor-pointer hover:bg-muted/40"
         onClick={() => setExpanded((v) => !v)}
       >
         <TableCell className="w-6 text-muted-foreground">
@@ -496,12 +516,21 @@ function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmi
           <SeverityBadge severity={issue.latest_severity} />
         </TableCell>
         <TableCell>
-          <span
-            className="text-xs text-muted-foreground font-mono"
-            title={`${issue.latest_file_path}:${issue.latest_start_line}`}
-          >
-            {truncateFilePath(issue.latest_file_path)}:{issue.latest_start_line}
-          </span>
+          <div className="flex items-center gap-1">
+            <span
+              className="text-xs text-muted-foreground font-mono"
+              title={`${issue.latest_file_path}:${issue.latest_start_line}`}
+            >
+              {truncateFilePath(issue.latest_file_path)}:{issue.latest_start_line}
+            </span>
+            <button
+              onClick={copyLink}
+              className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-muted-foreground"
+              title="Copy link to this issue"
+            >
+              <Link2 className="h-3 w-3" />
+            </button>
+          </div>
         </TableCell>
         <TableCell className="max-w-sm">
           <div className="text-sm text-muted-foreground truncate">
@@ -612,7 +641,7 @@ function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmi
   );
 }
 
-function SastIssuesTab({ scopeId }: { scopeId: string }) {
+function SastIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highlightIssueId?: string }) {
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
   const [filters, setFilters] = useState<SastIssueFilters>({ page: 1, page_size: 50 });
@@ -714,7 +743,7 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
               </TableHeader>
               <TableBody>
                 {data.items.map((issue) => (
-                  <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} />
+                  <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} />
                 ))}
               </TableBody>
             </Table>
@@ -735,13 +764,30 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
 // SCA issues tab
 // ---------------------------------------------------------------------------
 
-function ScaIssueRow({ issue, isAdmin, jiraTicket }: { issue: ScaIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null }) {
-  const [expanded, setExpanded] = useState(false);
+function ScaIssueRow({
+  issue, isAdmin, jiraTicket, scopeId, autoExpand,
+}: {
+  issue: ScaIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null;
+  scopeId: string; autoExpand?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(autoExpand ?? false);
   const [linkError, setLinkError] = useState<string>();
+  const rowRef = useRef<HTMLTableRowElement>(null);
   const dismiss = useDismissScaIssue();
   const linkJira = useLinkScaIssueToJira();
   const unlinkJira = useUnlinkScaIssueFromJira();
   const refreshJira = useRefreshJiraTicket();
+
+  useEffect(() => {
+    if (autoExpand && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [autoExpand]);
+
+  const copyLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(`${window.location.origin}/scopes/${scopeId}?issue=${issue.id}`);
+  };
 
   const handleLink = (key: string) => {
     setLinkError(undefined);
@@ -759,7 +805,8 @@ function ScaIssueRow({ issue, isAdmin, jiraTicket }: { issue: ScaIssue; isAdmin:
   return (
     <>
       <TableRow
-        className="cursor-pointer hover:bg-muted/40"
+        ref={rowRef}
+        className="group cursor-pointer hover:bg-muted/40"
         onClick={() => setExpanded((v) => !v)}
       >
         <TableCell className="w-6 text-muted-foreground">
@@ -769,9 +816,18 @@ function ScaIssueRow({ issue, isAdmin, jiraTicket }: { issue: ScaIssue; isAdmin:
           <SeverityBadge severity={issue.latest_severity} />
         </TableCell>
         <TableCell className="max-w-xs">
-          <div className="font-medium text-sm">
-            {issue.package_name}
-            {issue.latest_package_version ? `@${issue.latest_package_version}` : ""}
+          <div className="flex items-center gap-1.5">
+            <div className="font-medium text-sm">
+              {issue.package_name}
+              {issue.latest_package_version ? `@${issue.latest_package_version}` : ""}
+            </div>
+            <button
+              onClick={copyLink}
+              className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-muted-foreground"
+              title="Copy link to this issue"
+            >
+              <Link2 className="h-3 w-3" />
+            </button>
           </div>
           <div className="flex flex-wrap gap-1 mt-0.5">
             <span className="text-[10px] text-muted-foreground uppercase font-medium">
@@ -888,7 +944,7 @@ function ScaIssueRow({ issue, isAdmin, jiraTicket }: { issue: ScaIssue; isAdmin:
   );
 }
 
-function ScaIssuesTab({ scopeId }: { scopeId: string }) {
+function ScaIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highlightIssueId?: string }) {
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
   const [filters, setFilters] = useState<ScaIssueFilters>({ page: 1, page_size: 50 });
@@ -986,7 +1042,7 @@ function ScaIssuesTab({ scopeId }: { scopeId: string }) {
               </TableHeader>
               <TableBody>
                 {data.items.map((issue) => (
-                  <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} />
+                  <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} />
                 ))}
               </TableBody>
             </Table>
@@ -1136,6 +1192,8 @@ function RecentScansSection({ scopeId }: { scopeId: string }) {
 
 export default function ScopeDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const highlightIssueId = searchParams.get("issue") ?? undefined;
   const { data: scope, isLoading, isError } = useScopeDetail(id);
   const triggerScan = useTriggerScan();
 
@@ -1261,10 +1319,10 @@ export default function ScopeDetailPage() {
             not on first click. data-[state=inactive]:hidden hides inactive panels
             without unmounting them — eliminates the loading-flash layout shift. */}
         <TabsContent forceMount value="sca" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ScaIssuesTab scopeId={id} />}
+          {id && <ScaIssuesTab scopeId={id} highlightIssueId={highlightIssueId} />}
         </TabsContent>
         <TabsContent forceMount value="sast" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <SastIssuesTab scopeId={id} />}
+          {id && <SastIssuesTab scopeId={id} highlightIssueId={highlightIssueId} />}
         </TabsContent>
         <TabsContent forceMount value="components" className="mt-4 min-h-80 data-[state=inactive]:hidden">
           {id && <ComponentsTab scopeId={id} />}
