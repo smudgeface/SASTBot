@@ -317,7 +317,7 @@ export async function checkLlmConnection(orgId: string | null = null): Promise<{
         model: "",
         inputTokens: 0,
         outputTokens: 0,
-        error: "LLM assistance not configured",
+        error: "LLM base URL, model, or credential not saved — save settings first, then check",
       };
     }
     return {

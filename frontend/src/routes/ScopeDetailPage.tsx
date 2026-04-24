@@ -584,8 +584,14 @@ function SastIssueRow({
       {expanded && (
         <TableRow>
           <TableCell colSpan={6} className="bg-muted/30 p-4">
+            {issue.latest_llm_summary && (
+              <p className="mb-3 text-sm">{issue.latest_llm_summary}</p>
+            )}
             {issue.latest_rule_message && (
-              <p className="mb-3 text-sm">{issue.latest_rule_message}</p>
+              <p className="mb-3 text-xs text-muted-foreground">
+                <span className="font-medium">Rule description: </span>
+                {issue.latest_rule_message}
+              </p>
             )}
             <p className="mb-3 text-xs font-mono text-muted-foreground break-all">
               {issue.latest_file_path}:{issue.latest_start_line}
@@ -913,20 +919,45 @@ function ScaIssueRow({
       {expanded && (
         <TableRow>
           <TableCell colSpan={6} className="bg-muted/30 p-4 space-y-3">
-            {issue.latest_summary && (
-              <p className="text-sm">{issue.latest_summary}</p>
+            {issue.latest_actively_exploited && (
+              <div className="flex items-start gap-2 rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>
+                  <span className="font-semibold">Actively exploited</span>
+                  {" — "}listed in CISA KEV. Prioritize remediation.
+                </span>
+              </div>
             )}
-            <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+            {issue.latest_llm_summary && (
+              <p className="text-sm">{issue.latest_llm_summary}</p>
+            )}
+            {issue.latest_summary && issue.latest_summary !== issue.latest_llm_summary && (
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium">Advisory: </span>
+                {issue.latest_summary}
+              </p>
+            )}
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span>
                 <span className="font-medium">OSV:&nbsp;</span>
                 <VulnLink id={issue.osv_id} className="text-xs" />
               </span>
-              {issue.latest_cvss_score != null && (
-                <span><span className="font-medium">CVSS:</span> {issue.latest_cvss_score.toFixed(1)}</span>
+              {(issue.latest_cvss_score != null || issue.latest_cvss_vector) && (
+                <span>
+                  <span className="font-medium">CVSS:</span>{" "}
+                  {issue.latest_cvss_score != null ? issue.latest_cvss_score.toFixed(1) : "—"}
+                  {issue.latest_cvss_vector && (
+                    <span className="font-mono ml-1 text-[10px]">({issue.latest_cvss_vector})</span>
+                  )}
+                </span>
               )}
               {issue.latest_ecosystem && (
                 <span><span className="font-medium">Ecosystem:</span> {issue.latest_ecosystem}</span>
               )}
+              <span>
+                <span className="font-medium">Scope:</span>{" "}
+                {isDev ? "dev / optional" : issue.latest_component_scope === "required" ? "runtime" : (issue.latest_component_scope ?? "unknown")}
+              </span>
               {issue.reachable_reasoning && (
                 <span><span className="font-medium">Reachability:</span> {issue.reachable_reasoning}</span>
               )}
