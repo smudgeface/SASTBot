@@ -98,30 +98,55 @@ export default function SettingsPage() {
     };
   };
 
-  const buildPayload = (): AdminSettingsUpdate => ({
-    jira_base_url: jiraBaseUrl.trim() || null,
-    jira_email: jiraEmail.trim() || null,
-    jira_credential_id: jiraCredChoice === "existing" ? jiraCredId || null : null,
-    jira_credential: buildJiraCred(),
-    llm_base_url: llmBaseUrl.trim() || null,
-    llm_api_format: llmApiFormat,
-    llm_model: llmModel.trim() || null,
-    llm_credential_id: llmCredChoice === "existing" ? llmCredId || null : null,
-    llm_credential: buildLlmCred(),
-    llm_triage_token_budget: llmTokenBudget,
-    reachability_cvss_threshold: reachabilityCvss,
-  });
+  const buildPayload = (): AdminSettingsUpdate => {
+    const jiraCred = buildJiraCred();
+    const llmCred = buildLlmCred();
+    const payload: AdminSettingsUpdate = {
+      jira_base_url: jiraBaseUrl.trim() || null,
+      jira_email: jiraEmail.trim() || null,
+      llm_base_url: llmBaseUrl.trim() || null,
+      llm_api_format: llmApiFormat,
+      llm_model: llmModel.trim() || null,
+      llm_triage_token_budget: llmTokenBudget,
+      reachability_cvss_threshold: reachabilityCvss,
+    };
+    // Only include credential keys when the user is actually making a change.
+    // If choice is "new" but fields are blank, omit both so the backend keeps
+    // whatever credential is already linked (this prevents re-clicking Save
+    // from silently disconnecting the credential).
+    if (jiraCredChoice === "existing") {
+      payload.jira_credential_id = jiraCredId || null;
+    } else if (jiraCred) {
+      payload.jira_credential = jiraCred;
+    }
+    if (llmCredChoice === "existing") {
+      payload.llm_credential_id = llmCredId || null;
+    } else if (llmCred) {
+      payload.llm_credential = llmCred;
+    }
+    return payload;
+  };
 
   /** Save current form state; used by Save and by the Check-connection buttons
    *  so users don't need to remember to click Save before testing. */
   const persist = async (): Promise<boolean> => {
     try {
-      await updateSettings.mutateAsync(buildPayload());
+      const updated = await updateSettings.mutateAsync(buildPayload());
       // Clear fresh credential fields after save to avoid re-submitting them.
       setJiraNewName("");
       setJiraNewValue("");
       setLlmNewName("");
       setLlmNewValue("");
+      // If a new credential was created, reset choice to "existing" and point
+      // at the new credential id so subsequent saves don't try to re-create.
+      if (updated.jira_credential_id) {
+        setJiraCredChoice("existing");
+        setJiraCredId(updated.jira_credential_id);
+      }
+      if (updated.llm_credential_id) {
+        setLlmCredChoice("existing");
+        setLlmCredId(updated.llm_credential_id);
+      }
       return true;
     } catch (err) {
       toast({
