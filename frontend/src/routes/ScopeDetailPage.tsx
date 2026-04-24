@@ -193,8 +193,11 @@ const SCA_STATUS_COLORS = TRIAGE_COLORS;
 const SCA_STATUS_LABELS = TRIAGE_LABELS;
 
 /** Unified status badge for SAST + SCA rows.
- *  When a Jira ticket is linked we always show "Planned" (a ticket implies planned/in-progress work).
- *  Otherwise we render the triage/dismissed status badge. */
+ *  When a Jira ticket is linked AND the issue is still open (non-terminal),
+ *  we show "Planned" — a ticket implies planned/in-progress work.
+ *  Terminal statuses (fixed/false_positive/suppressed) always show the true
+ *  status; a closed issue stays closed even if a ticket still points at it. */
+const TERMINAL_TRIAGE = new Set(["fixed", "false_positive", "suppressed"]);
 function StatusBadge({
   status,
   hasJira,
@@ -202,7 +205,7 @@ function StatusBadge({
   status: string;
   hasJira: boolean;
 }) {
-  const effective = hasJira ? "planned" : status;
+  const effective = hasJira && !TERMINAL_TRIAGE.has(status) ? "planned" : status;
   return (
     <Badge variant="outline" className={`text-[10px] ${TRIAGE_COLORS[effective] ?? ""}`}>
       {TRIAGE_LABELS[effective] ?? effective.replace(/_/g, " ")}
