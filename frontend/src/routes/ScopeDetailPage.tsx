@@ -145,12 +145,12 @@ function TriageBadge({ status }: { status: string }) {
 // Vuln link helpers
 // ---------------------------------------------------------------------------
 
-/** Show only the last two path segments to keep the Location column compact.
- *  Full path is always available in the row's title tooltip. */
+/** Keep the Location column compact — show only the file basename.
+ *  The full path is always available in the title tooltip and in the
+ *  expanded row detail. */
 function truncateFilePath(path: string): string {
   const parts = path.replace(/\\/g, "/").split("/");
-  if (parts.length <= 2) return path;
-  return "…/" + parts.slice(-2).join("/");
+  return parts[parts.length - 1] ?? path;
 }
 
 function vulnUrl(id: string): string {
@@ -562,6 +562,12 @@ function SastIssueRow({
       {expanded && (
         <TableRow>
           <TableCell colSpan={6} className="bg-muted/30 p-4">
+            {issue.latest_rule_message && (
+              <p className="mb-3 text-sm">{issue.latest_rule_message}</p>
+            )}
+            <p className="mb-3 text-xs font-mono text-muted-foreground break-all">
+              {issue.latest_file_path}:{issue.latest_start_line}
+            </p>
             {issue.latest_snippet && (
               <ContextSnippet
                 snippet={issue.latest_snippet}
