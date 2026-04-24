@@ -68,3 +68,15 @@ export function usePurgeRepoCache() {
     },
   });
 }
+
+export type GitCheckResult =
+  | { ok: true; branches: string[] }
+  | { ok: false; error: string };
+
+/** Run git ls-remote against the repo URL + credential to verify access. */
+export function useCheckRepoConnection() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<GitCheckResult>(`/admin/repos/${id}/check-connection`, { method: "POST" }),
+  });
+}
