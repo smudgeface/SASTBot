@@ -4,6 +4,7 @@ import { pino } from "pino";
 import { loadConfig } from "../config.js";
 import type { Severity } from "../schemas.js";
 import { upsertScaIssueFromDetection } from "./issueService.js";
+import { computeCvss40BaseScore } from "./cvss4.js";
 
 const logger = pino({ level: loadConfig().logLevel, name: "osvService" });
 
@@ -67,9 +68,7 @@ function parseCvssScore(scoreOrVector: string): number | null {
   const n = parseFloat(scoreOrVector);
   if (!Number.isNaN(n) && n >= 0 && n <= 10) return n;
   if (scoreOrVector.startsWith("CVSS:3")) return computeCvss31BaseScore(scoreOrVector);
-  // CVSS 4.0 uses a macro-vector + lookup-table approach that we haven't
-  // implemented yet. We still want to capture the vector string for display;
-  // see pickCvss().
+  if (scoreOrVector.startsWith("CVSS:4")) return computeCvss40BaseScore(scoreOrVector);
   return null;
 }
 
@@ -81,10 +80,10 @@ function parseCvssScore(scoreOrVector: string): number | null {
  * advisories only ship CVSS_V4 now, so falling back is essential.
  */
 function pickCvss(entries: OsvSeverityEntry[]): { vector: string | null; score: number | null } {
+  const v4 = entries.find((s) => s.type === "CVSS_V4");
+  if (v4) return { vector: v4.score, score: parseCvssScore(v4.score) };
   const v3 = entries.find((s) => s.type === "CVSS_V3");
   if (v3) return { vector: v3.score, score: parseCvssScore(v3.score) };
-  const v4 = entries.find((s) => s.type === "CVSS_V4");
-  if (v4) return { vector: v4.score, score: null };
   const v2 = entries.find((s) => s.type === "CVSS_V2");
   if (v2) return { vector: v2.score, score: parseCvssScore(v2.score) };
   return { vector: null, score: null };
@@ -292,13 +291,14 @@ export async function queryAndPersistFindings(
 
 export async function backfillCvssScores(db: PrismaClient): Promise<void> {
   // Pass 1: fill in score from existing vector (cheap; no network).
+  // Uses the unified parseCvssScore so it picks up both v3.x and v4.0 vectors.
   const rowsWithVector = await db.scaIssue.findMany({
     where: { latestCvssScore: null, latestCvssVector: { not: null } },
     select: { id: true, latestCvssVector: true },
   });
   let scoredFromVector = 0;
   for (const r of rowsWithVector) {
-    const score = r.latestCvssVector ? computeCvss31BaseScore(r.latestCvssVector) : null;
+    const score = r.latestCvssVector ? parseCvssScore(r.latestCvssVector) : null;
     if (score !== null) {
       await db.scaIssue.update({ where: { id: r.id }, data: { latestCvssScore: score } });
       scoredFromVector++;
