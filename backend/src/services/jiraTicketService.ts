@@ -95,18 +95,31 @@ export async function linkSastIssueToTicket(
   }
 
   const ticket = await upsertJiraTicket(db, orgId, issueKey, meta, userId);
-  // Linking a ticket transitions the issue to "planned" regardless of prior triage state
+  // Only auto-transition pending/confirmed → planned. Issues in any other
+  // state (fixed/false_positive/suppressed) keep their current status; the
+  // ticket link alone shouldn't reopen a closed issue.
+  const current = await db.sastIssue.findUnique({ where: { id: sastIssueId }, select: { triageStatus: true } });
+  const autoPlanned = current && (current.triageStatus === "pending" || current.triageStatus === "confirmed");
   await db.sastIssue.update({
     where: { id: sastIssueId },
-    data: { jiraTicketId: ticket.id, triageStatus: "planned" },
+    data: autoPlanned
+      ? { jiraTicketId: ticket.id, triageStatus: "planned" }
+      : { jiraTicketId: ticket.id },
   });
-  logger.info({ sastIssueId, issueKey }, "[jiraTicketService] SAST issue linked to Jira ticket");
+  logger.info({ sastIssueId, issueKey, autoPlanned }, "[jiraTicketService] SAST issue linked to Jira ticket");
   return ticket;
 }
 
 export async function unlinkSastIssue(db: Db, sastIssueId: string): Promise<void> {
-  // Revert to "confirmed" — the issue was real, it just no longer has a ticket
-  await db.sastIssue.update({ where: { id: sastIssueId }, data: { jiraTicketId: null, triageStatus: "confirmed" } });
+  // Only auto-transition planned → confirmed. Terminal / other statuses keep
+  // their current value — unlinking shouldn't reopen a closed issue.
+  const current = await db.sastIssue.findUnique({ where: { id: sastIssueId }, select: { triageStatus: true } });
+  await db.sastIssue.update({
+    where: { id: sastIssueId },
+    data: current?.triageStatus === "planned"
+      ? { jiraTicketId: null, triageStatus: "confirmed" }
+      : { jiraTicketId: null },
+  });
 }
 
 export async function linkScaIssueToTicket(
@@ -134,20 +147,29 @@ export async function linkScaIssueToTicket(
   }
 
   const ticket = await upsertJiraTicket(db, orgId, issueKey, meta, userId);
-  // Linking a ticket transitions the issue to "planned" regardless of prior status
+  // Only auto-transition pending/confirmed → planned. Issues in any other
+  // state keep their current status; linking a ticket to a closed issue
+  // shouldn't reopen it.
+  const current = await db.scaIssue.findUnique({ where: { id: scaIssueId }, select: { dismissedStatus: true } });
+  const autoPlanned = current && (current.dismissedStatus === "pending" || current.dismissedStatus === "confirmed");
   await db.scaIssue.update({
     where: { id: scaIssueId },
-    data: { jiraTicketId: ticket.id, dismissedStatus: "planned" },
+    data: autoPlanned
+      ? { jiraTicketId: ticket.id, dismissedStatus: "planned" }
+      : { jiraTicketId: ticket.id },
   });
-  logger.info({ scaIssueId, issueKey }, "[jiraTicketService] SCA issue linked to Jira ticket");
+  logger.info({ scaIssueId, issueKey, autoPlanned }, "[jiraTicketService] SCA issue linked to Jira ticket");
   return ticket;
 }
 
 export async function unlinkScaIssue(db: Db, scaIssueId: string): Promise<void> {
-  // Revert to "confirmed" — the issue was real, it just no longer has a ticket
+  // Only auto-transition planned → confirmed. Other statuses stay put.
+  const current = await db.scaIssue.findUnique({ where: { id: scaIssueId }, select: { dismissedStatus: true } });
   await db.scaIssue.update({
     where: { id: scaIssueId },
-    data: { jiraTicketId: null, dismissedStatus: "confirmed" },
+    data: current?.dismissedStatus === "planned"
+      ? { jiraTicketId: null, dismissedStatus: "confirmed" }
+      : { jiraTicketId: null },
   });
 }
 

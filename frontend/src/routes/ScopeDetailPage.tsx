@@ -192,23 +192,14 @@ const TRIAGE_LABELS: Record<string, string> = {
 const SCA_STATUS_COLORS = TRIAGE_COLORS;
 const SCA_STATUS_LABELS = TRIAGE_LABELS;
 
-/** Unified status badge for SAST + SCA rows.
- *  When a Jira ticket is linked AND the issue is still open (non-terminal),
- *  we show "Planned" — a ticket implies planned/in-progress work.
- *  Terminal statuses (fixed/false_positive/suppressed) always show the true
- *  status; a closed issue stays closed even if a ticket still points at it. */
-const TERMINAL_TRIAGE = new Set(["fixed", "false_positive", "suppressed"]);
-function StatusBadge({
-  status,
-  hasJira,
-}: {
-  status: string;
-  hasJira: boolean;
-}) {
-  const effective = hasJira && !TERMINAL_TRIAGE.has(status) ? "planned" : status;
+/** Unified status badge for SAST + SCA rows. Always shows the issue's actual
+ *  status — we never override based on Jira linkage. The link/unlink flow is
+ *  what transitions an issue into/out of "planned"; beyond that the Jira
+ *  ticket is metadata, not status. */
+function StatusBadge({ status }: { status: string }) {
   return (
-    <Badge variant="outline" className={`text-[10px] ${TRIAGE_COLORS[effective] ?? ""}`}>
-      {TRIAGE_LABELS[effective] ?? effective.replace(/_/g, " ")}
+    <Badge variant="outline" className={`text-[10px] ${TRIAGE_COLORS[status] ?? ""}`}>
+      {TRIAGE_LABELS[status] ?? status.replace(/_/g, " ")}
     </Badge>
   );
 }
@@ -654,7 +645,14 @@ function SastIssueRow({
         </TableCell>
         <TableCell>
           <div className="flex flex-col gap-1 items-start">
-            <StatusBadge status={issue.triage_status} hasJira={!!jiraTicket} />
+            <div className="flex items-center gap-1">
+              <StatusBadge status={issue.triage_status} />
+              {issue.triage_status === "planned" && jiraTicket?.status_category === "done" && (
+                <span title="Jira ticket is done — mark this issue as fixed">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                </span>
+              )}
+            </div>
           </div>
         </TableCell>
         <TableCell className="text-xs text-muted-foreground">
@@ -989,7 +987,14 @@ function ScaIssueRow({
         </TableCell>
         <TableCell>
           <div className="flex flex-col gap-1 items-start">
-            <StatusBadge status={issue.dismissed_status} hasJira={!!jiraTicket} />
+            <div className="flex items-center gap-1">
+              <StatusBadge status={issue.dismissed_status} />
+              {issue.dismissed_status === "planned" && jiraTicket?.status_category === "done" && (
+                <span title="Jira ticket is done — mark this issue as fixed">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                </span>
+              )}
+            </div>
           </div>
         </TableCell>
         <TableCell className="text-xs text-muted-foreground">
@@ -1158,6 +1163,10 @@ function ScaIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highligh
     filters.reachable || filters.has_fix || filters.hide_dev || filters.include_resolved
   );
 
+  const attentionCount = (data?.items ?? []).filter(
+    (i) => i.dismissed_status === "planned" && ticketById.get(i.jira_ticket_id ?? "")?.status_category === "done",
+  ).length;
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-y-2 gap-x-0">
@@ -1208,6 +1217,18 @@ function ScaIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highligh
               onClick={() => setFilters({ page: 1, page_size: 50 })}
             >
               Clear
+            </button>
+          </>
+        )}
+        {attentionCount > 0 && (
+          <>
+            <Pipe />
+            <button
+              className="flex items-center gap-1 text-xs text-amber-600 font-medium"
+              title="Planned issues whose Jira ticket is marked Done — awaiting scan confirmation"
+              onClick={() => setFilters({ page: 1, page_size: 50, dismissed_statuses: ["planned"] })}
+            >
+              <AlertTriangle className="h-3 w-3" /> {attentionCount} need{attentionCount === 1 ? "s" : ""} attention
             </button>
           </>
         )}
