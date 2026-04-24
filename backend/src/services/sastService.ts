@@ -329,3 +329,51 @@ export async function persistSastFindings(
     orderBy: { severity: "asc" },
   });
 }
+
+// ---------------------------------------------------------------------------
+// One-shot backfill: re-read ±N lines of context for existing SAST issues
+// that were persisted before the context logic was added (their snippet has
+// no newlines). Only works for repos with retained clones.
+// ---------------------------------------------------------------------------
+
+export async function backfillSastContextSnippets(db: PrismaClient): Promise<void> {
+  const { repoCachePath } = await import("./repoCache.js");
+
+  const rows = await db.sastIssue.findMany({
+    where: {
+      latestSnippet: { not: null },
+      // Heuristic: single-line snippets (no \n) are missing context.
+      NOT: { latestSnippet: { contains: "\n" } },
+    },
+    select: {
+      id: true, latestFilePath: true, latestStartLine: true, scopeId: true,
+    },
+  });
+  if (rows.length === 0) return;
+
+  // Cache scope → (repoId, path) lookups to avoid N+1 queries.
+  const scopeCache = new Map<string, { repoId: string; path: string }>();
+  async function getScope(scopeId: string) {
+    let hit = scopeCache.get(scopeId);
+    if (hit) return hit;
+    const s = await db.scanScope.findUnique({ where: { id: scopeId }, select: { repoId: true, path: true } });
+    if (!s) return null;
+    hit = { repoId: s.repoId, path: s.path };
+    scopeCache.set(scopeId, hit);
+    return hit;
+  }
+
+  let updated = 0;
+  for (const row of rows) {
+    const scope = await getScope(row.scopeId);
+    if (!scope) continue;
+    const cacheDir = repoCachePath(scope.repoId);
+    const scanDir = scope.path === "/" || scope.path === "" ? cacheDir : join(cacheDir, scope.path);
+    const absPath = join(scanDir, row.latestFilePath);
+    const ctx = await readContextSnippet(absPath, row.latestStartLine);
+    if (!ctx) continue;
+    await db.sastIssue.update({ where: { id: row.id }, data: { latestSnippet: ctx } });
+    updated++;
+  }
+  if (updated > 0) logger.info({ updated, total: rows.length }, "[sastService] backfilled SAST context snippets");
+}
