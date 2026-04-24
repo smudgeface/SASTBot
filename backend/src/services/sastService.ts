@@ -49,6 +49,8 @@ interface SarifRule {
   name?: string;
   shortDescription?: { text?: string };
   fullDescription?: { text?: string };
+  // Opengrep/Semgrep often omits result.level; fall back to defaultConfiguration
+  defaultConfiguration?: { level?: string };
 }
 
 interface SarifToolDriver {
@@ -204,6 +206,10 @@ export function parseSarif(doc: SarifDoc, scopeDir?: string): SastFindingInput[]
       const normalizedForHash = normalizeSnippet(rawSnippet ?? "");
       const fingerprint = computeFingerprint(ruleId, normalizedForHash);
 
+      // Opengrep often omits result.level for INFO/WARNING rules;
+      // fall back to the rule's defaultConfiguration.level.
+      const effectiveLevel = result.level ?? rule?.defaultConfiguration?.level;
+
       inputs.push({
         ruleId,
         ruleName: rule?.name ?? null,
@@ -213,7 +219,7 @@ export function parseSarif(doc: SarifDoc, scopeDir?: string): SastFindingInput[]
           rule?.fullDescription?.text ??
           null,
         cweIds: extractCweIds(result),
-        severity: mapLevel(result.level),
+        severity: mapLevel(effectiveLevel),
         filePath,
         startLine,
         endLine: endLine !== startLine ? endLine : null,
