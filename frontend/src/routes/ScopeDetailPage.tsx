@@ -1347,7 +1347,7 @@ export default function ScopeDetailPage() {
               <Clock className="h-4 w-4 text-amber-500" />
               <div>
                 <div className="text-lg font-bold leading-none">{scope.pending_triage_count}</div>
-                <div className="text-xs text-muted-foreground">Pending triage</div>
+                <div className="text-xs text-muted-foreground">SAST pending</div>
               </div>
             </CardContent>
           </Card>

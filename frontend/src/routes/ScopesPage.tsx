@@ -65,7 +65,7 @@ export default function ScopesPage() {
                   <TableHead className="text-right">Critical / High</TableHead>
                   <TableHead className="text-right">SCA</TableHead>
                   <TableHead className="text-right">SAST</TableHead>
-                  <TableHead className="text-right">Pending triage</TableHead>
+                  <TableHead className="text-right">SAST pending</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
