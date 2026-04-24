@@ -69,6 +69,7 @@ export interface ScaIssueFilters {
   severities?: string[];      // multi-select
   finding_types?: string[];   // multi-select
   dismissed_status?: string;
+  dismissed_statuses?: string[];  // multi-select
   has_jira_ticket?: "yes" | "no";
   reachable?: boolean;
   has_fix?: boolean;
@@ -87,6 +88,7 @@ export function useScopeScaIssues(scopeId: string | undefined, filters: ScaIssue
       filters.severities?.forEach((s) => params.append("severity", s));
       filters.finding_types?.forEach((t) => params.append("finding_type", t));
       if (filters.dismissed_status) params.set("dismissed_status", filters.dismissed_status);
+      filters.dismissed_statuses?.forEach((s) => params.append("dismissed_statuses", s));
       if (filters.has_jira_ticket) params.set("has_jira_ticket", filters.has_jira_ticket);
       if (filters.reachable) params.set("reachable", "true");
       if (filters.has_fix) params.set("has_fix", "true");
