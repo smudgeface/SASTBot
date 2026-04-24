@@ -10,7 +10,7 @@ import { closeRedis, getRedis } from "./queue/connection.js";
 import { SCAN_QUEUE_NAME, type ScanJobData } from "./queue/scanQueue.js";
 import { cloneOrRefresh } from "./services/repoCache.js";
 import { persistComponents, runCdxgen } from "./services/sbomService.js";
-import { queryAndPersistFindings, backfillCvssScores } from "./services/osvService.js";
+import { queryAndPersistFindings, backfillCvssScores, backfillManifestOrigin } from "./services/osvService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { runOpengrep, parseSarif, persistSastFindings, backfillSastContextSnippets } from "./services/sastService.js";
 import { triageFindings } from "./services/llmTriageService.js";
@@ -134,6 +134,10 @@ backfillReachability(prisma).catch((err) => {
   logger.warn({ err }, "[worker] reachability backfill failed");
 });
 
+backfillManifestOrigin(prisma).catch((err) => {
+  logger.warn({ err }, "[worker] manifest-origin backfill failed");
+});
+
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {
@@ -194,13 +198,13 @@ const worker = new Worker<ScanJobData>(
             componentCount,
           },
         });
-        return persistComponents(scanRunId, sbomDoc, tx);
+        return persistComponents(scanRunId, sbomDoc, tx, scanDir);
       });
       log.info({ inserted: components.length }, "[worker] components persisted");
 
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");
-      const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma);
+      const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir);
       log.info({ findings: cveFindings.length }, "[worker] CVE findings persisted");
 
       // ── Step 5: EOL / deprecation check ─────────────────────────────────

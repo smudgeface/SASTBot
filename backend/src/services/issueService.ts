@@ -112,6 +112,9 @@ export interface ScaDetectionInput {
   activelyExploited: boolean;
   eolDate: Date | null;
   detailJson?: unknown;
+  manifestFile?: string | null;
+  manifestLine?: number | null;
+  manifestSnippet?: string | null;
 }
 
 export async function upsertScaIssueFromDetection(
@@ -146,6 +149,9 @@ export async function upsertScaIssueFromDetection(
     latestActivelyExploited: detection.activelyExploited,
     latestEolDate: detection.eolDate,
     latestHasFix: hasFix,
+    latestManifestFile: detection.manifestFile ?? null,
+    latestManifestLine: detection.manifestLine ?? null,
+    latestManifestSnippet: detection.manifestSnippet ?? null,
   };
 
   const issue = await db.scaIssue.upsert({

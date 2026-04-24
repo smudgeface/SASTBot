@@ -1049,20 +1049,36 @@ function ScaIssueRow({
           </div>
         </TableCell>
         <TableCell className="overflow-hidden">
-          <div
-            className="truncate text-xs text-muted-foreground font-mono"
-            title={`${issue.package_name}${issue.latest_package_version ? `@${issue.latest_package_version}` : ""}`}
-          >
-            {issue.package_name}
-            {issue.latest_package_version ? `@${issue.latest_package_version}` : ""}
-          </div>
+          {issue.latest_manifest_file ? (
+            <>
+              <div
+                className="truncate text-xs text-muted-foreground font-mono"
+                title={`${issue.latest_manifest_file}${issue.latest_manifest_line ? `:${issue.latest_manifest_line}` : ""}`}
+              >
+                {truncateFilePath(issue.latest_manifest_file)}
+                {issue.latest_manifest_line ? `:${issue.latest_manifest_line}` : ""}
+              </div>
+              <div
+                className="truncate text-[10px] text-muted-foreground font-mono mt-0.5"
+                title={`${issue.package_name}${issue.latest_package_version ? `@${issue.latest_package_version}` : ""}`}
+              >
+                {issue.package_name}
+                {issue.latest_package_version ? `@${issue.latest_package_version}` : ""}
+              </div>
+            </>
+          ) : (
+            <div
+              className="truncate text-xs text-muted-foreground font-mono"
+              title={`${issue.package_name}${issue.latest_package_version ? `@${issue.latest_package_version}` : ""}`}
+            >
+              {issue.package_name}
+              {issue.latest_package_version ? `@${issue.latest_package_version}` : ""}
+            </div>
+          )}
           <div className="flex flex-wrap gap-1 mt-0.5">
             <span className="text-[10px] text-muted-foreground uppercase font-medium">
               {issue.latest_finding_type === "deprecated" ? "Deprecated" : issue.latest_finding_type.toUpperCase()}
             </span>
-            {issue.latest_cve_id && (
-              <VulnLink id={issue.latest_cve_id} className="text-[10px]" />
-            )}
             {isDev && (
               <Badge variant="outline" className="text-[9px] px-1 py-0 text-slate-500 border-slate-300">
                 DEV
@@ -1117,11 +1133,31 @@ function ScaIssueRow({
                 {issue.latest_summary}
               </p>
             )}
+            {issue.latest_manifest_file && (
+              <div className="space-y-1">
+                <p className="text-xs font-mono text-muted-foreground break-all">
+                  {issue.latest_manifest_file}
+                  {issue.latest_manifest_line ? `:${issue.latest_manifest_line}` : ""}
+                </p>
+                {issue.latest_manifest_snippet && issue.latest_manifest_line && (
+                  <ContextSnippet
+                    snippet={issue.latest_manifest_snippet}
+                    matchLine={issue.latest_manifest_line}
+                  />
+                )}
+              </div>
+            )}
             <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span>
                 <span className="font-medium">OSV:&nbsp;</span>
                 <VulnLink id={issue.osv_id} className="text-xs" />
               </span>
+              {issue.latest_cve_id && (
+                <span>
+                  <span className="font-medium">CVE:&nbsp;</span>
+                  <VulnLink id={issue.latest_cve_id} className="text-xs" />
+                </span>
+              )}
               {(issue.latest_cvss_score != null || issue.latest_cvss_vector) && (
                 <span>
                   <span className="font-medium">CVSS:</span>{" "}

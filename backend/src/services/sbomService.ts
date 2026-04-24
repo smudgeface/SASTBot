@@ -21,12 +21,35 @@ interface CdxLicenseEntry {
   expression?: string;
 }
 
+interface CdxIdentityMethod {
+  technique?: string; // e.g. "manifest-analysis"
+  value?: string;     // path on disk where the dep was discovered
+}
+
+interface CdxIdentity {
+  field?: string;
+  methods?: CdxIdentityMethod[];
+}
+
+interface CdxEvidence {
+  identity?: CdxIdentity[] | CdxIdentity;
+  occurrences?: { location?: string }[];
+}
+
+interface CdxProperty {
+  name?: string;
+  value?: string;
+}
+
 interface CdxComponent {
   type?: string;
   name?: string;
   version?: string;
   purl?: string;
   licenses?: CdxLicenseEntry[];
+  evidence?: CdxEvidence;
+  properties?: CdxProperty[];
+  scope?: string;
 }
 
 export interface CycloneDxDocument {
@@ -51,6 +74,38 @@ function extractLicenses(entries: CdxLicenseEntry[] | undefined): string[] {
   return entries
     .map((e) => e.license?.id ?? e.license?.name ?? e.expression ?? null)
     .filter((l): l is string => l !== null);
+}
+
+/**
+ * Extract the manifest file path that cdxgen attributed this component to,
+ * relative to the scope's working directory. cdxgen exposes it twice:
+ *   1. `properties[].name === "SrcFile"` (universal across project types)
+ *   2. `evidence.identity[].methods[].technique === "manifest-analysis"`
+ * We try (1) first, falling back to (2). Returns null if neither is present.
+ */
+function extractManifestFile(c: CdxComponent, scopeDir: string): string | null {
+  const srcFile = c.properties?.find((p) => p.name === "SrcFile")?.value;
+  let abs: string | undefined = srcFile;
+  if (!abs && c.evidence?.identity) {
+    const identities = Array.isArray(c.evidence.identity) ? c.evidence.identity : [c.evidence.identity];
+    for (const ident of identities) {
+      for (const m of ident.methods ?? []) {
+        if (m.technique === "manifest-analysis" && m.value) {
+          abs = m.value;
+          break;
+        }
+      }
+      if (abs) break;
+    }
+  }
+  if (!abs) return null;
+  // Strip absolute clone prefix if present so paths are repo-relative.
+  if (abs.startsWith(scopeDir + "/")) return abs.slice(scopeDir.length + 1);
+  // cdxgen sometimes emits paths under /tmp/sastbot-repo-<uuid>/... (the
+  // ephemeral cdxgen working tree). Strip everything up to the first known
+  // manifest filename so we return e.g. "package-lock.json".
+  const m = abs.match(/\/((?:[^/]+\/)*[^/]+\.(?:json|toml|lock|xml|gradle|kts|txt|yaml|yml|cfg|in|pip|mod|sum|csproj|fsproj|vbproj|sln|gemspec|gemfile))$/i);
+  return m ? m[1]! : abs;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +175,7 @@ export async function persistComponents(
   scanRunId: string,
   doc: CycloneDxDocument,
   client: Tx,
+  scopeDir = "",
 ): Promise<SbomComponent[]> {
   const components = doc.components ?? [];
   const unique = new Map<string, CdxComponent>();
@@ -146,7 +202,8 @@ export async function persistComponents(
       componentType: c.type ?? "library",
       // CycloneDX scope: "required" | "optional" | "excluded"
       // npm devDependencies → scope="optional"
-      scope: (c as { scope?: string }).scope ?? null,
+      scope: c.scope ?? null,
+      manifestFile: extractManifestFile(c, scopeDir),
     })),
     skipDuplicates: true,
   });

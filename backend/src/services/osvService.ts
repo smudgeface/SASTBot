@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import type { Prisma, PrismaClient, SbomComponent, ScanFinding } from "@prisma/client";
 import { pino } from "pino";
 
@@ -79,6 +82,54 @@ function parseCvssScore(scoreOrVector: string): number | null {
  * OSV records sometimes include only one type — most modern GitHub-reviewed
  * advisories only ship CVSS_V4 now, so falling back is essential.
  */
+// ---------------------------------------------------------------------------
+// Manifest snippet (read ±3 lines around the package declaration)
+// ---------------------------------------------------------------------------
+
+const MANIFEST_CONTEXT_LINES = 3;
+
+/**
+ * Open the manifest file at scopeDir/manifestPath, find the line that mentions
+ * the package name, and return that line plus ±3 surrounding lines. Used by
+ * the SCA detail view to mirror SAST's code-context display.
+ *
+ * Heuristic: the first line containing the package name (quoted or unquoted)
+ * is treated as the declaration. For package-lock.json this matches the
+ * `"<name>": {` entry; for Cargo.toml it matches `name = "<name>"`; for
+ * requirements.txt it matches `<name>==`. Good enough for the common cases.
+ */
+async function readManifestSnippet(
+  scopeDir: string,
+  manifestPath: string,
+  packageName: string,
+): Promise<{ line: number | null; snippet: string | null }> {
+  try {
+    const content = await readFile(join(scopeDir, manifestPath), "utf8");
+    const lines = content.split("\n");
+    // Search patterns in priority order: quoted, == (pip), ~= (pip), word-boundary fallback.
+    const patterns = [
+      `"${packageName}"`,
+      `'${packageName}'`,
+      `${packageName}==`,
+      `${packageName}~=`,
+      packageName,
+    ];
+    let matchIdx = -1;
+    for (const p of patterns) {
+      matchIdx = lines.findIndex((l) => l.includes(p));
+      if (matchIdx !== -1) break;
+    }
+    if (matchIdx === -1) return { line: null, snippet: null };
+
+    const from = Math.max(0, matchIdx - MANIFEST_CONTEXT_LINES);
+    const to = Math.min(lines.length, matchIdx + MANIFEST_CONTEXT_LINES + 1);
+    const snippet = lines.slice(from, to).join("\n");
+    return { line: matchIdx + 1, snippet };
+  } catch {
+    return { line: null, snippet: null };
+  }
+}
+
 function pickCvss(entries: OsvSeverityEntry[]): { vector: string | null; score: number | null } {
   const v4 = entries.find((s) => s.type === "CVSS_V4");
   if (v4) return { vector: v4.score, score: parseCvssScore(v4.score) };
@@ -213,6 +264,7 @@ export async function queryAndPersistFindings(
   orgId: string | null,
   components: SbomComponent[],
   client: Tx,
+  scopeDir = "",
 ): Promise<ScanFinding[]> {
   const withPurl = components.filter((c) => c.purl);
   if (withPurl.length === 0) return [];
@@ -237,6 +289,13 @@ export async function queryAndPersistFindings(
       const aliases = [vuln.id, ...(vuln.aliases ?? [])].filter(
         (a, idx, arr) => arr.indexOf(a) === idx,
       );
+
+      // Resolve manifest origin (e.g. package-lock.json) and grab a ±3-line
+      // snippet around the package declaration so the SCA detail can mirror
+      // SAST's code-context view. component.manifestFile is repo-relative.
+      const manifestFields = scopeDir && component.manifestFile
+        ? await readManifestSnippet(scopeDir, component.manifestFile, component.name)
+        : { line: null, snippet: null };
 
       // Detect the "two records, same underlying vuln" case: another issue in
       // the same scope+package whose aliases overlap ours but whose osv_id
@@ -282,6 +341,9 @@ export async function queryAndPersistFindings(
           activelyExploited: false,
           eolDate: null,
           detailJson: vuln,
+          manifestFile: component.manifestFile ?? null,
+          manifestLine: manifestFields.line,
+          manifestSnippet: manifestFields.snippet,
         },
       );
 
@@ -360,4 +422,83 @@ export async function backfillCvssScores(db: PrismaClient): Promise<void> {
     }
   }
   logger.info({ updated: fromOsv, total: rowsNoVector.length }, "[osvService] backfilled CVSS vectors from OSV");
+}
+
+// ---------------------------------------------------------------------------
+// Backfill manifest origin (file + line + snippet) for existing SCA issues.
+//
+// Reads the latest scan run's stored sbom_json to find each issue's component
+// and its manifestFile (cdxgen evidence), then reads the snippet from the
+// retained clone. Skips scopes whose repo isn't retained.
+// ---------------------------------------------------------------------------
+
+export async function backfillManifestOrigin(db: PrismaClient): Promise<void> {
+  const { repoCachePath } = await import("./repoCache.js");
+  const { stat } = await import("node:fs/promises");
+
+  const scopes = await db.scanScope.findMany({
+    where: { lastScanRunId: { not: null } },
+    select: { id: true, path: true, repoId: true, lastScanRunId: true, repo: { select: { retainClone: true } } },
+  });
+
+  let totalUpdated = 0;
+  for (const scope of scopes) {
+    if (!scope.repo?.retainClone || !scope.lastScanRunId) continue;
+    const cacheDir = repoCachePath(scope.repoId);
+    try { await stat(cacheDir); } catch { continue; }
+    const scopeDir = scope.path === "/" || scope.path === "" ? cacheDir : join(cacheDir, scope.path);
+
+    // Pull the raw sbom_json from the latest scan and index by purl → manifest_file.
+    const run = await db.scanRun.findUnique({
+      where: { id: scope.lastScanRunId },
+      select: { sbomJson: true },
+    });
+    if (!run?.sbomJson) continue;
+
+    type CdxLite = { name?: string; purl?: string; properties?: { name?: string; value?: string }[]; evidence?: { identity?: unknown } };
+    const components = ((run.sbomJson as { components?: CdxLite[] }).components ?? []) as CdxLite[];
+    const manifestByName = new Map<string, string>();
+    for (const c of components) {
+      if (!c.name) continue;
+      // Mirror the same extraction logic as sbomService.extractManifestFile,
+      // but read directly here to avoid an import cycle.
+      const srcFile = c.properties?.find((p) => p.name === "SrcFile")?.value;
+      let abs: string | undefined = srcFile;
+      if (!abs && c.evidence?.identity) {
+        const identities = (Array.isArray(c.evidence.identity) ? c.evidence.identity : [c.evidence.identity]) as { methods?: { technique?: string; value?: string }[] }[];
+        for (const ident of identities) {
+          for (const m of ident.methods ?? []) {
+            if (m.technique === "manifest-analysis" && m.value) { abs = m.value; break; }
+          }
+          if (abs) break;
+        }
+      }
+      if (!abs) continue;
+      let rel = abs;
+      if (abs.startsWith(scopeDir + "/")) rel = abs.slice(scopeDir.length + 1);
+      else {
+        const m = abs.match(/\/((?:[^/]+\/)*[^/]+\.(?:json|toml|lock|xml|gradle|kts|txt|yaml|yml|cfg|in|pip|mod|sum|csproj|fsproj|vbproj|sln|gemspec|gemfile))$/i);
+        if (m) rel = m[1]!;
+      }
+      manifestByName.set(c.name, rel);
+    }
+
+    const issues = await db.scaIssue.findMany({
+      where: { scopeId: scope.id, latestManifestFile: null },
+      select: { id: true, packageName: true },
+    });
+    for (const issue of issues) {
+      const manifestFile = manifestByName.get(issue.packageName);
+      if (!manifestFile) continue;
+      const { line, snippet } = await readManifestSnippet(scopeDir, manifestFile, issue.packageName);
+      await db.scaIssue.update({
+        where: { id: issue.id },
+        data: { latestManifestFile: manifestFile, latestManifestLine: line, latestManifestSnippet: snippet },
+      });
+      totalUpdated++;
+    }
+  }
+  if (totalUpdated > 0) {
+    logger.info({ updated: totalUpdated }, "[osvService] backfilled SCA manifest origin");
+  }
 }
