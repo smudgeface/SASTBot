@@ -832,6 +832,41 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   );
 
   // ---------------------------------------------------------------------------
+  // Jira tickets for a scope (all linked tickets, de-duplicated)
+  // ---------------------------------------------------------------------------
+
+  typed.get(
+    "/api/scopes/:id/jira-tickets",
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ["scopes", "jira"],
+        summary: "List all Jira tickets linked to issues in this scope",
+        params: IdParamsSchema,
+        response: { 200: z.array(JiraTicketOutSchema), 401: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const scope = await prisma.scanScope.findFirst({
+        where: { id: req.params.id, orgId: orgId ?? null },
+        select: { id: true },
+      });
+      if (!scope) return reply.code(404).send({ detail: "Scope not found" });
+
+      // Collect unique ticket IDs referenced by any issue in this scope
+      const [sastTicketIds, scaTicketIds] = await Promise.all([
+        prisma.sastIssue.findMany({ where: { scopeId: scope.id, jiraTicketId: { not: null } }, select: { jiraTicketId: true } }),
+        prisma.scaIssue.findMany({ where: { scopeId: scope.id, jiraTicketId: { not: null } }, select: { jiraTicketId: true } }),
+      ]);
+      const ids = [...new Set([...sastTicketIds, ...scaTicketIds].map((r) => r.jiraTicketId!))];
+      if (ids.length === 0) return [];
+      const tickets = await prisma.jiraTicket.findMany({ where: { id: { in: ids } } });
+      return tickets.map(jiraTicketToOut);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
   // Jira ticket on-demand refresh
   // ---------------------------------------------------------------------------
 

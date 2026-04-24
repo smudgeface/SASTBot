@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { useCredentials } from "@/api/queries/credentials";
 import { useSettings, useUpdateSettings, useCheckLlm } from "@/api/queries/settings";
+import { useCheckJiraConnection } from "@/api/queries/jira";
 import type { AdminSettingsUpdate, LlmApiFormat } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,10 +32,12 @@ export default function SettingsPage() {
   const credentials = useCredentials();
   const updateSettings = useUpdateSettings();
   const checkLlm = useCheckLlm();
+  const checkJira = useCheckJiraConnection();
   const { toast } = useToast();
 
   // Jira section state
   const [jiraBaseUrl, setJiraBaseUrl] = useState("");
+  const [jiraEmail, setJiraEmail] = useState("");
   const [jiraCredChoice, setJiraCredChoice] = useState<CredentialChoice>("existing");
   const [jiraCredId, setJiraCredId] = useState<string>("");
   const [jiraNewName, setJiraNewName] = useState("");
@@ -59,6 +62,7 @@ export default function SettingsPage() {
     const data = settings.data;
     if (!data) return;
     setJiraBaseUrl(data.jira_base_url ?? "");
+    setJiraEmail(data.jira_email ?? "");
     setJiraCredId(data.jira_credential_id ?? "");
     setJiraCredChoice(data.jira_credential_id ? "existing" : "new");
 
@@ -100,6 +104,7 @@ export default function SettingsPage() {
     e.preventDefault();
     const payload: AdminSettingsUpdate = {
       jira_base_url: jiraBaseUrl.trim() || null,
+      jira_email: jiraEmail.trim() || null,
       jira_credential_id: jiraCredChoice === "existing" ? jiraCredId || null : null,
       jira_credential: buildJiraCred(),
       llm_base_url: llmBaseUrl.trim() || null,
@@ -145,14 +150,26 @@ export default function SettingsPage() {
             <CardDescription>Used to open tickets for triaged findings.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="jira-url">Base URL</Label>
-              <Input
-                id="jira-url"
-                value={jiraBaseUrl}
-                onChange={(e) => setJiraBaseUrl(e.target.value)}
-                placeholder="https://yourorg.atlassian.net"
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="jira-url">Base URL</Label>
+                <Input
+                  id="jira-url"
+                  value={jiraBaseUrl}
+                  onChange={(e) => setJiraBaseUrl(e.target.value)}
+                  placeholder="https://yourorg.atlassian.net"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="jira-email">Account email</Label>
+                <Input
+                  id="jira-email"
+                  type="email"
+                  value={jiraEmail}
+                  onChange={(e) => setJiraEmail(e.target.value)}
+                  placeholder="you@example.com"
+                />
+              </div>
             </div>
 
             <CredentialPicker
@@ -169,6 +186,25 @@ export default function SettingsPage() {
               valuePlaceholder="Jira API token"
               kindLabel="Jira token"
             />
+
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={checkJira.isPending}
+                onClick={() => checkJira.mutate()}
+              >
+                {checkJira.isPending ? "Checking…" : "Check connection"}
+              </Button>
+              {checkJira.data && (
+                <span className={`text-sm ${checkJira.data.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>
+                  {checkJira.data.ok
+                    ? `✓ Connected as ${checkJira.data.account_name}`
+                    : `✗ ${checkJira.data.error}`}
+                </span>
+              )}
+            </div>
           </CardContent>
         </Card>
 
