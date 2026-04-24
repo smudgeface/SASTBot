@@ -526,7 +526,7 @@ export const ScaIssueListSchema = z.array(ScaIssueOutSchema);
 
 // Triage action for a SastIssue
 export const SastIssueTriageBodySchema = z.object({
-  status: z.enum(["confirmed", "false_positive", "suppressed", "pending", "fixed"]),
+  status: z.enum(["confirmed", "false_positive", "suppressed", "pending", "fixed", "planned"]),
   reason: z.string().optional(),
 });
 export type SastIssueTriageBody = z.infer<typeof SastIssueTriageBodySchema>;

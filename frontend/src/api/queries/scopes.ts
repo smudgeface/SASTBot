@@ -137,7 +137,7 @@ export function useTriageSastIssue() {
       reason,
     }: {
       issueId: string;
-      status: "confirmed" | "false_positive" | "suppressed" | "pending" | "fixed";
+      status: "confirmed" | "false_positive" | "suppressed" | "pending" | "fixed" | "planned";
       reason?: string;
     }) =>
       apiFetch<SastIssue>(`/api/sast-issues/${issueId}/triage`, {

@@ -596,7 +596,7 @@ function SastIssueRow({
     });
   };
 
-  const act = (status: "confirmed" | "false_positive" | "suppressed" | "pending" | "fixed") => {
+  const act = (status: "confirmed" | "false_positive" | "suppressed" | "pending" | "fixed" | "planned") => {
     triage.mutate({ issueId: issue.id, status });
   };
 
@@ -722,10 +722,11 @@ function SastIssueRow({
                     </Button>
                   </>
                 ) : issue.triage_status === "confirmed" ? (
-                  // Confirmed (To do) → can mark fixed, dismiss, or reopen
+                  // Confirmed (To do) → forward to Planned, or dismiss / reopen.
+                  // No "Mark fixed" here — fixes must transit through Planned.
                   <>
-                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("fixed")}>
-                      Mark fixed
+                    <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("planned")}>
+                      Planned
                     </Button>
                     <Button size="sm" variant="outline" disabled={triage.isPending} onClick={() => act("suppressed")}>
                       Won't fix
@@ -930,7 +931,7 @@ function ScaIssueRow({
     });
   };
 
-  const act = (status: "pending" | "confirmed" | "suppressed" | "false_positive" | "fixed") => {
+  const act = (status: "pending" | "confirmed" | "suppressed" | "false_positive" | "fixed" | "planned") => {
     dismiss.mutate({ issueId: issue.id, status });
   };
 
@@ -1096,10 +1097,11 @@ function ScaIssueRow({
                     </Button>
                   </>
                 ) : issue.dismissed_status === "confirmed" ? (
-                  // Confirmed (To do) → can mark fixed, dismiss, or reopen
+                  // Confirmed (To do) → forward to Planned, or dismiss / reopen.
+                  // No "Mark fixed" here — fixes must transit through Planned.
                   <>
-                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("fixed")}>
-                      Mark fixed
+                    <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("planned")}>
+                      Planned
                     </Button>
                     <Button size="sm" variant="outline" disabled={dismiss.isPending} onClick={() => act("suppressed")}>
                       Won't fix
