@@ -116,7 +116,7 @@ function extractManifestFile(c: CdxComponent, scopeDir: string): string | null {
  * Run cdxgen against `workingDir` and return the parsed CycloneDX JSON.
  * cdxgen is installed as a package dep; its binary is in node_modules/.bin.
  */
-export async function runCdxgen(workingDir: string): Promise<CycloneDxDocument> {
+export async function runCdxgen(workingDir: string, excludes: string[] = []): Promise<CycloneDxDocument> {
   // Write the SBOM to a temp file so we don't have to parse stdout noise.
   const tmpDir = await mkdtemp(join(tmpdir(), "cdxgen-"));
   const outputPath = join(tmpDir, "sbom.json");
@@ -125,12 +125,15 @@ export async function runCdxgen(workingDir: string): Promise<CycloneDxDocument> 
     // `cdxgen` detects the project type automatically when -t is omitted.
     // --no-recurse keeps it focused on the root manifest.
     const cdxgenBin = join(process.cwd(), "node_modules", ".bin", "cdxgen");
-    logger.info({ workingDir, outputPath }, "[sbomService] running cdxgen");
+    // Each --exclude takes a path; we pass a glob ending in /** so any file
+    // inside that subtree is dropped.
+    const excludeArgs = excludes.flatMap((p) => ["--exclude", `${p}/**`]);
+    logger.info({ workingDir, outputPath, excludes }, "[sbomService] running cdxgen");
 
     try {
       await execFileAsync(
         cdxgenBin,
-        ["-o", outputPath, workingDir],
+        ["-o", outputPath, ...excludeArgs, workingDir],
         {
           timeout: 5 * 60 * 1000, // 5-minute hard cap
           env: {

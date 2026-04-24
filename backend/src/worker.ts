@@ -41,6 +41,31 @@ async function appendWarning(scanRunId: string, warning: ScanWarning): Promise<v
 }
 
 // ---------------------------------------------------------------------------
+// Sibling-scope exclusions
+//
+// When a repo has overlapping scan paths (e.g. "/" and "/GoWeb"), the
+// broader scope should not double-scan the deeper sibling. This helper
+// returns the list of subdirs to exclude from `currentPath`'s scan,
+// expressed relative to that scope's working dir.
+//
+// Examples:
+//   currentPath="/", all=["/", "/GoWeb"]            → ["GoWeb"]
+//   currentPath="/", all=["/", "/a", "/a/b"]        → ["a", "a/b"]
+//   currentPath="/a", all=["/", "/a", "/a/b"]       → ["b"]
+//   currentPath="/a/b", all=["/", "/a", "/a/b"]     → []
+// ---------------------------------------------------------------------------
+
+function computeScopeExclusions(currentPath: string, allPaths: string[]): string[] {
+  const norm = (p: string) => p.replace(/^\/+/, "").replace(/\/+$/, "");
+  const cur = norm(currentPath);
+  const curPrefix = cur === "" ? "" : cur + "/";
+  return allPaths
+    .map(norm)
+    .filter((s) => s !== cur && (curPrefix === "" ? s !== "" : s.startsWith(curPrefix)))
+    .map((s) => (curPrefix === "" ? s : s.slice(curPrefix.length)));
+}
+
+// ---------------------------------------------------------------------------
 // Backfill LLM summaries for existing issues that lack them
 // ---------------------------------------------------------------------------
 
@@ -182,8 +207,15 @@ const worker = new Worker<ScanJobData>(
         scopePath === "/" || scopePath === ""
           ? clone.workingDir
           : join(clone.workingDir, scopePath);
-      log.info({ scanDir, scopePath }, "[worker] running cdxgen");
-      const sbomDoc = await runCdxgen(scanDir);
+
+      // When the same repo defines nested scopes (e.g. "/" and "/GoWeb"),
+      // the broader scope excludes the deeper sibling so files aren't
+      // double-counted. We also strip excluded subtrees from opengrep.
+      const allScanPaths = (Array.isArray(repo.scanPaths) ? repo.scanPaths : ["/"]) as string[];
+      const excludes = computeScopeExclusions(scopePath, allScanPaths);
+
+      log.info({ scanDir, scopePath, excludes }, "[worker] running cdxgen");
+      const sbomDoc = await runCdxgen(scanDir, excludes);
       const componentCount = sbomDoc.components?.length ?? 0;
       log.info({ componentCount }, "[worker] cdxgen done");
 
@@ -219,8 +251,8 @@ const worker = new Worker<ScanJobData>(
         ? (repo.analysisTypes as string[])
         : [];
       if (analysisTypes.includes("sast")) {
-        log.info({ scanDir }, "[worker] running opengrep SAST");
-        const sarif = await runOpengrep(scanDir);
+        log.info({ scanDir, excludes }, "[worker] running opengrep SAST");
+        const sarif = await runOpengrep(scanDir, excludes);
         if (sarif === null) {
           log.warn("[worker] opengrep binary missing — SAST skipped");
           await appendWarning(scanRunId, {

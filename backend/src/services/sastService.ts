@@ -96,12 +96,16 @@ export interface SastFindingInput {
  * Returns null if the binary is missing (ENOENT) so the caller can
  * write a warning and continue with SCA-only results.
  */
-export async function runOpengrep(scopeDir: string): Promise<SarifDoc | null> {
-  logger.info({ scopeDir }, "[sastService] running opengrep");
+export async function runOpengrep(scopeDir: string, excludes: string[] = []): Promise<SarifDoc | null> {
+  // Opengrep's --exclude takes a path/glob and can be repeated. We pass each
+  // sibling-scope subdir so the broader scope doesn't double-scan files that
+  // the deeper scope already owns.
+  const excludeArgs = excludes.flatMap((p) => ["--exclude", p]);
+  logger.info({ scopeDir, excludes }, "[sastService] running opengrep");
   try {
     const { stdout } = await execFileAsync(
       OPENGREP_BIN,
-      ["scan", "--config", "auto", "--sarif", scopeDir],
+      ["scan", "--config", "auto", "--sarif", ...excludeArgs, scopeDir],
       {
         timeout: OPENGREP_TIMEOUT_MS,
         maxBuffer: 64 * 1024 * 1024, // 64 MB — SARIF for large repos can be large
