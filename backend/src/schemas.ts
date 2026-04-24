@@ -187,6 +187,9 @@ export const RepoCreateSchema = z.object({
   scan_paths: z.array(z.string()).default(["/"]),
   analysis_types: z.array(AnalysisTypeSchema).default(["sca"]),
   schedule_cron: z.string().nullable().optional(),
+  /** Optional URL template used to make file paths in SAST/SCA detail views
+   *  clickable. Supports $FILE and $LINE placeholders. */
+  source_url_template: z.string().max(2048).nullable().optional(),
   is_active: z.boolean().default(true),
   /** When true, worker keeps the clone between scans and updates via
    *  `git fetch`; when false, each scan starts from a fresh tmpdir. */
@@ -205,6 +208,7 @@ export const RepoUpdateSchema = z.object({
   scan_paths: z.array(z.string()).optional(),
   analysis_types: z.array(AnalysisTypeSchema).optional(),
   schedule_cron: z.string().nullable().optional(),
+  source_url_template: z.string().max(2048).nullable().optional(),
   is_active: z.boolean().optional(),
   retain_clone: z.boolean().optional(),
   credential_id: UuidSchema.nullable().optional(),
@@ -223,6 +227,7 @@ export const RepoOutSchema = z.object({
   scan_paths: z.array(z.string()),
   analysis_types: z.array(AnalysisTypeSchema),
   schedule_cron: z.string().nullable(),
+  source_url_template: z.string().nullable(),
   is_active: z.boolean(),
   retain_clone: z.boolean(),
   /** Set whenever the worker finishes a clone/fetch for this repo. Null

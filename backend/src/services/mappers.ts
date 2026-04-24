@@ -147,6 +147,7 @@ export function repoToOut(repo: Repo): RepoOut {
     scan_paths: toStringArray(repo.scanPaths),
     analysis_types: toAnalysisArray(repo.analysisTypes),
     schedule_cron: repo.scheduleCron,
+    source_url_template: repo.sourceUrlTemplate,
     is_active: repo.isActive,
     retain_clone: repo.retainClone,
     last_cloned_at: repo.lastClonedAt ? repo.lastClonedAt.toISOString() : null,

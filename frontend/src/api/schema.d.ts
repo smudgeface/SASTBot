@@ -270,6 +270,7 @@ export interface paths {
                             scan_paths: string[];
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
+                            source_url_template: string | null;
                             is_active: boolean;
                             retain_clone: boolean;
                             last_cloned_at: string | null;
@@ -332,6 +333,7 @@ export interface paths {
                          */
                         analysis_types?: ("sca" | "sast")[];
                         schedule_cron?: string | null;
+                        source_url_template?: string | null;
                         /** @default true */
                         is_active?: boolean;
                         /** @default false */
@@ -402,6 +404,7 @@ export interface paths {
                             scan_paths: string[];
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
+                            source_url_template: string | null;
                             is_active: boolean;
                             retain_clone: boolean;
                             last_cloned_at: string | null;
@@ -490,6 +493,7 @@ export interface paths {
                             scan_paths: string[];
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
+                            source_url_template: string | null;
                             is_active: boolean;
                             retain_clone: boolean;
                             last_cloned_at: string | null;
@@ -553,6 +557,7 @@ export interface paths {
                         scan_paths?: string[];
                         analysis_types?: ("sca" | "sast")[];
                         schedule_cron?: string | null;
+                        source_url_template?: string | null;
                         is_active?: boolean;
                         retain_clone?: boolean;
                         /** Format: uuid */
@@ -621,6 +626,7 @@ export interface paths {
                             scan_paths: string[];
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
+                            source_url_template: string | null;
                             is_active: boolean;
                             retain_clone: boolean;
                             last_cloned_at: string | null;
@@ -781,6 +787,7 @@ export interface paths {
                             scan_paths: string[];
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
+                            source_url_template: string | null;
                             is_active: boolean;
                             retain_clone: boolean;
                             last_cloned_at: string | null;
@@ -2728,6 +2735,7 @@ export interface paths {
                             created_at: string;
                             resolved_sast_count: number;
                             resolved_sca_count: number;
+                            source_url_template: string | null;
                         };
                     };
                 };
@@ -2945,9 +2953,18 @@ export interface paths {
                                 latest_actively_exploited: boolean;
                                 latest_eol_date: string | null;
                                 latest_has_fix: boolean;
+                                latest_manifest_file: string | null;
+                                latest_manifest_line: number | null;
+                                latest_manifest_snippet: string | null;
                                 confirmed_reachable: boolean;
                                 reachable_via_sast_fingerprint: string | null;
                                 reachable_reasoning: string | null;
+                                reachable_confidence: number | null;
+                                reachable_call_sites: {
+                                    file: string;
+                                    line: number;
+                                    snippet: string;
+                                }[] | null;
                                 reachable_assessed_at: string | null;
                                 reachable_model: string | null;
                                 first_seen_at: string;
@@ -3331,9 +3348,18 @@ export interface paths {
                             latest_actively_exploited: boolean;
                             latest_eol_date: string | null;
                             latest_has_fix: boolean;
+                            latest_manifest_file: string | null;
+                            latest_manifest_line: number | null;
+                            latest_manifest_snippet: string | null;
                             confirmed_reachable: boolean;
                             reachable_via_sast_fingerprint: string | null;
                             reachable_reasoning: string | null;
+                            reachable_confidence: number | null;
+                            reachable_call_sites: {
+                                file: string;
+                                line: number;
+                                snippet: string;
+                            }[] | null;
                             reachable_assessed_at: string | null;
                             reachable_model: string | null;
                             first_seen_at: string;
@@ -3552,9 +3578,18 @@ export interface paths {
                             latest_actively_exploited: boolean;
                             latest_eol_date: string | null;
                             latest_has_fix: boolean;
+                            latest_manifest_file: string | null;
+                            latest_manifest_line: number | null;
+                            latest_manifest_snippet: string | null;
                             confirmed_reachable: boolean;
                             reachable_via_sast_fingerprint: string | null;
                             reachable_reasoning: string | null;
+                            reachable_confidence: number | null;
+                            reachable_call_sites: {
+                                file: string;
+                                line: number;
+                                snippet: string;
+                            }[] | null;
                             reachable_assessed_at: string | null;
                             reachable_model: string | null;
                             first_seen_at: string;

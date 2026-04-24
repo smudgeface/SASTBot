@@ -134,6 +134,7 @@ export interface Repo {
   analysis_types: AnalysisType[];
   credential_id: string | null;
   retain_clone: boolean;
+  source_url_template: string | null;
   last_cloned_at: string | null;
   created_at?: string;
   updated_at?: string;
@@ -147,6 +148,7 @@ export interface RepoUpsertInput {
   scan_paths: string[];
   analysis_types: AnalysisType[];
   retain_clone?: boolean;
+  source_url_template?: string | null;
   /** Existing credential to link. Ignored if `credential` (inline) is supplied. */
   credential_id?: string | null;
   /** Optional inline credential to create and link in the same request. */
@@ -440,6 +442,7 @@ export interface ScopeListItem {
 export interface ScopeDetail extends ScopeListItem {
   resolved_sast_count: number;
   resolved_sca_count: number;
+  source_url_template: string | null;
 }
 
 export interface ScanRunSummary {

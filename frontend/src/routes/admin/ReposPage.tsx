@@ -387,6 +387,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   const [sca, setSca] = useState<boolean>(repo?.analysis_types.includes("sca") ?? true);
   const [sast, setSast] = useState<boolean>(repo?.analysis_types.includes("sast") ?? true);
   const [retainClone, setRetainClone] = useState<boolean>(repo?.retain_clone ?? false);
+  const [sourceUrlTemplate, setSourceUrlTemplate] = useState<string>(repo?.source_url_template ?? "");
 
   const [credentialChoice, setCredentialChoice] = useState<CredentialChoice>(
     repo?.credential_id ? "existing" : "new",
@@ -425,6 +426,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       scan_paths,
       analysis_types,
       retain_clone: retainClone,
+      source_url_template: sourceUrlTemplate.trim() || null,
     };
 
     if (credentialChoice === "existing") {
@@ -597,6 +599,21 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 </p>
               </div>
             </label>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="source-url-template">Source URL template</Label>
+            <Input
+              id="source-url-template"
+              value={sourceUrlTemplate}
+              onChange={(e) => setSourceUrlTemplate(e.target.value)}
+              placeholder="https://git.example.com/repos/owner/repo/browse/$FILE#$LINE"
+            />
+            <p className="text-xs text-muted-foreground">
+              Optional. Used to make file paths in SAST/SCA detail views clickable.
+              Supports <code className="font-mono">$FILE</code> (repo-relative path) and{" "}
+              <code className="font-mono">$LINE</code> (line number) placeholders.
+            </p>
           </div>
 
           <Separator />
