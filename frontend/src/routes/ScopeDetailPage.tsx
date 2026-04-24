@@ -52,6 +52,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import { formatRelative } from "@/lib/format";
 
 // ---------------------------------------------------------------------------
@@ -99,13 +100,13 @@ const TRIAGE_COLORS: Record<string, string> = {
 };
 
 const TRIAGE_LABELS: Record<string, string> = {
-  pending:        "pending",
-  confirmed:      "To do",      // "confirmed" = we know it's real, not yet planned
-  planned:        "planned",
-  fixed:          "fixed",
-  false_positive: "invalid",
-  suppressed:     "won't fix",
-  error:          "error",
+  pending:        "Pending",
+  confirmed:      "To do",
+  planned:        "Planned",
+  fixed:          "Fixed",
+  false_positive: "Invalid",
+  suppressed:     "Won't fix",
+  error:          "Error",
 };
 
 // SCA dismissed status colors (mirrors TRIAGE_COLORS for consistency)
@@ -118,16 +119,16 @@ const SCA_STATUS_COLORS: Record<string, string> = {
 };
 
 const SCA_STATUS_LABELS: Record<string, string> = {
-  active:         "active",
+  active:         "Active",
   confirmed:      "To do",
-  acknowledged:   "acknowledged",
-  wont_fix:       "won't fix",
-  false_positive: "invalid",
+  acknowledged:   "Acknowledged",
+  wont_fix:       "Won't fix",
+  false_positive: "Invalid",
 };
 
 function TriageBadge({ status }: { status: string }) {
   return (
-    <Badge variant="outline" className={`capitalize text-[10px] ${TRIAGE_COLORS[status] ?? ""}`}>
+    <Badge variant="outline" className={`text-[10px] ${TRIAGE_COLORS[status] ?? ""}`}>
       {TRIAGE_LABELS[status] ?? status.replace(/_/g, " ")}
     </Badge>
   );
@@ -372,7 +373,7 @@ function Pipe() {
 }
 
 /**
- * A stackable filter group — items joined by "|" separators.
+ * Segmented control filter group — items share a connected border, no "|" separators.
  * Multiple can be active simultaneously; nothing active = show all.
  */
 function FilterGroup<T extends string>({
@@ -388,26 +389,29 @@ function FilterGroup<T extends string>({
   label?: (v: T) => string;
   colorFn?: (v: T) => string;
 }) {
-  const baseInactive = "border-transparent text-muted-foreground hover:border-border hover:text-foreground";
   return (
-    <div className="flex items-center gap-0">
-      {items.map((item, i) => (
-        <div key={item} className="flex items-center">
-          {i > 0 && (
-            <span className="mx-1 text-[10px] text-muted-foreground/50 select-none">|</span>
-          )}
+    <div className="flex items-center">
+      {items.map((item, i) => {
+        const isFirst = i === 0;
+        const isLast = i === items.length - 1;
+        const isActive = active.has(item);
+        return (
           <button
+            key={item}
             onClick={() => onToggle(item)}
-            className={`rounded px-2 py-0.5 text-xs font-medium border transition-colors ${
-              active.has(item)
-                ? (colorFn ? colorFn(item) : "bg-accent text-accent-foreground border-border")
-                : baseInactive
-            }`}
+            className={cn(
+              "relative px-2 py-0.5 text-xs font-medium border transition-colors",
+              isFirst ? "rounded-l-sm" : "-ml-px",
+              isLast ? "rounded-r-sm" : "",
+              isActive
+                ? cn("z-10", colorFn ? colorFn(item) : "bg-accent text-accent-foreground border-border")
+                : "border-border/50 text-muted-foreground hover:bg-muted/30 hover:text-foreground hover:z-10",
+            )}
           >
             {label ? label(item) : item}
           </button>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -693,6 +697,7 @@ function SastIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highlig
           items={SAST_SEVERITIES}
           active={severitySet}
           onToggle={(s) => toggleSet(severitySet, "severities", s)}
+          label={(s) => s.charAt(0).toUpperCase() + s.slice(1)}
           colorFn={(s) => SEVERITY_COLORS[s] ?? ""}
         />
         <Pipe />
@@ -706,7 +711,7 @@ function SastIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highlig
         <ToggleGroup
           items={[{
             key: "include_resolved",
-            label: "include resolved",
+            label: "Include resolved",
             active: !!filters.include_resolved,
             onToggle: () => setFilters((f) => ({ ...f, page: 1, include_resolved: !f.include_resolved })),
           }]}
@@ -856,12 +861,12 @@ function ScaIssueRow({
             )}
             {issue.latest_has_fix && (
               <Badge variant="outline" className="text-[9px] px-1 py-0 text-green-600 border-green-400">
-                has fix
+                Has fix
               </Badge>
             )}
             {issue.confirmed_reachable && (
               <Badge variant="outline" className="text-[9px] px-1 py-0 text-amber-600 border-amber-400 gap-0.5">
-                <Zap className="h-2.5 w-2.5" /> reachable
+                <Zap className="h-2.5 w-2.5" /> Reachable
               </Badge>
             )}
           </div>
@@ -874,7 +879,7 @@ function ScaIssueRow({
             {jiraTicket
               ? <JiraStatusPill ticket={jiraTicket} />
               : issue.dismissed_status !== "active" && (
-                  <Badge variant="outline" className={`capitalize text-[10px] ${SCA_STATUS_COLORS[issue.dismissed_status] ?? "text-slate-500 border-slate-400"}`}>
+                  <Badge variant="outline" className={`text-[10px] ${SCA_STATUS_COLORS[issue.dismissed_status] ?? "text-slate-500 border-slate-400"}`}>
                     {SCA_STATUS_LABELS[issue.dismissed_status] ?? issue.dismissed_status.replace("_", " ")}
                   </Badge>
                 )}
@@ -999,10 +1004,13 @@ function ScaIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highligh
     setFilters((f) => ({ ...f, page: 1, [key]: next.size > 0 ? [...next] : undefined }));
   }
 
-  const TYPE_LABELS: Record<string, string> = { cve: "cve", eol: "eol", deprecated: "deprecated" };
+  const SCA_STATUSES = ["active", "confirmed", "acknowledged", "wont_fix", "false_positive"] as const;
+  const TYPE_LABELS: Record<string, string> = { cve: "CVE", eol: "EOL", deprecated: "Deprecated" };
+
+  const statusSet = new Set(filters.dismissed_statuses ?? []) as ReadonlySet<typeof SCA_STATUSES[number]>;
 
   const hasScaFilter = !!(
-    filters.severities?.length || filters.finding_types?.length ||
+    filters.severities?.length || filters.finding_types?.length || filters.dismissed_statuses?.length ||
     filters.reachable || filters.has_fix || filters.hide_dev || filters.include_resolved
   );
 
@@ -1013,6 +1021,7 @@ function ScaIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highligh
           items={SCA_SEVERITIES}
           active={severitySet}
           onToggle={(s) => toggleSet(severitySet, "severities", s)}
+          label={(s) => s.charAt(0).toUpperCase() + s.slice(1)}
           colorFn={(s) => SEVERITY_COLORS[s] ?? ""}
         />
         <Pipe />
@@ -1023,18 +1032,26 @@ function ScaIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highligh
           label={(t) => TYPE_LABELS[t] ?? t}
         />
         <Pipe />
+        <FilterGroup
+          items={SCA_STATUSES}
+          active={statusSet}
+          onToggle={(s) => toggleSet(statusSet, "dismissed_statuses", s)}
+          label={(s) => SCA_STATUS_LABELS[s] ?? s.replace(/_/g, " ")}
+          colorFn={(s) => SCA_STATUS_COLORS[s] ?? ""}
+        />
+        <Pipe />
         <ToggleGroup
           items={[
-            { key: "reachable", label: "reachable", active: !!filters.reachable, onToggle: () => setFilters((f) => ({ ...f, page: 1, reachable: !f.reachable })) },
-            { key: "has_fix",   label: "has fix",   active: !!filters.has_fix,   onToggle: () => setFilters((f) => ({ ...f, page: 1, has_fix: !f.has_fix })) },
-            { key: "hide_dev",  label: "hide dev",  active: !!filters.hide_dev,  onToggle: () => setFilters((f) => ({ ...f, page: 1, hide_dev: !f.hide_dev })) },
+            { key: "reachable", label: "Reachable", active: !!filters.reachable, onToggle: () => setFilters((f) => ({ ...f, page: 1, reachable: !f.reachable })) },
+            { key: "has_fix",   label: "Has fix",   active: !!filters.has_fix,   onToggle: () => setFilters((f) => ({ ...f, page: 1, has_fix: !f.has_fix })) },
+            { key: "hide_dev",  label: "Hide DEV",  active: !!filters.hide_dev,  onToggle: () => setFilters((f) => ({ ...f, page: 1, hide_dev: !f.hide_dev })) },
           ]}
         />
         <Pipe />
         <ToggleGroup
           items={[{
             key: "include_resolved",
-            label: "include resolved",
+            label: "Include resolved",
             active: !!filters.include_resolved,
             onToggle: () => setFilters((f) => ({ ...f, page: 1, include_resolved: !f.include_resolved })),
           }]}
