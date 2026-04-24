@@ -140,7 +140,7 @@ model AppSettings {
   llmModel                  String?  @map("llm_model")
   llmCredentialId           String?  @map("llm_credential_id") @db.Uuid
   llmTriageTokenBudget      Int      @default(50000) @map("llm_triage_token_budget")
-  reachabilityCvssThreshold Float    @default(7.0) @map("reachability_cvss_threshold")
+  reachabilityMinSeverity   String   @default("high") @map("reachability_min_severity")
   updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   org            Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)

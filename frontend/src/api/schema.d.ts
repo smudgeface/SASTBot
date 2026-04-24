@@ -1137,7 +1137,8 @@ export interface paths {
                             /** Format: uuid */
                             llm_credential_id: string | null;
                             llm_triage_token_budget: number;
-                            reachability_cvss_threshold: number;
+                            /** @enum {string} */
+                            reachability_min_severity: "critical" | "high" | "medium" | "low";
                             updated_at: string;
                         };
                     };
@@ -1266,7 +1267,8 @@ export interface paths {
                             expires_at?: string | null;
                         }) | null;
                         llm_triage_token_budget?: number;
-                        reachability_cvss_threshold?: number;
+                        /** @enum {string} */
+                        reachability_min_severity?: "critical" | "high" | "medium" | "low";
                     };
                 };
             };
@@ -1292,7 +1294,8 @@ export interface paths {
                             /** Format: uuid */
                             llm_credential_id: string | null;
                             llm_triage_token_budget: number;
-                            reachability_cvss_threshold: number;
+                            /** @enum {string} */
+                            reachability_min_severity: "critical" | "high" | "medium" | "low";
                             updated_at: string;
                         };
                     };
@@ -3167,7 +3170,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        status: "confirmed" | "false_positive" | "suppressed" | "pending";
+                        status: "confirmed" | "false_positive" | "suppressed" | "pending" | "fixed" | "planned";
                         reason?: string;
                     };
                 };

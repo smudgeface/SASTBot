@@ -158,6 +158,7 @@ export interface RepoUpsertInput {
 // ---------------------------------------------------------------------------
 
 export type LlmApiFormat = "anthropic-messages" | "openai-completions" | "openai-chat";
+export type ReachabilityMinSeverity = "critical" | "high" | "medium" | "low";
 
 export interface AdminSettings {
   id: string;
@@ -170,7 +171,7 @@ export interface AdminSettings {
   llm_model: string | null;
   llm_credential_id: string | null;
   llm_triage_token_budget: number;
-  reachability_cvss_threshold: number;
+  reachability_min_severity: ReachabilityMinSeverity;
   updated_at: string;
 }
 
@@ -185,7 +186,7 @@ export interface AdminSettingsUpdate {
   llm_credential_id?: string | null;
   llm_credential?: CredentialCreateInput | null;
   llm_triage_token_budget?: number;
-  reachability_cvss_threshold?: number;
+  reachability_min_severity?: ReachabilityMinSeverity;
 }
 
 // ---------------------------------------------------------------------------

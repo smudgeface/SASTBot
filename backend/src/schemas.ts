@@ -240,6 +240,11 @@ export const RepoIdParamsSchema = z.object({ id: UuidSchema });
 // AppSettings — flat on purpose
 // ---------------------------------------------------------------------------
 
+/** Severity gate for reachability assessment. info/unknown excluded — they
+ *  are too noisy / underspecified to act on. */
+export const ReachabilityMinSeveritySchema = z.enum(["critical", "high", "medium", "low"]);
+export type ReachabilityMinSeverity = z.infer<typeof ReachabilityMinSeveritySchema>;
+
 export const AppSettingsUpdateSchema = z.object({
   jira_base_url: z.string().nullable().optional(),
   jira_email: z.string().email().nullable().optional(),
@@ -251,7 +256,7 @@ export const AppSettingsUpdateSchema = z.object({
   llm_credential_id: UuidSchema.nullable().optional(),
   llm_credential: CredentialCreateSchema.nullable().optional(),
   llm_triage_token_budget: z.number().int().min(1000).optional(),
-  reachability_cvss_threshold: z.number().min(0).max(10).optional(),
+  reachability_min_severity: ReachabilityMinSeveritySchema.optional(),
 });
 export type AppSettingsUpdate = z.infer<typeof AppSettingsUpdateSchema>;
 
@@ -266,7 +271,7 @@ export const AppSettingsOutSchema = z.object({
   llm_model: z.string().nullable(),
   llm_credential_id: UuidSchema.nullable(),
   llm_triage_token_budget: z.number().int(),
-  reachability_cvss_threshold: z.number(),
+  reachability_min_severity: ReachabilityMinSeveritySchema,
   updated_at: IsoDateTimeSchema,
 });
 export type AppSettingsOut = z.infer<typeof AppSettingsOutSchema>;

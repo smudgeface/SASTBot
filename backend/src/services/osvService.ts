@@ -58,15 +58,75 @@ function mapSeverity(vuln: OsvVuln): Severity {
 }
 
 /**
- * Extract the numeric base score from a CVSS vector string like
- * "CVSS:3.1/AV:N/AC:L/..." — the score is NOT embedded in the vector itself;
- * OSV sometimes returns just the vector. When the field is a plain float
- * string ("7.5") we parse it directly.
+ * Extract the numeric base score from an OSV severity entry. The string can
+ * be either a plain float ("7.5") or a CVSS v3 vector ("CVSS:3.1/AV:N/..."),
+ * depending on how the upstream advisory chose to encode it. Vectors are
+ * passed through computeCvss31BaseScore.
  */
 function parseCvssScore(scoreOrVector: string): number | null {
   const n = parseFloat(scoreOrVector);
   if (!Number.isNaN(n) && n >= 0 && n <= 10) return n;
+  if (scoreOrVector.startsWith("CVSS:3")) return computeCvss31BaseScore(scoreOrVector);
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// CVSS v3.1 base-score calculator
+//
+// Implements the formulas from FIRST.org's CVSS 3.1 specification:
+//   https://www.first.org/cvss/v3.1/specification-document (sections 7-8)
+//
+// Each base metric maps to a fixed numeric weight; the score is a
+// deterministic function of those weights. We ignore temporal/environmental
+// metrics — only the eight base metrics affect the base score.
+// ---------------------------------------------------------------------------
+
+const AV: Record<string, number> = { N: 0.85, A: 0.62, L: 0.55, P: 0.20 };
+const AC: Record<string, number> = { L: 0.77, H: 0.44 };
+const UI: Record<string, number> = { N: 0.85, R: 0.62 };
+// PR depends on Scope; first key is S=U (Unchanged), second is S=C (Changed)
+const PR: Record<string, [number, number]> = {
+  N: [0.85, 0.85],
+  L: [0.62, 0.68],
+  H: [0.27, 0.50],
+};
+const CIA: Record<string, number> = { H: 0.56, L: 0.22, N: 0.00 };
+
+/** Round up to one decimal place, per the CVSS spec. */
+function roundUp1(x: number): number {
+  const i = Math.round(x * 100000);
+  return i % 10000 === 0 ? i / 100000 : (Math.floor(i / 10000) + 1) / 10;
+}
+
+export function computeCvss31BaseScore(vector: string): number | null {
+  // Parse "CVSS:3.x/AV:N/AC:L/..." into a metric map
+  const parts = vector.split("/");
+  if (parts.length < 9 || !parts[0]?.startsWith("CVSS:3")) return null;
+  const m: Record<string, string> = {};
+  for (const p of parts.slice(1)) {
+    const [k, v] = p.split(":");
+    if (k && v) m[k] = v;
+  }
+
+  const av = AV[m.AV ?? ""];
+  const ac = AC[m.AC ?? ""];
+  const ui = UI[m.UI ?? ""];
+  const scope = m.S; // "U" or "C"
+  const pr = PR[m.PR ?? ""]?.[scope === "C" ? 1 : 0];
+  const c = CIA[m.C ?? ""];
+  const i = CIA[m.I ?? ""];
+  const a = CIA[m.A ?? ""];
+  if ([av, ac, ui, pr, c, i, a].some((v) => v === undefined) || (scope !== "U" && scope !== "C")) return null;
+
+  const iss = 1 - (1 - c!) * (1 - i!) * (1 - a!);
+  const impact =
+    scope === "U"
+      ? 6.42 * iss
+      : 7.52 * (iss - 0.029) - 3.25 * Math.pow(iss - 0.02, 15);
+  const exploitability = 8.22 * av! * ac! * pr! * ui!;
+  if (impact <= 0) return 0;
+  const raw = scope === "U" ? impact + exploitability : 1.08 * (impact + exploitability);
+  return roundUp1(Math.min(raw, 10));
 }
 
 /** Extract canonical CVE id from the aliases list (first CVE-* string wins). */
@@ -204,4 +264,25 @@ export async function queryAndPersistFindings(
   return (client as PrismaClient).scanFinding.findMany({
     where: { scanRunId, findingType: "cve" },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Backfill latestCvssScore for existing rows that have a vector but no score
+// ---------------------------------------------------------------------------
+
+export async function backfillCvssScores(db: PrismaClient): Promise<void> {
+  const rows = await db.scaIssue.findMany({
+    where: { latestCvssScore: null, latestCvssVector: { not: null } },
+    select: { id: true, latestCvssVector: true },
+  });
+  if (rows.length === 0) return;
+  let updated = 0;
+  for (const r of rows) {
+    const score = r.latestCvssVector ? computeCvss31BaseScore(r.latestCvssVector) : null;
+    if (score !== null) {
+      await db.scaIssue.update({ where: { id: r.id }, data: { latestCvssScore: score } });
+      updated++;
+    }
+  }
+  logger.info({ updated, total: rows.length }, "[osvService] backfilled CVSS scores");
 }
