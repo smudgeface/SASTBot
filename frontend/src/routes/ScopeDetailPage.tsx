@@ -76,6 +76,20 @@ function SeverityBadge({ severity }: { severity: string }) {
   );
 }
 
+// Jira statusCategory palette — used by the expanded JiraCard to show the
+// ticket's own workflow state (new / indeterminate / done), distinct from
+// SASTBot's own triage status.
+const SC_COLORS: Record<string, string> = {
+  new:          "text-purple-600 border-purple-400 bg-purple-50 dark:bg-purple-950/30",
+  indeterminate:"text-blue-600 border-blue-400 bg-blue-50 dark:bg-blue-950",
+  done:         "text-green-600 border-green-400 bg-green-50 dark:bg-green-950",
+};
+const SC_LABELS: Record<string, string> = {
+  new:          "To do",
+  indeterminate:"In Progress",
+  done:         "Done",
+};
+
 // purple = to do (confirmed), blue = planned/in-progress, green = fixed/done, grey = dismissed
 const TRIAGE_COLORS: Record<string, string> = {
   pending:        "text-amber-600 border-amber-400",
