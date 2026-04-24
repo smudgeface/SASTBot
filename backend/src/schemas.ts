@@ -551,3 +551,34 @@ export function PaginatedSchema<T extends z.ZodTypeAny>(itemSchema: T) {
     page_size: z.number().int().min(1),
   });
 }
+
+// ---------------------------------------------------------------------------
+// JiraTicket (M5c)
+// ---------------------------------------------------------------------------
+
+export const JiraTicketOutSchema = z.object({
+  id: UuidSchema,
+  org_id: UuidSchema.nullable(),
+  issue_key: z.string(),
+  issue_id: z.string().nullable(),
+  project_key: z.string().nullable(),
+  project_name: z.string().nullable(),
+  summary: z.string().nullable(),
+  status: z.string().nullable(),
+  status_category: z.enum(["new", "indeterminate", "done"]).nullable(),
+  resolution: z.string().nullable(),
+  assignee_name: z.string().nullable(),
+  assignee_email: z.string().nullable(),
+  fix_versions: z.array(z.string()),
+  issue_type: z.string().nullable(),
+  url: z.string().nullable(),
+  resolved_at: IsoDateTimeSchema.nullable(),
+  last_synced_at: IsoDateTimeSchema.nullable(),
+  sync_error: z.string().nullable(),
+  created_at: IsoDateTimeSchema,
+});
+export type JiraTicketOut = z.infer<typeof JiraTicketOutSchema>;
+
+export const LinkJiraTicketBodySchema = z.object({
+  issue_key: z.string().min(1).max(64),
+});

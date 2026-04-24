@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   Credential,
+  JiraTicket,
   Repo,
   SastFinding,
   SastIssue,
@@ -17,6 +18,7 @@ import type {
   CredentialOut,
   CredentialReferences,
   FindingType,
+  JiraTicketOut,
   RepoOut,
   SastFindingOut,
   SastIssueOut,
@@ -415,5 +417,30 @@ export function scaIssueToOut(i: ScaIssue): ScaIssueOut {
     last_seen_at: i.lastSeenAt.toISOString(),
     created_at: i.createdAt.toISOString(),
     updated_at: i.updatedAt.toISOString(),
+  };
+}
+
+export function jiraTicketToOut(t: JiraTicket): JiraTicketOut {
+  const sc = t.statusCategory;
+  return {
+    id: t.id,
+    org_id: t.orgId,
+    issue_key: t.issueKey,
+    issue_id: t.issueId,
+    project_key: t.projectKey,
+    project_name: t.projectName,
+    summary: t.summary,
+    status: t.status,
+    status_category: (sc === "new" || sc === "indeterminate" || sc === "done") ? sc : null,
+    resolution: t.resolution,
+    assignee_name: t.assigneeName,
+    assignee_email: t.assigneeEmail,
+    fix_versions: t.fixVersions,
+    issue_type: t.issueType,
+    url: t.url,
+    resolved_at: t.resolvedAt ? t.resolvedAt.toISOString() : null,
+    last_synced_at: t.lastSyncedAt ? t.lastSyncedAt.toISOString() : null,
+    sync_error: t.syncError,
+    created_at: t.createdAt.toISOString(),
   };
 }
