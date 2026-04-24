@@ -360,6 +360,8 @@ export interface ScaIssue {
   confirmed_reachable: boolean;
   reachable_via_sast_fingerprint: string | null;
   reachable_reasoning: string | null;
+  reachable_confidence: number | null;
+  reachable_call_sites: { file: string; line: number; snippet: string }[] | null;
   reachable_assessed_at: string | null;
   reachable_model: string | null;
   first_seen_at: string;

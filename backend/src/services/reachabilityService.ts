@@ -78,7 +78,11 @@ async function ripgrepForFunction(
       .map((line) => {
         const m = line.match(/^(.+):(\d+):(.*)$/);
         if (!m) return null;
-        return { file: m[1], line: parseInt(m[2], 10), text: m[3] };
+        // Strip the absolute scope-working-dir prefix so paths shown to the
+        // LLM (and persisted as call_sites) are relative to the repo root.
+        let file = m[1]!;
+        if (file.startsWith(scopeDir + "/")) file = file.slice(scopeDir.length + 1);
+        return { file, line: parseInt(m[2], 10), text: m[3] };
       })
       .filter((h): h is GrepHit => h !== null);
   } catch (err) {
@@ -93,10 +97,18 @@ async function ripgrepForFunction(
 // LLM confirmation
 // ---------------------------------------------------------------------------
 
+const CallSiteSchema = z.object({
+  file: z.string(),
+  line: z.number().int(),
+  snippet: z.string(),
+});
+export type CallSite = z.infer<typeof CallSiteSchema>;
+
 const ReachabilityResponseSchema = z.object({
   reachable: z.boolean(),
   confidence: z.number().min(0).max(1),
   reasoning: z.string(),
+  call_sites: z.array(CallSiteSchema).default([]),
 });
 
 const REACHABILITY_TOOL_SCHEMA = {
@@ -106,10 +118,23 @@ const REACHABILITY_TOOL_SCHEMA = {
       type: "boolean",
       description: "true if the code appears to call the vulnerable function in a way that could trigger the vulnerability",
     },
-    confidence: { type: "number", description: "0.0–1.0 confidence" },
-    reasoning: { type: "string", description: "One sentence explanation" },
+    confidence: { type: "number", description: "0.0–1.0 confidence in your verdict" },
+    reasoning: { type: "string", description: "One short paragraph explaining the verdict, naming the relevant call sites" },
+    call_sites: {
+      type: "array",
+      description: "When reachable=true: the specific call sites that triggered the verdict, copied verbatim from the references above. Empty array when not reachable or no specific site applies.",
+      items: {
+        type: "object",
+        properties: {
+          file: { type: "string", description: "Path as shown in the references" },
+          line: { type: "integer", description: "Line number as shown" },
+          snippet: { type: "string", description: "The code line itself" },
+        },
+        required: ["file", "line", "snippet"],
+      },
+    },
   },
-  required: ["reachable", "confidence", "reasoning"],
+  required: ["reachable", "confidence", "reasoning", "call_sites"],
 };
 
 async function confirmReachabilityWithLlm(
@@ -117,7 +142,7 @@ async function confirmReachabilityWithLlm(
   functionName: string,
   hits: GrepHit[],
   orgId: string | null,
-): Promise<{ reachable: boolean; confidence: number; reasoning: string; model: string } | null> {
+): Promise<{ reachable: boolean; confidence: number; reasoning: string; callSites: CallSite[]; model: string } | null> {
   const sites = hits.slice(0, 3).map((h) => {
     return `File: ${h.file} line ${h.line}\n${h.text.trim()}`;
   });
@@ -137,11 +162,11 @@ ${sites.join("\n\n---\n\n")}
 Does this code appear to call \`${functionName}\` in a way that could trigger the vulnerability?
 Consider: is the function called with user-controlled input? Is the usage in a vulnerable code path?
 
-Respond with whether the vulnerability appears reachable from this codebase.`;
+If the vulnerability IS reachable, list the specific call_sites (file/line/snippet) you based the verdict on.
+If it is NOT reachable, return call_sites=[] and explain why in the reasoning (e.g., the matches are unrelated, in dead code, or the input is constant).`;
 
   const result = await callLlm(
-    { orgId, prompt, maxTokens: 256, toolName: "submit_reachability", toolSchema: REACHABILITY_TOOL_SCHEMA },
-    { skipEnabledCheck: false },
+    { orgId, prompt, maxTokens: 512, toolName: "submit_reachability", toolSchema: REACHABILITY_TOOL_SCHEMA },
   );
 
   if (!result) return null;
@@ -152,7 +177,13 @@ Respond with whether the vulnerability appears reachable from this codebase.`;
     return null;
   }
 
-  return { reachable: parsed.reachable, confidence: parsed.confidence, reasoning: parsed.reasoning, model: result.model };
+  return {
+    reachable: parsed.reachable,
+    confidence: parsed.confidence,
+    reasoning: parsed.reasoning,
+    callSites: parsed.call_sites,
+    model: result.model,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -165,8 +196,10 @@ async function assessOneIssue(
   orgId: string | null,
   db: PrismaClient,
 ): Promise<void> {
-  // Already marked reachable (e.g. via SAST triage hints) — skip LLM
-  if (issue.confirmedReachable) return;
+  // Already marked reachable (e.g. via SAST triage hints) AND we already have
+  // structured confidence/call_sites data — skip LLM. If confidence is null
+  // the row predates the schema and we want to re-run to populate it.
+  if (issue.confirmedReachable && issue.reachableConfidence !== null) return;
 
   const osvVuln: OsvVulnForExtraction = {
     id: issue.osvId,
@@ -241,13 +274,15 @@ async function assessOneIssue(
     data: {
       confirmedReachable: confirmation.reachable,
       reachableReasoning: confirmation.reasoning,
+      reachableConfidence: confirmation.confidence,
+      reachableCallSites: confirmation.callSites.length > 0 ? confirmation.callSites : undefined,
       reachableAssessedAt: new Date(),
       reachableModel: confirmation.model,
     },
   });
 
   logger.info(
-    { issueId: issue.id, reachable: confirmation.reachable, confidence: confirmation.confidence },
+    { issueId: issue.id, reachable: confirmation.reachable, confidence: confirmation.confidence, sites: confirmation.callSites.length },
     "[reachabilityService] reachability assessed",
   );
 }
@@ -322,11 +357,16 @@ export async function backfillReachability(db: PrismaClient): Promise<void> {
   const settings = await getOrCreateSettings(null);
   const allowedSeverities = severitiesAtLeast(settings.reachabilityMinSeverity);
 
+  // Two cohorts: never assessed, and assessed before we started capturing
+  // confidence/call_sites. Re-running for both is safe and idempotent.
   const issues = await db.scaIssue.findMany({
     where: {
-      reachableAssessedAt: null,
       latestFindingType: "cve",
       latestSeverity: { in: allowedSeverities },
+      OR: [
+        { reachableAssessedAt: null },
+        { reachableAssessedAt: { not: null }, reachableConfidence: null },
+      ],
     },
     select: { id: true, scopeId: true },
   });

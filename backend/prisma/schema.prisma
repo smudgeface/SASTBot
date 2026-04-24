@@ -342,6 +342,8 @@ model ScaIssue {
   confirmedReachable          Boolean   @default(false) @map("confirmed_reachable")
   reachableViaSastFingerprint String?   @map("reachable_via_sast_fingerprint")
   reachableReasoning          String?   @map("reachable_reasoning")
+  reachableConfidence         Float?    @map("reachable_confidence")
+  reachableCallSites          Json?     @map("reachable_call_sites")
   reachableAssessedAt         DateTime? @map("reachable_assessed_at") @db.Timestamptz(6)
   reachableModel              String?   @map("reachable_model")
   reachableAtScanRunId        String?   @map("reachable_at_scan_run_id") @db.Uuid

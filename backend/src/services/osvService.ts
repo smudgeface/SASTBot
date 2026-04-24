@@ -67,7 +67,27 @@ function parseCvssScore(scoreOrVector: string): number | null {
   const n = parseFloat(scoreOrVector);
   if (!Number.isNaN(n) && n >= 0 && n <= 10) return n;
   if (scoreOrVector.startsWith("CVSS:3")) return computeCvss31BaseScore(scoreOrVector);
+  // CVSS 4.0 uses a macro-vector + lookup-table approach that we haven't
+  // implemented yet. We still want to capture the vector string for display;
+  // see pickCvss().
   return null;
+}
+
+/**
+ * Choose a CVSS vector + numeric score from an OSV `severity[]` array.
+ * Preference order: V3.1/V3.0 (we can compute a numeric score) → V4.0 (we
+ * keep the vector but score is null until we ship a 4.0 calculator) → V2.
+ * OSV records sometimes include only one type — most modern GitHub-reviewed
+ * advisories only ship CVSS_V4 now, so falling back is essential.
+ */
+function pickCvss(entries: OsvSeverityEntry[]): { vector: string | null; score: number | null } {
+  const v3 = entries.find((s) => s.type === "CVSS_V3");
+  if (v3) return { vector: v3.score, score: parseCvssScore(v3.score) };
+  const v4 = entries.find((s) => s.type === "CVSS_V4");
+  if (v4) return { vector: v4.score, score: null };
+  const v2 = entries.find((s) => s.type === "CVSS_V2");
+  if (v2) return { vector: v2.score, score: parseCvssScore(v2.score) };
+  return { vector: null, score: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +234,7 @@ export async function queryAndPersistFindings(
       seen.add(key);
 
       const severity = mapSeverity(vuln);
-      const cvss3 = vuln.severity?.find((s: OsvSeverityEntry) => s.type === "CVSS_V3");
+      const { vector, score } = pickCvss(vuln.severity ?? []);
       const aliases = [vuln.id, ...(vuln.aliases ?? [])].filter(
         (a, idx, arr) => arr.indexOf(a) === idx,
       );
@@ -230,8 +250,8 @@ export async function queryAndPersistFindings(
           cveId: extractCveId(vuln),
           findingType: "cve",
           severity,
-          cvssScore: cvss3 ? parseCvssScore(cvss3.score) : null,
-          cvssVector: cvss3 ? cvss3.score : null,
+          cvssScore: score,
+          cvssVector: vector,
           summary: vuln.summary ?? null,
           aliases,
           activelyExploited: false,
@@ -249,8 +269,8 @@ export async function queryAndPersistFindings(
           osvId: vuln.id,
           cveId: extractCveId(vuln),
           severity,
-          cvssScore: cvss3 ? parseCvssScore(cvss3.score) : null,
-          cvssVector: cvss3 ? cvss3.score : null,
+          cvssScore: score,
+          cvssVector: vector,
           summary: vuln.summary ?? null,
           aliases,
           activelyExploited: false,
@@ -267,22 +287,51 @@ export async function queryAndPersistFindings(
 }
 
 // ---------------------------------------------------------------------------
-// Backfill latestCvssScore for existing rows that have a vector but no score
+// Backfill latestCvssScore / latestCvssVector for existing rows
 // ---------------------------------------------------------------------------
 
 export async function backfillCvssScores(db: PrismaClient): Promise<void> {
-  const rows = await db.scaIssue.findMany({
+  // Pass 1: fill in score from existing vector (cheap; no network).
+  const rowsWithVector = await db.scaIssue.findMany({
     where: { latestCvssScore: null, latestCvssVector: { not: null } },
     select: { id: true, latestCvssVector: true },
   });
-  if (rows.length === 0) return;
-  let updated = 0;
-  for (const r of rows) {
+  let scoredFromVector = 0;
+  for (const r of rowsWithVector) {
     const score = r.latestCvssVector ? computeCvss31BaseScore(r.latestCvssVector) : null;
     if (score !== null) {
       await db.scaIssue.update({ where: { id: r.id }, data: { latestCvssScore: score } });
-      updated++;
+      scoredFromVector++;
     }
   }
-  logger.info({ updated, total: rows.length }, "[osvService] backfilled CVSS scores");
+  if (scoredFromVector > 0) {
+    logger.info({ updated: scoredFromVector, total: rowsWithVector.length }, "[osvService] backfilled CVSS scores from vector");
+  }
+
+  // Pass 2: re-query OSV for rows missing both vector and score. Some
+  // advisories ship only CVSS_V4 — earlier ingestion code dropped those.
+  const rowsNoVector = await db.scaIssue.findMany({
+    where: { latestCvssVector: null, latestFindingType: "cve" },
+    select: { id: true, osvId: true },
+  });
+  if (rowsNoVector.length === 0) return;
+  let fromOsv = 0;
+  for (const r of rowsNoVector) {
+    try {
+      const resp = await fetch(`https://api.osv.dev/v1/vulns/${encodeURIComponent(r.osvId)}`);
+      if (!resp.ok) continue;
+      const vuln = (await resp.json()) as OsvVuln;
+      const { vector, score } = pickCvss(vuln.severity ?? []);
+      if (vector) {
+        await db.scaIssue.update({
+          where: { id: r.id },
+          data: { latestCvssVector: vector, latestCvssScore: score ?? undefined },
+        });
+        fromOsv++;
+      }
+    } catch (err) {
+      logger.warn({ osvId: r.osvId, err }, "[osvService] OSV re-query failed during backfill");
+    }
+  }
+  logger.info({ updated: fromOsv, total: rowsNoVector.length }, "[osvService] backfilled CVSS vectors from OSV");
 }
