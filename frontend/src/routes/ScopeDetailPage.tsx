@@ -522,19 +522,18 @@ function SastIssueRow({
             </button>
           </div>
         </TableCell>
-        <TableCell>
-          <div>
-            <span
-              className="text-xs text-muted-foreground font-mono"
-              title={`${issue.latest_file_path}:${issue.latest_start_line}`}
-            >
-              {truncateFilePath(issue.latest_file_path)}:{issue.latest_start_line}
-            </span>
+        <TableCell className="overflow-hidden">
+          <div
+            className="truncate text-xs text-muted-foreground font-mono"
+            title={`${issue.latest_file_path}:${issue.latest_start_line}`}
+          >
+            {truncateFilePath(issue.latest_file_path)}:{issue.latest_start_line}
           </div>
-          <div className="flex flex-wrap gap-1 mt-0.5">
-            <span className="text-[10px] text-muted-foreground font-mono">
-              {issue.latest_rule_id.split(".").pop()}
-            </span>
+          <div
+            className="truncate text-[10px] text-muted-foreground font-mono mt-0.5"
+            title={issue.latest_rule_id}
+          >
+            {issue.latest_rule_id.split(".").pop()}
           </div>
         </TableCell>
         <TableCell>
@@ -828,12 +827,13 @@ function ScaIssueRow({
             </button>
           </div>
         </TableCell>
-        <TableCell>
-          <div>
-            <span className="text-xs text-muted-foreground font-mono">
-              {issue.package_name}
-              {issue.latest_package_version ? `@${issue.latest_package_version}` : ""}
-            </span>
+        <TableCell className="overflow-hidden">
+          <div
+            className="truncate text-xs text-muted-foreground font-mono"
+            title={`${issue.package_name}${issue.latest_package_version ? `@${issue.latest_package_version}` : ""}`}
+          >
+            {issue.package_name}
+            {issue.latest_package_version ? `@${issue.latest_package_version}` : ""}
           </div>
           <div className="flex flex-wrap gap-1 mt-0.5">
             <span className="text-[10px] text-muted-foreground uppercase font-medium">
