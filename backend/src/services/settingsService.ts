@@ -73,9 +73,6 @@ export async function updateSettings(
         ? { connect: { id: llmCredentialId } }
         : { disconnect: true };
     }
-    if (Object.prototype.hasOwnProperty.call(input, "llm_assistance_enabled")) {
-      data.llmAssistanceEnabled = input.llm_assistance_enabled;
-    }
     if (Object.prototype.hasOwnProperty.call(input, "llm_triage_token_budget")) {
       data.llmTriageTokenBudget = input.llm_triage_token_budget;
     }

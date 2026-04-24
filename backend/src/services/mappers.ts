@@ -165,7 +165,6 @@ export function appSettingsToOut(s: AppSettings): AppSettingsOut {
     llm_api_format: s.llmApiFormat,
     llm_model: s.llmModel,
     llm_credential_id: s.llmCredentialId,
-    llm_assistance_enabled: s.llmAssistanceEnabled,
     llm_triage_token_budget: s.llmTriageTokenBudget,
     reachability_cvss_threshold: s.reachabilityCvssThreshold,
     updated_at: s.updatedAt.toISOString(),

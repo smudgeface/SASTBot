@@ -15,6 +15,7 @@ import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { runOpengrep, parseSarif, persistSastFindings } from "./services/sastService.js";
 import { triageFindings } from "./services/llmTriageService.js";
 import { assessReachability } from "./services/reachabilityService.js";
+import { generateIssueSummary } from "./services/llmClient.js";
 import type { ScanWarning } from "./schemas.js";
 import type { Prisma } from "@prisma/client";
 
@@ -38,6 +39,82 @@ async function appendWarning(scanRunId: string, warning: ScanWarning): Promise<v
     data: { warnings: [...current, warning] as unknown as Prisma.InputJsonValue },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Backfill LLM summaries for existing issues that lack them
+// ---------------------------------------------------------------------------
+
+async function backfillLlmSummaries(): Promise<void> {
+  const [sastCount, scaCount] = await Promise.all([
+    prisma.sastIssue.count({ where: { latestLlmSummary: null } }),
+    prisma.scaIssue.count({ where: { latestLlmSummary: null } }),
+  ]);
+
+  if (sastCount === 0 && scaCount === 0) return;
+
+  logger.info({ sastCount, scaCount }, "[worker] backfilling LLM summaries");
+
+  const BATCH = 50;
+
+  // SAST backfill
+  let offset = 0;
+  while (true) {
+    const issues = await prisma.sastIssue.findMany({
+      where: { latestLlmSummary: null },
+      select: { id: true, latestRuleId: true, latestRuleName: true, latestRuleMessage: true, latestFilePath: true, latestSnippet: true, orgId: true },
+      take: BATCH,
+      skip: offset,
+    });
+    if (issues.length === 0) break;
+    for (const issue of issues) {
+      const summary = await generateIssueSummary("sast", {
+        ruleId: issue.latestRuleId,
+        ruleName: issue.latestRuleName,
+        ruleMessage: issue.latestRuleMessage,
+        filePath: issue.latestFilePath,
+        snippet: issue.latestSnippet,
+        orgId: issue.orgId,
+      });
+      if (summary) {
+        await prisma.sastIssue.update({ where: { id: issue.id }, data: { latestLlmSummary: summary } });
+      }
+    }
+    offset += BATCH;
+  }
+
+  // SCA backfill
+  offset = 0;
+  while (true) {
+    const issues = await prisma.scaIssue.findMany({
+      where: { latestLlmSummary: null },
+      select: { id: true, packageName: true, latestPackageVersion: true, osvId: true, latestCveId: true, latestCvssScore: true, latestSummary: true, orgId: true },
+      take: BATCH,
+      skip: offset,
+    });
+    if (issues.length === 0) break;
+    for (const issue of issues) {
+      const summary = await generateIssueSummary("sca", {
+        packageName: issue.packageName,
+        version: issue.latestPackageVersion,
+        osvId: issue.osvId,
+        cveId: issue.latestCveId,
+        cvssScore: issue.latestCvssScore,
+        osvSummary: issue.latestSummary,
+        orgId: issue.orgId,
+      });
+      if (summary) {
+        await prisma.scaIssue.update({ where: { id: issue.id }, data: { latestLlmSummary: summary } });
+      }
+    }
+    offset += BATCH;
+  }
+
+  logger.info("[worker] LLM summary backfill complete");
+}
+
+backfillLlmSummaries().catch((err) => {
+  logger.warn({ err }, "[worker] backfill failed — will retry on next scan");
+});
 
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
@@ -151,6 +228,53 @@ const worker = new Worker<ScanJobData>(
             log.info("[worker] starting LLM triage");
             await triageFindings(scanRunId, run.scopeId, run.orgId, prisma);
             log.info("[worker] LLM triage complete");
+          }
+
+          // ── Step 6c: LLM summaries for SAST issues ───────────────────────
+          const sastNeedingSummary = await prisma.sastIssue.findMany({
+            where: { scopeId: run.scopeId, lastSeenScanRunId: scanRunId, latestLlmSummary: null },
+            select: { id: true, latestRuleId: true, latestRuleName: true, latestRuleMessage: true, latestFilePath: true, latestSnippet: true },
+          });
+          if (sastNeedingSummary.length > 0) {
+            log.info({ count: sastNeedingSummary.length }, "[worker] generating SAST summaries");
+            for (const issue of sastNeedingSummary) {
+              const summary = await generateIssueSummary("sast", {
+                ruleId: issue.latestRuleId,
+                ruleName: issue.latestRuleName,
+                ruleMessage: issue.latestRuleMessage,
+                filePath: issue.latestFilePath,
+                snippet: issue.latestSnippet,
+                scanRunId,
+                orgId: run.orgId,
+              });
+              if (summary) {
+                await prisma.sastIssue.update({ where: { id: issue.id }, data: { latestLlmSummary: summary } });
+              }
+            }
+          }
+        }
+      }
+
+      // ── Step 6d: LLM summaries for SCA issues ───────────────────────────
+      const scaNeedingSummary = await prisma.scaIssue.findMany({
+        where: { scopeId: run.scopeId, lastSeenScanRunId: scanRunId, latestLlmSummary: null },
+        select: { id: true, packageName: true, latestPackageVersion: true, osvId: true, latestCveId: true, latestCvssScore: true, latestSummary: true },
+      });
+      if (scaNeedingSummary.length > 0) {
+        log.info({ count: scaNeedingSummary.length }, "[worker] generating SCA summaries");
+        for (const issue of scaNeedingSummary) {
+          const summary = await generateIssueSummary("sca", {
+            packageName: issue.packageName,
+            version: issue.latestPackageVersion,
+            osvId: issue.osvId,
+            cveId: issue.latestCveId,
+            cvssScore: issue.latestCvssScore,
+            osvSummary: issue.latestSummary,
+            scanRunId,
+            orgId: run.orgId,
+          });
+          if (summary) {
+            await prisma.scaIssue.update({ where: { id: issue.id }, data: { latestLlmSummary: summary } });
           }
         }
       }
