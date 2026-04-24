@@ -77,6 +77,6 @@ export type GitCheckResult =
 export function useCheckRepoConnection() {
   return useMutation({
     mutationFn: (id: string) =>
-      apiFetch<GitCheckResult>(`/admin/repos/${id}/check-connection`, { method: "POST" }),
+      apiFetch<GitCheckResult>(`/admin/repos/${id}/check-connection`, { method: "POST", json: {} }),
   });
 }
