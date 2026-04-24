@@ -138,6 +138,7 @@ const worker = new Worker<ScanJobData>(
             run.orgId,
             inputs,
             prisma,
+            scanDir, // pass the working directory so snippets get ±3 lines of context
           );
           log.info({ count: sastFindings.length }, "[worker] SAST findings persisted");
           await prisma.scanRun.update({

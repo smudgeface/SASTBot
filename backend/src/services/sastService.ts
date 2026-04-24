@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import type { Prisma, PrismaClient, SastFinding } from "@prisma/client";
@@ -21,6 +23,8 @@ const OPENGREP_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 interface SarifPhysicalLocation {
   artifactLocation?: { uri?: string };
   region?: { startLine?: number; endLine?: number; snippet?: { text?: string } };
+  // contextRegion provides surrounding lines (±N from the match) — preferred for display
+  contextRegion?: { startLine?: number; endLine?: number; snippet?: { text?: string } };
 }
 
 interface SarifLocation {
@@ -200,10 +204,12 @@ export function parseSarif(doc: SarifDoc, scopeDir?: string): SastFindingInput[]
       const startLine = loc?.region?.startLine ?? 1;
       const endLine = loc?.region?.endLine ?? null;
 
-      // Snippet: prefer region snippet, fall back to null
-      const rawSnippet = loc?.region?.snippet?.text ?? null;
-      const snippet = rawSnippet;
-      const normalizedForHash = normalizeSnippet(rawSnippet ?? "");
+      // For the fingerprint hash use only the exact match region (stable across context changes).
+      // For display prefer contextRegion which gives surrounding lines (±N); fall back to region.
+      const matchSnippet = loc?.region?.snippet?.text ?? null;
+      const contextSnippet = loc?.contextRegion?.snippet?.text ?? null;
+      const snippet = contextSnippet ?? matchSnippet;
+      const normalizedForHash = normalizeSnippet(matchSnippet ?? "");
       const fingerprint = computeFingerprint(ruleId, normalizedForHash);
 
       // Opengrep often omits result.level for INFO/WARNING rules;
@@ -233,6 +239,28 @@ export function parseSarif(doc: SarifDoc, scopeDir?: string): SastFindingInput[]
 }
 
 // ---------------------------------------------------------------------------
+// Context snippet (±N lines around the match)
+// ---------------------------------------------------------------------------
+
+const CONTEXT_LINES = 3;
+
+/**
+ * Read the file at `absPath` and return `CONTEXT_LINES` lines before and after
+ * `startLine` (1-indexed). Returns null if the file cannot be read.
+ */
+async function readContextSnippet(absPath: string, startLine: number): Promise<string | null> {
+  try {
+    const content = await readFile(absPath, "utf8");
+    const lines = content.split("\n");
+    const from = Math.max(0, startLine - 1 - CONTEXT_LINES);       // 0-indexed
+    const to = Math.min(lines.length, startLine - 1 + CONTEXT_LINES + 1);
+    return lines.slice(from, to).join("\n");
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
 
@@ -248,10 +276,19 @@ export async function persistSastFindings(
   orgId: string | null,
   inputs: SastFindingInput[],
   client: Tx,
+  scopeDir?: string, // when provided, read ±3 lines of context from the file
 ): Promise<SastFinding[]> {
   if (inputs.length === 0) return [];
 
   for (const input of inputs) {
+    // Enrich snippet with surrounding context lines if we have the source tree
+    let snippet = input.snippet;
+    if (scopeDir && input.filePath) {
+      const absPath = join(scopeDir, input.filePath);
+      const ctx = await readContextSnippet(absPath, input.startLine);
+      if (ctx) snippet = ctx;
+    }
+
     const { issue } = await upsertSastIssueFromDetection(client, scanRunId, scopeId, orgId, {
       fingerprint: input.fingerprint,
       ruleId: input.ruleId,
@@ -261,7 +298,7 @@ export async function persistSastFindings(
       cweIds: input.cweIds,
       filePath: input.filePath,
       startLine: input.startLine,
-      snippet: input.snippet,
+      snippet,
     });
 
     // [scanRunId, fingerprint] unique index skips duplicates across retried scans
@@ -281,7 +318,7 @@ export async function persistSastFindings(
         filePath: input.filePath,
         startLine: input.startLine,
         endLine: input.endLine,
-        snippet: input.snippet,
+        snippet,
       },
       update: {},
     });

@@ -137,16 +137,36 @@ function VulnLink({ id, className }: { id: string; className?: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Jira chip + link popover
+// Jira ticket components
 // ---------------------------------------------------------------------------
 
 const SC_COLORS: Record<string, string> = {
-  new: "text-slate-500 border-slate-400",
-  indeterminate: "text-blue-600 border-blue-400",
-  done: "text-green-600 border-green-400",
+  new: "text-slate-500 border-slate-400 bg-slate-50 dark:bg-slate-900",
+  indeterminate: "text-blue-600 border-blue-400 bg-blue-50 dark:bg-blue-950",
+  done: "text-green-600 border-green-400 bg-green-50 dark:bg-green-950",
+};
+const SC_LABELS: Record<string, string> = {
+  new: "Planned",
+  indeterminate: "In Progress",
+  done: "Done",
 };
 
-function JiraChip({
+/** Compact badge for the Status column — shows Jira statusCategory as a tinted pill. */
+function JiraStatusPill({ ticket }: { ticket: JiraTicket }) {
+  const sc = ticket.status_category ?? "new";
+  const cls = SC_COLORS[sc] ?? SC_COLORS.new;
+  return (
+    <Badge variant="outline" className={`text-[10px] ${cls}`}>
+      {ticket.issue_key} · {SC_LABELS[sc] ?? sc}
+    </Badge>
+  );
+}
+
+/**
+ * Full Jira card shown in the expanded row.
+ * Displays all metadata plus prominent Refresh + Unlink buttons.
+ */
+function JiraCard({
   ticket,
   onRefresh,
   onUnlink,
@@ -157,54 +177,66 @@ function JiraChip({
   onUnlink: () => void;
   isPending: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const scColor = SC_COLORS[ticket.status_category ?? ""] ?? SC_COLORS.new;
-  const parts = [
-    ticket.issue_key,
-    ticket.status ?? "—",
-    ticket.resolution ? `· ${ticket.resolution}` : null,
-    ticket.assignee_name ? `· ${ticket.assignee_name.split(" ")[0]}` : null,
-    ticket.fix_versions.length > 0 ? `· ${ticket.fix_versions[0]}` : null,
-  ].filter(Boolean).join(" ");
+  const sc = ticket.status_category ?? "new";
+  const scCls = SC_COLORS[sc] ?? SC_COLORS.new;
 
   return (
-    <div className="relative inline-block">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${scColor} ${ticket.sync_error ? "border-amber-400 text-amber-600" : ""}`}
-      >
-        {ticket.sync_error && <AlertTriangle className="h-2.5 w-2.5" />}
-        {parts}
-        {ticket.url && <ExternalLink className="h-2.5 w-2.5 opacity-60" />}
-      </button>
-      {open && (
-        <div className="absolute z-50 left-0 top-full mt-1 w-64 rounded-md border bg-popover text-popover-foreground shadow-md p-3 space-y-2 text-xs">
-          {ticket.url && (
-            <a href={ticket.url} target="_blank" rel="noopener noreferrer"
-              className="block font-medium hover:underline text-blue-600">
-              {ticket.issue_key}: {ticket.summary ?? ""}
-            </a>
-          )}
-          {ticket.resolution && (
-            <p className="text-muted-foreground">Resolution: <span className="font-medium text-foreground">{ticket.resolution}</span></p>
-          )}
-          {ticket.sync_error && (
-            <p className="text-amber-600">Sync error: {ticket.sync_error}</p>
-          )}
-          {ticket.last_synced_at && (
-            <p className="text-muted-foreground">Last synced: {formatRelative(ticket.last_synced_at)}</p>
-          )}
-          <div className="flex gap-1.5 pt-1 border-t">
-            <button onClick={() => { onRefresh(); setOpen(false); }} disabled={isPending}
-              className="flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] hover:bg-muted disabled:opacity-50">
-              <RefreshCw className="h-2.5 w-2.5" /> Refresh
-            </button>
-            <button onClick={() => { onUnlink(); setOpen(false); }} disabled={isPending}
-              className="flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] hover:bg-muted text-destructive border-destructive/40 disabled:opacity-50">
-              <Unlink className="h-2.5 w-2.5" /> Unlink
-            </button>
+    <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+      {/* Header row: key + status category badge */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="space-y-0.5 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            {ticket.url ? (
+              <a href={ticket.url} target="_blank" rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="font-mono font-semibold text-sm text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1">
+                {ticket.issue_key} <ExternalLink className="h-3 w-3 opacity-60" />
+              </a>
+            ) : (
+              <span className="font-mono font-semibold text-sm">{ticket.issue_key}</span>
+            )}
+            <Badge variant="outline" className={`text-[10px] ${scCls}`}>
+              {SC_LABELS[sc] ?? sc}
+            </Badge>
+            {ticket.resolution && (
+              <span className="text-xs text-muted-foreground">· {ticket.resolution}</span>
+            )}
           </div>
+          {ticket.summary && (
+            <p className="text-sm text-muted-foreground truncate max-w-md">{ticket.summary}</p>
+          )}
         </div>
+        {/* Actions */}
+        <div className="flex gap-1.5 shrink-0">
+          <button onClick={(e) => { e.stopPropagation(); onRefresh(); }} disabled={isPending}
+            className="flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50">
+            <RefreshCw className="h-3 w-3" /> Refresh
+          </button>
+          <button onClick={(e) => { e.stopPropagation(); onUnlink(); }} disabled={isPending}
+            className="flex items-center gap-1 rounded border px-2 py-1 text-xs text-destructive border-destructive/40 hover:bg-destructive/10 disabled:opacity-50">
+            <Unlink className="h-3 w-3" /> Unlink
+          </button>
+        </div>
+      </div>
+      {/* Meta row */}
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {ticket.status && (
+          <span><span className="font-medium">Status:</span> {ticket.status}</span>
+        )}
+        {ticket.assignee_name && (
+          <span><span className="font-medium">Assignee:</span> {ticket.assignee_name}</span>
+        )}
+        {ticket.fix_versions.length > 0 && (
+          <span><span className="font-medium">Fix version:</span> {ticket.fix_versions.join(", ")}</span>
+        )}
+        {ticket.last_synced_at && (
+          <span>Synced {formatRelative(ticket.last_synced_at)}</span>
+        )}
+      </div>
+      {ticket.sync_error && (
+        <p className="text-xs text-amber-600 flex items-center gap-1">
+          <AlertTriangle className="h-3 w-3" /> {ticket.sync_error}
+        </p>
       )}
     </div>
   );
@@ -225,7 +257,7 @@ function JiraLinkInline({
   if (!open) {
     return (
       <button onClick={() => setOpen(true)}
-        className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2">
+        className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
         + Link Jira ticket
       </button>
     );
@@ -243,12 +275,12 @@ function JiraLinkInline({
         autoFocus
       />
       <button onClick={() => { if (key) onLink(key); }} disabled={isPending || !key}
-        className="flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px] hover:bg-muted disabled:opacity-50">
-        {isPending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : "Link"}
+        className="flex items-center gap-0.5 rounded border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50">
+        {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Link"}
       </button>
       <button onClick={() => { setOpen(false); setKey(""); }}
-        className="text-[10px] text-muted-foreground hover:text-foreground">Cancel</button>
-      {error && <span className="text-[10px] text-destructive">{error}</span>}
+        className="text-xs text-muted-foreground hover:text-foreground">Cancel</button>
+      {error && <span className="text-xs text-destructive">{error}</span>}
     </div>
   );
 }
@@ -414,7 +446,11 @@ function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmi
           </div>
         </TableCell>
         <TableCell>
-          <TriageBadge status={issue.triage_status} />
+          <div className="flex flex-col gap-1 items-start">
+            {jiraTicket
+              ? <JiraStatusPill ticket={jiraTicket} />
+              : <TriageBadge status={issue.triage_status} />}
+          </div>
         </TableCell>
         <TableCell className="text-xs text-muted-foreground">
           {formatRelative(issue.last_seen_at)}
@@ -424,7 +460,7 @@ function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmi
         <TableRow>
           <TableCell colSpan={6} className="bg-muted/30 p-4">
             {issue.latest_snippet && (
-              <pre className="mb-3 overflow-x-auto rounded bg-background p-3 text-xs font-mono border">
+              <pre className="mb-3 overflow-x-auto rounded bg-background p-3 text-xs font-mono border whitespace-pre-wrap">
                 {issue.latest_snippet}
               </pre>
             )}
@@ -443,7 +479,7 @@ function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmi
             {/* Jira */}
             <div className="mb-3">
               {jiraTicket ? (
-                <JiraChip
+                <JiraCard
                   ticket={jiraTicket}
                   onRefresh={() => refreshJira.mutate(jiraTicket.issue_key)}
                   onUnlink={() => unlinkJira.mutate(issue.id)}
@@ -654,11 +690,15 @@ function ScaIssueRow({ issue, isAdmin, jiraTicket }: { issue: ScaIssue; isAdmin:
           {issue.latest_summary}
         </TableCell>
         <TableCell>
-          {issue.dismissed_status !== "active" && (
-            <Badge variant="outline" className="capitalize text-[10px] text-slate-500 border-slate-400">
-              {SCA_STATUS_LABELS[issue.dismissed_status] ?? issue.dismissed_status.replace("_", " ")}
-            </Badge>
-          )}
+          <div className="flex flex-col gap-1 items-start">
+            {jiraTicket
+              ? <JiraStatusPill ticket={jiraTicket} />
+              : issue.dismissed_status !== "active" && (
+                  <Badge variant="outline" className="capitalize text-[10px] text-slate-500 border-slate-400">
+                    {SCA_STATUS_LABELS[issue.dismissed_status] ?? issue.dismissed_status.replace("_", " ")}
+                  </Badge>
+                )}
+          </div>
         </TableCell>
         <TableCell className="text-xs text-muted-foreground">
           {formatRelative(issue.last_seen_at)}
@@ -698,7 +738,7 @@ function ScaIssueRow({ issue, isAdmin, jiraTicket }: { issue: ScaIssue; isAdmin:
             {/* Jira */}
             <div>
               {jiraTicket ? (
-                <JiraChip
+                <JiraCard
                   ticket={jiraTicket}
                   onRefresh={() => refreshJira.mutate(jiraTicket.issue_key)}
                   onUnlink={() => unlinkJira.mutate(issue.id)}
