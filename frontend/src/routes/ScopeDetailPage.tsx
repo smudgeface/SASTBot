@@ -224,6 +224,46 @@ function truncateFilePath(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+/** Build a clickable source URL from a repo's template (with $FILE / $LINE
+ *  placeholders) and the issue's path + line. Returns null if the template
+ *  is missing or empty. */
+function buildSourceUrl(template: string | null | undefined, file: string, line?: number | null): string | null {
+  if (!template) return null;
+  return template
+    .replace(/\$FILE/g, encodeURI(file))
+    .replace(/\$LINE/g, line != null ? String(line) : "");
+}
+
+/** Renders a file path; if a sourceUrlTemplate is provided, wraps it in an
+ *  anchor that opens the path in the configured source viewer. */
+function FileLink({
+  template,
+  file,
+  line,
+  className,
+  children,
+}: {
+  template: string | null | undefined;
+  file: string;
+  line?: number | null;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const url = buildSourceUrl(template, file, line);
+  if (!url) return <span className={className}>{children}</span>;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`hover:underline hover:text-foreground ${className ?? ""}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {children}
+    </a>
+  );
+}
+
 function vulnUrl(id: string): string {
   if (id.startsWith("CVE-")) return `https://nvd.nist.gov/vuln/detail/${id}`;
   if (id.startsWith("GHSA-")) return `https://github.com/advisories/${id}`;
@@ -324,11 +364,13 @@ function ReachabilityVerdict({
   isAdmin,
   onDismiss,
   isPending,
+  sourceUrlTemplate,
 }: {
   issue: ScaIssue;
   isAdmin: boolean;
   onDismiss: (status: "false_positive" | "suppressed") => void;
   isPending: boolean;
+  sourceUrlTemplate: string | null;
 }) {
   const reachable = issue.confirmed_reachable;
   const conf = issue.reachable_confidence;
@@ -371,8 +413,12 @@ function ReachabilityVerdict({
           {sites.slice(0, 5).map((s, i) => (
             <div key={i} className="rounded border bg-background text-xs font-mono overflow-x-auto">
               <div className="flex items-center justify-between px-2 py-1 border-b text-[10px] text-muted-foreground">
-                <span className="truncate">{s.file}</span>
-                <span className="ml-2 shrink-0">line {s.line}</span>
+                <FileLink template={sourceUrlTemplate} file={s.file} line={s.line} className="truncate">
+                  {s.file}
+                </FileLink>
+                <FileLink template={sourceUrlTemplate} file={s.file} line={s.line} className="ml-2 shrink-0">
+                  line {s.line}
+                </FileLink>
               </div>
               <pre className="px-2 py-1 whitespace-pre">{s.snippet}</pre>
             </div>
@@ -648,10 +694,10 @@ function Pager({
 // ---------------------------------------------------------------------------
 
 function SastIssueRow({
-  issue, isAdmin, jiraTicket, scopeId, autoExpand,
+  issue, isAdmin, jiraTicket, scopeId, autoExpand, sourceUrlTemplate,
 }: {
   issue: SastIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null;
-  scopeId: string; autoExpand?: boolean;
+  scopeId: string; autoExpand?: boolean; sourceUrlTemplate: string | null;
 }) {
   const [expanded, setExpanded] = useState(autoExpand ?? false);
   const [linkError, setLinkError] = useState<string>();
@@ -756,7 +802,13 @@ function SastIssueRow({
               </p>
             )}
             <p className="mb-3 text-xs font-mono text-muted-foreground break-all">
-              {issue.latest_file_path}:{issue.latest_start_line}
+              <FileLink
+                template={sourceUrlTemplate}
+                file={issue.latest_file_path}
+                line={issue.latest_start_line}
+              >
+                {issue.latest_file_path}:{issue.latest_start_line}
+              </FileLink>
             </p>
             {issue.latest_snippet && (
               <ContextSnippet
@@ -859,7 +911,7 @@ function SastIssueRow({
   );
 }
 
-function SastIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highlightIssueId?: string }) {
+function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null }) {
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
   const [filters, setFilters] = useState<SastIssueFilters>({ page: 1, page_size: 50 });
@@ -962,7 +1014,7 @@ function SastIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highlig
               </TableHeader>
               <TableBody>
                 {data.items.map((issue) => (
-                  <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} />
+                  <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} sourceUrlTemplate={sourceUrlTemplate} />
                 ))}
               </TableBody>
             </Table>
@@ -984,10 +1036,10 @@ function SastIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highlig
 // ---------------------------------------------------------------------------
 
 function ScaIssueRow({
-  issue, isAdmin, jiraTicket, scopeId, autoExpand,
+  issue, isAdmin, jiraTicket, scopeId, autoExpand, sourceUrlTemplate,
 }: {
   issue: ScaIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null;
-  scopeId: string; autoExpand?: boolean;
+  scopeId: string; autoExpand?: boolean; sourceUrlTemplate: string | null;
 }) {
   const [expanded, setExpanded] = useState(autoExpand ?? false);
   const [linkError, setLinkError] = useState<string>();
@@ -1136,8 +1188,14 @@ function ScaIssueRow({
             {issue.latest_manifest_file && (
               <div className="space-y-1">
                 <p className="text-xs font-mono text-muted-foreground break-all">
-                  {issue.latest_manifest_file}
-                  {issue.latest_manifest_line ? `:${issue.latest_manifest_line}` : ""}
+                  <FileLink
+                    template={sourceUrlTemplate}
+                    file={issue.latest_manifest_file}
+                    line={issue.latest_manifest_line}
+                  >
+                    {issue.latest_manifest_file}
+                    {issue.latest_manifest_line ? `:${issue.latest_manifest_line}` : ""}
+                  </FileLink>
                 </p>
                 {issue.latest_manifest_snippet && issue.latest_manifest_line && (
                   <ContextSnippet
@@ -1185,6 +1243,7 @@ function ScaIssueRow({
                 isAdmin={isAdmin}
                 onDismiss={(s) => act(s)}
                 isPending={dismiss.isPending}
+                sourceUrlTemplate={sourceUrlTemplate}
               />
             )}
             {issue.latest_aliases.length > 0 && (
@@ -1279,7 +1338,7 @@ function ScaIssueRow({
   );
 }
 
-function ScaIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highlightIssueId?: string }) {
+function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null }) {
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
   const [filters, setFilters] = useState<ScaIssueFilters>({ page: 1, page_size: 50 });
@@ -1405,7 +1464,7 @@ function ScaIssuesTab({ scopeId, highlightIssueId }: { scopeId: string; highligh
               </TableHeader>
               <TableBody>
                 {data.items.map((issue) => (
-                  <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} />
+                  <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} sourceUrlTemplate={sourceUrlTemplate} />
                 ))}
               </TableBody>
             </Table>
@@ -1638,10 +1697,10 @@ export default function ScopeDetailPage() {
             not on first click. data-[state=inactive]:hidden hides inactive panels
             without unmounting them — eliminates the loading-flash layout shift. */}
         <TabsContent forceMount value="sca" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ScaIssuesTab scopeId={id} highlightIssueId={highlightIssueId} />}
+          {id && <ScaIssuesTab scopeId={id} highlightIssueId={highlightIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} />}
         </TabsContent>
         <TabsContent forceMount value="sast" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <SastIssuesTab scopeId={id} highlightIssueId={highlightIssueId} />}
+          {id && <SastIssuesTab scopeId={id} highlightIssueId={highlightIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} />}
         </TabsContent>
         <TabsContent forceMount value="components" className="mt-4 min-h-80 data-[state=inactive]:hidden">
           {id && <ComponentsTab scopeId={id} />}

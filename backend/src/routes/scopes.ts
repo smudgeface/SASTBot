@@ -53,6 +53,10 @@ const ScopeListItemSchema = z.object({
 const ScopeDetailSchema = ScopeListItemSchema.extend({
   resolved_sast_count: z.number().int().nonnegative(),
   resolved_sca_count: z.number().int().nonnegative(),
+  /** Repo's source-URL template (e.g. ".../browse/$FILE#$LINE"); null if
+   *  the repo has not configured one. The frontend uses this to make file
+   *  paths in SAST/SCA detail views clickable. */
+  source_url_template: z.string().nullable(),
 });
 
 // Coerce a repeated query param (string | string[] | undefined) to string[] | undefined
@@ -223,11 +227,11 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       const orgId = req.user?.orgId ?? null;
       const scope = await prisma.scanScope.findFirst({
         where: { id: req.params.id, orgId: orgId ?? null },
-        include: { repo: { select: { name: true, defaultBranch: true } } },
+        include: { repo: { select: { name: true, defaultBranch: true, sourceUrlTemplate: true } } },
       });
       if (!scope) return reply.code(404).send({ detail: "Scope not found" });
 
-      const repo = scope.repo as { name: string; defaultBranch: string };
+      const repo = scope.repo as { name: string; defaultBranch: string; sourceUrlTemplate: string | null };
       const lastScanRunId = scope.lastScanRunId;
 
       const TERMINAL_D = ["suppressed", "false_positive", "fixed"] as string[];
@@ -297,6 +301,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         pending_triage_count: pendingTriageCount,
         resolved_sast_count: resolvedSastCount,
         resolved_sca_count: resolvedScaCount,
+        source_url_template: repo.sourceUrlTemplate ?? null,
         created_at: scope.createdAt.toISOString(),
       };
     },

@@ -89,6 +89,7 @@ export async function createRepo(
           scanPaths: scanPaths as Prisma.InputJsonValue,
           analysisTypes: (input.analysis_types ?? ["sca"]) as Prisma.InputJsonValue,
           scheduleCron: input.schedule_cron ?? null,
+          sourceUrlTemplate: input.source_url_template ?? null,
           isActive: input.is_active ?? true,
           retainClone: input.retain_clone ?? false,
         },
@@ -145,6 +146,9 @@ export async function updateRepo(
       }
       if (Object.prototype.hasOwnProperty.call(input, "schedule_cron")) {
         data.scheduleCron = input.schedule_cron ?? null;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "source_url_template")) {
+        data.sourceUrlTemplate = input.source_url_template ?? null;
       }
       if (input.is_active !== undefined) data.isActive = input.is_active;
       if (input.retain_clone !== undefined) data.retainClone = input.retain_clone;
