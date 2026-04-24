@@ -139,7 +139,6 @@ model AppSettings {
   llmApiFormat              String?  @map("llm_api_format")
   llmModel                  String?  @map("llm_model")
   llmCredentialId           String?  @map("llm_credential_id") @db.Uuid
-  llmAssistanceEnabled      Boolean  @default(false) @map("llm_assistance_enabled")
   llmTriageTokenBudget      Int      @default(50000) @map("llm_triage_token_budget")
   reachabilityCvssThreshold Float    @default(7.0) @map("reachability_cvss_threshold")
   updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -284,6 +283,7 @@ model SastIssue {
   latestRuleId         String    @map("latest_rule_id")
   latestRuleName       String?   @map("latest_rule_name")
   latestRuleMessage    String?   @map("latest_rule_message")
+  latestLlmSummary     String?   @map("latest_llm_summary")
   latestSeverity       String    @default("info") @map("latest_severity")
   latestCweIds         String[]  @default([]) @map("latest_cwe_ids")
   latestFilePath       String    @map("latest_file_path")
@@ -333,6 +333,7 @@ model ScaIssue {
   latestCvssScore             Float?    @map("latest_cvss_score")
   latestCvssVector            String?   @map("latest_cvss_vector")
   latestSummary               String?   @map("latest_summary")
+  latestLlmSummary            String?   @map("latest_llm_summary")
   latestAliases               String[]  @default([]) @map("latest_aliases")
   latestActivelyExploited     Boolean   @default(false) @map("latest_actively_exploited")
   latestEolDate               DateTime? @map("latest_eol_date") @db.Timestamptz(6)

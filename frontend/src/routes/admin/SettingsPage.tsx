@@ -53,7 +53,6 @@ export default function SettingsPage() {
   const [llmNewValue, setLlmNewValue] = useState("");
 
   // LLM assistance section state
-  const [llmEnabled, setLlmEnabled] = useState(false);
   const [llmTokenBudget, setLlmTokenBudget] = useState(50000);
   const [reachabilityCvss, setReachabilityCvss] = useState(7.0);
 
@@ -72,7 +71,6 @@ export default function SettingsPage() {
     setLlmCredId(data.llm_credential_id ?? "");
     setLlmCredChoice(data.llm_credential_id ? "existing" : "new");
 
-    setLlmEnabled(data.llm_assistance_enabled ?? false);
     setLlmTokenBudget(data.llm_triage_token_budget ?? 50000);
     setReachabilityCvss(data.reachability_cvss_threshold ?? 7.0);
   }, [settings.data]);
@@ -112,7 +110,6 @@ export default function SettingsPage() {
       llm_model: llmModel.trim() || null,
       llm_credential_id: llmCredChoice === "existing" ? llmCredId || null : null,
       llm_credential: buildLlmCred(),
-      llm_assistance_enabled: llmEnabled,
       llm_triage_token_budget: llmTokenBudget,
       reachability_cvss_threshold: reachabilityCvss,
     };
@@ -319,43 +316,14 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle>LLM-assisted analysis</CardTitle>
             <CardDescription>
-              Enable AI triage of SAST findings and reachability analysis for SCA findings.
+              LLM analysis is required — configure the gateway above to enable SAST triage, reachability analysis, and issue summaries.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
-            {/* Toggle */}
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">Enable LLM assistance</p>
-                <p className="text-xs text-muted-foreground">
-                  Automatically triage SAST findings and assess CVE reachability during scans.
-                </p>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={llmEnabled}
-                onClick={() => setLlmEnabled((v) => !v)}
-                className={cn(
-                  "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  llmEnabled
-                    ? "bg-primary"
-                    : "bg-input",
-                )}
-              >
-                <span
-                  className={cn(
-                    "pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform",
-                    llmEnabled ? "translate-x-5" : "translate-x-0",
-                  )}
-                />
-              </button>
-            </div>
-
-            {/* Warn if enabled but no credential */}
-            {llmEnabled && !settings.data?.llm_credential_id && llmCredChoice !== "new" ? (
+            {/* Warn if no credential configured */}
+            {!settings.data?.llm_credential_id && llmCredChoice !== "new" ? (
               <p className="text-xs text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-900 rounded px-3 py-2 bg-amber-50 dark:bg-amber-950">
-                LLM credentials not configured — set up a credential in the LLM gateway section above.
+                LLM credentials not configured — set up a credential in the LLM gateway section above. Scans will not run without a working LLM connection.
               </p>
             ) : null}
 

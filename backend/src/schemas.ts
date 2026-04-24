@@ -250,7 +250,6 @@ export const AppSettingsUpdateSchema = z.object({
   llm_model: z.string().nullable().optional(),
   llm_credential_id: UuidSchema.nullable().optional(),
   llm_credential: CredentialCreateSchema.nullable().optional(),
-  llm_assistance_enabled: z.boolean().optional(),
   llm_triage_token_budget: z.number().int().min(1000).optional(),
   reachability_cvss_threshold: z.number().min(0).max(10).optional(),
 });
@@ -266,7 +265,6 @@ export const AppSettingsOutSchema = z.object({
   llm_api_format: z.string().nullable(),
   llm_model: z.string().nullable(),
   llm_credential_id: UuidSchema.nullable(),
-  llm_assistance_enabled: z.boolean(),
   llm_triage_token_budget: z.number().int(),
   reachability_cvss_threshold: z.number(),
   updated_at: IsoDateTimeSchema,

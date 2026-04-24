@@ -37,6 +37,7 @@ import {
 } from "@/api/queries/jira";
 import type { JiraTicket } from "@/api/types";
 import { useTriggerScan } from "@/api/queries/scans";
+import { useSettings } from "@/api/queries/settings";
 import { useMe } from "@/api/queries/auth";
 import type { SastIssue, ScaIssue } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
@@ -1224,7 +1225,9 @@ export default function ScopeDetailPage() {
   const [searchParams] = useSearchParams();
   const highlightIssueId = searchParams.get("issue") ?? undefined;
   const { data: scope, isLoading, isError } = useScopeDetail(id);
+  const { data: appSettings } = useSettings();
   const triggerScan = useTriggerScan();
+  const llmConfigured = !!(appSettings?.llm_base_url && appSettings?.llm_model && appSettings?.llm_credential_id);
 
   if (isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (isError || !scope) return <p className="text-sm text-destructive">Scope not found.</p>;
@@ -1257,7 +1260,8 @@ export default function ScopeDetailPage() {
         <Button
           size="sm"
           onClick={handleTriggerScan}
-          disabled={triggerScan.isPending}
+          disabled={triggerScan.isPending || !llmConfigured}
+          title={!llmConfigured ? "LLM not configured — set up LLM settings before scanning" : undefined}
         >
           Scan now
         </Button>

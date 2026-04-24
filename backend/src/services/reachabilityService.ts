@@ -159,11 +159,6 @@ export async function assessReachability(
   const db = client as PrismaClient;
   const settings = await getOrCreateSettings(orgId);
 
-  if (!settings.llmAssistanceEnabled) {
-    logger.info("[reachabilityService] LLM not enabled — skipping reachability");
-    return;
-  }
-
   const threshold = settings.reachabilityCvssThreshold;
 
   // Query ScaIssue rows detected in this scan that meet severity threshold

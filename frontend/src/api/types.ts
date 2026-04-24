@@ -169,7 +169,6 @@ export interface AdminSettings {
   llm_api_format: LlmApiFormat | null;
   llm_model: string | null;
   llm_credential_id: string | null;
-  llm_assistance_enabled: boolean;
   llm_triage_token_budget: number;
   reachability_cvss_threshold: number;
   updated_at: string;
@@ -185,7 +184,6 @@ export interface AdminSettingsUpdate {
   llm_model?: string | null;
   llm_credential_id?: string | null;
   llm_credential?: CredentialCreateInput | null;
-  llm_assistance_enabled?: boolean;
   llm_triage_token_budget?: number;
   reachability_cvss_threshold?: number;
 }

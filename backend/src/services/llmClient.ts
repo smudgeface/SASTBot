@@ -161,12 +161,10 @@ async function getPrisma(): Promise<PrismaClient> {
 
 export async function callLlm(
   input: LlmCallInput,
-  opts: { skipEnabledCheck?: boolean } = {},
 ): Promise<LlmCallResult | null> {
   const db = await getPrisma();
   const settings = await getOrCreateSettings(input.orgId ?? null);
 
-  if (!opts.skipEnabledCheck && !settings.llmAssistanceEnabled) return null;
   if (!settings.llmBaseUrl || !settings.llmModel || !settings.llmCredentialId) {
     logger.warn("[llmClient] LLM base URL / model / credential not configured");
     return null;
@@ -311,7 +309,6 @@ export async function checkLlmConnection(orgId: string | null = null): Promise<{
   try {
     const result = await callLlm(
       { orgId, prompt: 'Reply with exactly the word "ok"', maxTokens: 20 },
-      { skipEnabledCheck: true },
     );
     if (result === null) {
       return {
@@ -349,4 +346,81 @@ export async function checkLlmConnection(orgId: string | null = null): Promise<{
     }
     return { success: false, latencyMs: 0, model: "", inputTokens: 0, outputTokens: 0, error };
   }
+}
+
+// ---------------------------------------------------------------------------
+// LLM-generated issue summaries
+// ---------------------------------------------------------------------------
+
+export interface SastSummaryContext {
+  ruleId: string;
+  ruleName: string | null;
+  ruleMessage: string | null;
+  filePath: string;
+  snippet: string | null;
+  scanRunId?: string;
+  orgId?: string | null;
+}
+
+export interface ScaSummaryContext {
+  packageName: string;
+  version: string | null;
+  osvId: string;
+  cveId: string | null;
+  cvssScore: number | null;
+  osvSummary: string | null;
+  scanRunId?: string;
+  orgId?: string | null;
+}
+
+const SummarySchema = z.object({ summary: z.string() });
+
+export async function generateIssueSummary(
+  kind: "sast",
+  input: SastSummaryContext,
+): Promise<string | null>;
+export async function generateIssueSummary(
+  kind: "sca",
+  input: ScaSummaryContext,
+): Promise<string | null>;
+export async function generateIssueSummary(
+  kind: "sast" | "sca",
+  input: SastSummaryContext | ScaSummaryContext,
+): Promise<string | null> {
+  let prompt: string;
+
+  if (kind === "sast") {
+    const i = input as SastSummaryContext;
+    const snippet = i.snippet ? `\nCode:\n\`\`\`\n${i.snippet.slice(0, 500)}\n\`\`\`` : "";
+    prompt = `Write a ≤100-char plain English sentence starting with a verb that summarizes this SAST finding.
+Rule: ${i.ruleId}${i.ruleName ? ` – ${i.ruleName}` : ""}
+${i.ruleMessage ? `Message: ${i.ruleMessage}\n` : ""}File: ${i.filePath}${snippet}
+Reply with ONLY valid JSON: {"summary": "<your sentence>"}`;
+  } else {
+    const i = input as ScaSummaryContext;
+    const id = i.cveId ?? i.osvId;
+    const cvss = i.cvssScore != null ? ` (CVSS ${i.cvssScore.toFixed(1)})` : "";
+    const ver = i.version ? `@${i.version}` : "";
+    prompt = `Write a ≤100-char plain English sentence starting with a verb that summarizes this SCA vulnerability's impact.
+Package: ${i.packageName}${ver}
+ID: ${id}${cvss}
+${i.osvSummary ? `Description: ${i.osvSummary}\n` : ""}Reply with ONLY valid JSON: {"summary": "<your sentence>"}`;
+  }
+
+  const result = await callLlm({
+    scanRunId: input.scanRunId,
+    orgId: input.orgId ?? null,
+    prompt,
+    maxTokens: 80,
+  });
+
+  if (!result) return null;
+
+  const parsed = parseJsonResponse(result.text, SummarySchema);
+  if (!parsed) {
+    // Plain text fallback for models that ignore the JSON instruction
+    const text = result.text.trim().replace(/^["']|["']$/g, "");
+    return text.slice(0, 120) || null;
+  }
+  return parsed.summary.slice(0, 120);
 }

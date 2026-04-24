@@ -133,7 +133,6 @@ export async function triageFindings(
   const db = client as PrismaClient;
   const settings = await getOrCreateSettings(orgId);
 
-  if (!settings.llmAssistanceEnabled) return;
   if (!settings.llmBaseUrl || !settings.llmModel || !settings.llmCredentialId) {
     logger.info("[llmTriageService] LLM not fully configured — skipping triage");
     return;
