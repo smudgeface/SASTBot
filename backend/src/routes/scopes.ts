@@ -77,7 +77,7 @@ const SastIssuesQuerySchema = PaginationQuerySchema.extend({
 const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
   severity: toArray(SeveritySchema),
   finding_type: toArray(FindingTypeSchema),
-  dismissed_status: z.enum(["active", "acknowledged", "wont_fix", "false_positive"]).optional(),
+  dismissed_status: z.enum(["active", "confirmed", "acknowledged", "wont_fix", "false_positive"]).optional(),
   has_jira_ticket: z.enum(["yes", "no"]).optional(),
   reachable: z.coerce.boolean().optional(),
   has_fix: z.coerce.boolean().optional(),

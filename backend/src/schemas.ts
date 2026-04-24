@@ -481,7 +481,7 @@ export const SastIssueOutSchema = z.object({
 });
 export type SastIssueOut = z.infer<typeof SastIssueOutSchema>;
 
-export const ScaDismissedStatusSchema = z.enum(["active", "acknowledged", "wont_fix", "false_positive"]);
+export const ScaDismissedStatusSchema = z.enum(["active", "confirmed", "acknowledged", "wont_fix", "false_positive"]);
 export type ScaDismissedStatus = z.infer<typeof ScaDismissedStatusSchema>;
 
 export const ScaIssueOutSchema = z.object({
