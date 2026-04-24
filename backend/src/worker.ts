@@ -56,17 +56,18 @@ async function backfillLlmSummaries(): Promise<void> {
 
   const BATCH = 50;
 
-  // SAST backfill
-  let offset = 0;
+  // SAST backfill — use `notIn: attempted` so rows that fail aren't retried
+  // in an infinite loop, and successes drop out naturally via the null filter.
+  const attemptedSast = new Set<string>();
   while (true) {
     const issues = await prisma.sastIssue.findMany({
-      where: { latestLlmSummary: null },
+      where: { latestLlmSummary: null, id: { notIn: [...attemptedSast] } },
       select: { id: true, latestRuleId: true, latestRuleName: true, latestRuleMessage: true, latestFilePath: true, latestSnippet: true, orgId: true },
       take: BATCH,
-      skip: offset,
     });
     if (issues.length === 0) break;
     for (const issue of issues) {
+      attemptedSast.add(issue.id);
       const summary = await generateIssueSummary("sast", {
         ruleId: issue.latestRuleId,
         ruleName: issue.latestRuleName,
@@ -77,22 +78,23 @@ async function backfillLlmSummaries(): Promise<void> {
       });
       if (summary) {
         await prisma.sastIssue.update({ where: { id: issue.id }, data: { latestLlmSummary: summary } });
+      } else {
+        logger.warn({ issueId: issue.id, ruleId: issue.latestRuleId }, "[worker] SAST summary returned null");
       }
     }
-    offset += BATCH;
   }
 
-  // SCA backfill
-  offset = 0;
+  // SCA backfill — same pattern
+  const attemptedSca = new Set<string>();
   while (true) {
     const issues = await prisma.scaIssue.findMany({
-      where: { latestLlmSummary: null },
+      where: { latestLlmSummary: null, id: { notIn: [...attemptedSca] } },
       select: { id: true, packageName: true, latestPackageVersion: true, osvId: true, latestCveId: true, latestCvssScore: true, latestSummary: true, orgId: true },
       take: BATCH,
-      skip: offset,
     });
     if (issues.length === 0) break;
     for (const issue of issues) {
+      attemptedSca.add(issue.id);
       const summary = await generateIssueSummary("sca", {
         packageName: issue.packageName,
         version: issue.latestPackageVersion,
@@ -104,12 +106,16 @@ async function backfillLlmSummaries(): Promise<void> {
       });
       if (summary) {
         await prisma.scaIssue.update({ where: { id: issue.id }, data: { latestLlmSummary: summary } });
+      } else {
+        logger.warn({ issueId: issue.id, osvId: issue.osvId }, "[worker] SCA summary returned null");
       }
     }
-    offset += BATCH;
   }
 
-  logger.info("[worker] LLM summary backfill complete");
+  logger.info(
+    { sastAttempted: attemptedSast.size, scaAttempted: attemptedSca.size },
+    "[worker] LLM summary backfill complete",
+  );
 }
 
 backfillLlmSummaries().catch((err) => {
