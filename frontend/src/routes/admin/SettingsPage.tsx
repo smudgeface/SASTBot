@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useCredentials } from "@/api/queries/credentials";
 import { useSettings, useUpdateSettings, useCheckLlm } from "@/api/queries/settings";
 import { useCheckJiraConnection } from "@/api/queries/jira";
-import type { AdminSettingsUpdate, LlmApiFormat } from "@/api/types";
+import type { AdminSettingsUpdate, LlmApiFormat, ReachabilityMinSeverity } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Textarea } from "@/components/ui/input";
@@ -54,7 +54,7 @@ export default function SettingsPage() {
 
   // LLM assistance section state
   const [llmTokenBudget, setLlmTokenBudget] = useState(50000);
-  const [reachabilityCvss, setReachabilityCvss] = useState(7.0);
+  const [reachabilityMinSeverity, setReachabilityMinSeverity] = useState<ReachabilityMinSeverity>("high");
 
   // When the settings query completes, hydrate the form.
   useEffect(() => {
@@ -72,7 +72,7 @@ export default function SettingsPage() {
     setLlmCredChoice(data.llm_credential_id ? "existing" : "new");
 
     setLlmTokenBudget(data.llm_triage_token_budget ?? 50000);
-    setReachabilityCvss(data.reachability_cvss_threshold ?? 7.0);
+    setReachabilityMinSeverity(data.reachability_min_severity ?? "high");
   }, [settings.data]);
 
   const jiraOptions = credentials.data?.filter((c) => c.kind.startsWith("jira")) ?? [];
@@ -108,7 +108,7 @@ export default function SettingsPage() {
       llm_api_format: llmApiFormat,
       llm_model: llmModel.trim() || null,
       llm_triage_token_budget: llmTokenBudget,
-      reachability_cvss_threshold: reachabilityCvss,
+      reachability_min_severity: reachabilityMinSeverity,
     };
     // Only include credential keys when the user is actually making a change.
     // If choice is "new" but fields are blank, omit both so the backend keeps
@@ -388,18 +388,20 @@ export default function SettingsPage() {
                 </p>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="llm-cvss">Reachability CVSS threshold</Label>
-                <Input
-                  id="llm-cvss"
-                  type="number"
-                  min={0}
-                  max={10}
-                  step={0.5}
-                  value={reachabilityCvss}
-                  onChange={(e) => setReachabilityCvss(Number(e.target.value))}
-                />
+                <Label htmlFor="reach-sev">Reachability minimum severity</Label>
+                <select
+                  id="reach-sev"
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={reachabilityMinSeverity}
+                  onChange={(e) => setReachabilityMinSeverity(e.target.value as ReachabilityMinSeverity)}
+                >
+                  <option value="critical">Critical only</option>
+                  <option value="high">High and above</option>
+                  <option value="medium">Medium and above</option>
+                  <option value="low">Low and above</option>
+                </select>
                 <p className="text-xs text-muted-foreground">
-                  Only assess reachability for CVEs at or above this CVSS score.
+                  Only CVE findings at this severity or higher will be assessed for reachability.
                 </p>
               </div>
             </div>

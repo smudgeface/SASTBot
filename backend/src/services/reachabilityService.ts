@@ -23,6 +23,16 @@ const logger = pino({ level: loadConfig().logLevel, name: "reachabilityService" 
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
+// Severity ladder, highest to lowest. info/unknown intentionally excluded —
+// they are too noisy to act on and don't appear in the user-facing dropdown.
+const SEVERITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+function severitiesAtLeast(min: string): string[] {
+  const minRank = SEVERITY_RANK[min] ?? SEVERITY_RANK.high;
+  return Object.entries(SEVERITY_RANK)
+    .filter(([, r]) => r >= minRank)
+    .map(([s]) => s);
+}
+
 // ---------------------------------------------------------------------------
 // Ripgrep
 // ---------------------------------------------------------------------------
@@ -146,6 +156,103 @@ Respond with whether the vulnerability appears reachable from this codebase.`;
 }
 
 // ---------------------------------------------------------------------------
+// Per-issue assessment (shared by scan-time and backfill paths)
+// ---------------------------------------------------------------------------
+
+async function assessOneIssue(
+  issue: ScaIssue,
+  scopeWorkingDir: string,
+  orgId: string | null,
+  db: PrismaClient,
+): Promise<void> {
+  // Already marked reachable (e.g. via SAST triage hints) — skip LLM
+  if (issue.confirmedReachable) return;
+
+  const osvVuln: OsvVulnForExtraction = {
+    id: issue.osvId,
+    cveId: issue.latestCveId,
+    ecosystem: issue.latestEcosystem ?? "npm",
+    packageName: issue.packageName,
+    summary: issue.latestSummary,
+    details: null,
+    modified: null,
+  };
+
+  const knowledge = await getOrExtract(osvVuln, orgId, db);
+
+  if (knowledge.vulnerableFunctions.length === 0) {
+    await db.scaIssue.update({
+      where: { id: issue.id },
+      data: {
+        reachableAssessedAt: new Date(),
+        reachableReasoning: "No specific vulnerable functions identified from advisory",
+      },
+    });
+    return;
+  }
+
+  let allHits: GrepHit[] = [];
+  let matchedFunction = "";
+  for (const fn of knowledge.vulnerableFunctions) {
+    const hits = await ripgrepForFunction(fn, scopeWorkingDir);
+    if (hits.length > 0) {
+      allHits = hits;
+      matchedFunction = fn;
+      break;
+    }
+  }
+
+  if (allHits.length === 0) {
+    logger.info(
+      { issueId: issue.id, functions: knowledge.vulnerableFunctions },
+      "[reachabilityService] no references found — marking not reachable",
+    );
+    await db.scaIssue.update({
+      where: { id: issue.id },
+      data: {
+        confirmedReachable: false,
+        reachableReasoning: `No references to ${knowledge.vulnerableFunctions.join(", ")} found in scope`,
+        reachableAssessedAt: new Date(),
+      },
+    });
+    return;
+  }
+
+  logger.info(
+    { issueId: issue.id, matchedFunction, hits: allHits.length },
+    "[reachabilityService] hits found — asking LLM to confirm",
+  );
+
+  const confirmation = await confirmReachabilityWithLlm(issue, matchedFunction, allHits, orgId);
+
+  if (!confirmation) {
+    await db.scaIssue.update({
+      where: { id: issue.id },
+      data: {
+        reachableAssessedAt: new Date(),
+        reachableReasoning: `References to '${matchedFunction}' found in scope but LLM confirmation unavailable`,
+      },
+    });
+    return;
+  }
+
+  await db.scaIssue.update({
+    where: { id: issue.id },
+    data: {
+      confirmedReachable: confirmation.reachable,
+      reachableReasoning: confirmation.reasoning,
+      reachableAssessedAt: new Date(),
+      reachableModel: confirmation.model,
+    },
+  });
+
+  logger.info(
+    { issueId: issue.id, reachable: confirmation.reachable, confidence: confirmation.confidence },
+    "[reachabilityService] reachability assessed",
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main entrypoint
 // ---------------------------------------------------------------------------
 
@@ -159,18 +266,16 @@ export async function assessReachability(
   const db = client as PrismaClient;
   const settings = await getOrCreateSettings(orgId);
 
-  const threshold = settings.reachabilityCvssThreshold;
+  const minSeverity = settings.reachabilityMinSeverity;
+  const allowedSeverities = severitiesAtLeast(minSeverity);
 
-  // Query ScaIssue rows detected in this scan that meet severity threshold
+  // Query ScaIssue rows detected in this scan whose severity meets the gate.
   const issues = await db.scaIssue.findMany({
     where: {
       scopeId,
       lastSeenScanRunId: scanRunId,
       latestFindingType: "cve",
-      OR: [
-        { latestCvssScore: { gte: threshold } },
-        { latestCvssScore: null, latestSeverity: { in: ["critical", "high"] } },
-      ],
+      latestSeverity: { in: allowedSeverities },
     },
   });
 
@@ -180,97 +285,12 @@ export async function assessReachability(
   }
 
   logger.info(
-    { count: issues.length, threshold },
+    { count: issues.length, minSeverity },
     "[reachabilityService] assessing reachability",
   );
 
   for (const issue of issues) {
-    // Already marked reachable (e.g. via SAST triage hints) — skip LLM
-    if (issue.confirmedReachable) continue;
-
-    const osvVuln: OsvVulnForExtraction = {
-      id: issue.osvId,
-      cveId: issue.latestCveId,
-      ecosystem: issue.latestEcosystem ?? "npm",
-      packageName: issue.packageName,
-      summary: issue.latestSummary,
-      details: null,
-      modified: null,
-    };
-
-    const knowledge = await getOrExtract(osvVuln, orgId, db);
-
-    if (knowledge.vulnerableFunctions.length === 0) {
-      await db.scaIssue.update({
-        where: { id: issue.id },
-        data: {
-          reachableAssessedAt: new Date(),
-          reachableReasoning: "No specific vulnerable functions identified from advisory",
-        },
-      });
-      continue;
-    }
-
-    let allHits: GrepHit[] = [];
-    let matchedFunction = "";
-
-    for (const fn of knowledge.vulnerableFunctions) {
-      const hits = await ripgrepForFunction(fn, scopeWorkingDir);
-      if (hits.length > 0) {
-        allHits = hits;
-        matchedFunction = fn;
-        break;
-      }
-    }
-
-    if (allHits.length === 0) {
-      logger.info(
-        { issueId: issue.id, functions: knowledge.vulnerableFunctions },
-        "[reachabilityService] no references found — marking not reachable",
-      );
-      await db.scaIssue.update({
-        where: { id: issue.id },
-        data: {
-          confirmedReachable: false,
-          reachableReasoning: `No references to ${knowledge.vulnerableFunctions.join(", ")} found in scope`,
-          reachableAssessedAt: new Date(),
-        },
-      });
-      continue;
-    }
-
-    logger.info(
-      { issueId: issue.id, matchedFunction, hits: allHits.length },
-      "[reachabilityService] hits found — asking LLM to confirm",
-    );
-
-    const confirmation = await confirmReachabilityWithLlm(issue, matchedFunction, allHits, orgId);
-
-    if (!confirmation) {
-      await db.scaIssue.update({
-        where: { id: issue.id },
-        data: {
-          reachableAssessedAt: new Date(),
-          reachableReasoning: `References to '${matchedFunction}' found in scope but LLM confirmation unavailable`,
-        },
-      });
-      continue;
-    }
-
-    await db.scaIssue.update({
-      where: { id: issue.id },
-      data: {
-        confirmedReachable: confirmation.reachable,
-        reachableReasoning: confirmation.reasoning,
-        reachableAssessedAt: new Date(),
-        reachableModel: confirmation.model,
-      },
-    });
-
-    logger.info(
-      { issueId: issue.id, reachable: confirmation.reachable, confidence: confirmation.confidence },
-      "[reachabilityService] reachability assessed",
-    );
+    await assessOneIssue(issue, scopeWorkingDir, orgId, db);
   }
 
   // Update scan-level counter from ScaIssue
@@ -281,4 +301,77 @@ export async function assessReachability(
     where: { id: scanRunId },
     data: { confirmedReachableCount: reachableCount },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Worker-startup backfill
+//
+// Assesses any ScaIssue that hasn't been assessed yet (reachable_assessed_at
+// IS NULL) whose severity meets the configured gate. Only works for repos
+// with retainClone=true — non-retained scans don't have a working tree on
+// disk after the scan finishes. Idempotent: assessed rows drop out of the
+// where filter, so re-runs are no-ops.
+// ---------------------------------------------------------------------------
+
+export async function backfillReachability(db: PrismaClient): Promise<void> {
+  const { repoCachePath } = await import("./repoCache.js");
+  const { join } = await import("node:path");
+  const { stat } = await import("node:fs/promises");
+
+  // We don't have org context at startup; assume single-org and load org=null.
+  const settings = await getOrCreateSettings(null);
+  const allowedSeverities = severitiesAtLeast(settings.reachabilityMinSeverity);
+
+  const issues = await db.scaIssue.findMany({
+    where: {
+      reachableAssessedAt: null,
+      latestFindingType: "cve",
+      latestSeverity: { in: allowedSeverities },
+    },
+    select: { id: true, scopeId: true },
+  });
+  if (issues.length === 0) return;
+
+  // Cache scope → working dir lookups; skip scopes whose repo isn't retained.
+  type ScopeCache = { workingDir: string | null };
+  const scopeCache = new Map<string, ScopeCache>();
+  async function resolveScope(scopeId: string): Promise<string | null> {
+    let cached = scopeCache.get(scopeId);
+    if (cached) return cached.workingDir;
+    const scope = await db.scanScope.findUnique({
+      where: { id: scopeId },
+      select: { repoId: true, path: true, repo: { select: { retainClone: true } } },
+    });
+    if (!scope || !scope.repo?.retainClone) {
+      scopeCache.set(scopeId, { workingDir: null });
+      return null;
+    }
+    const cacheDir = repoCachePath(scope.repoId);
+    try {
+      await stat(cacheDir);
+    } catch {
+      scopeCache.set(scopeId, { workingDir: null });
+      return null;
+    }
+    const workingDir = scope.path === "/" || scope.path === "" ? cacheDir : join(cacheDir, scope.path);
+    cached = { workingDir };
+    scopeCache.set(scopeId, cached);
+    return workingDir;
+  }
+
+  let assessed = 0;
+  let skipped = 0;
+  logger.info({ candidates: issues.length }, "[reachabilityService] backfill starting");
+  for (const stub of issues) {
+    const workingDir = await resolveScope(stub.scopeId);
+    if (!workingDir) { skipped++; continue; }
+    // Re-fetch with full row so assessOneIssue has all fields.
+    const issue = await db.scaIssue.findUnique({ where: { id: stub.id } });
+    if (!issue) continue;
+    // Find the orgId for this issue's scope to pick up the right credentials.
+    const scope = await db.scanScope.findUnique({ where: { id: stub.scopeId }, select: { orgId: true } });
+    await assessOneIssue(issue, workingDir, scope?.orgId ?? null, db);
+    assessed++;
+  }
+  logger.info({ assessed, skipped, total: issues.length }, "[reachabilityService] backfill complete");
 }

@@ -166,7 +166,7 @@ export function appSettingsToOut(s: AppSettings): AppSettingsOut {
     llm_model: s.llmModel,
     llm_credential_id: s.llmCredentialId,
     llm_triage_token_budget: s.llmTriageTokenBudget,
-    reachability_cvss_threshold: s.reachabilityCvssThreshold,
+    reachability_min_severity: s.reachabilityMinSeverity as "critical" | "high" | "medium" | "low",
     updated_at: s.updatedAt.toISOString(),
   };
 }

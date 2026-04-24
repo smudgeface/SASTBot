@@ -10,11 +10,11 @@ import { closeRedis, getRedis } from "./queue/connection.js";
 import { SCAN_QUEUE_NAME, type ScanJobData } from "./queue/scanQueue.js";
 import { cloneOrRefresh } from "./services/repoCache.js";
 import { persistComponents, runCdxgen } from "./services/sbomService.js";
-import { queryAndPersistFindings } from "./services/osvService.js";
+import { queryAndPersistFindings, backfillCvssScores } from "./services/osvService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { runOpengrep, parseSarif, persistSastFindings, backfillSastContextSnippets } from "./services/sastService.js";
 import { triageFindings } from "./services/llmTriageService.js";
-import { assessReachability } from "./services/reachabilityService.js";
+import { assessReachability, backfillReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
 import type { ScanWarning } from "./schemas.js";
 import type { Prisma } from "@prisma/client";
@@ -124,6 +124,14 @@ backfillLlmSummaries().catch((err) => {
 
 backfillSastContextSnippets(prisma).catch((err) => {
   logger.warn({ err }, "[worker] SAST context backfill failed");
+});
+
+backfillCvssScores(prisma).catch((err) => {
+  logger.warn({ err }, "[worker] CVSS score backfill failed");
+});
+
+backfillReachability(prisma).catch((err) => {
+  logger.warn({ err }, "[worker] reachability backfill failed");
 });
 
 const worker = new Worker<ScanJobData>(

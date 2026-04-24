@@ -76,8 +76,8 @@ export async function updateSettings(
     if (Object.prototype.hasOwnProperty.call(input, "llm_triage_token_budget")) {
       data.llmTriageTokenBudget = input.llm_triage_token_budget;
     }
-    if (Object.prototype.hasOwnProperty.call(input, "reachability_cvss_threshold")) {
-      data.reachabilityCvssThreshold = input.reachability_cvss_threshold;
+    if (Object.prototype.hasOwnProperty.call(input, "reachability_min_severity") && input.reachability_min_severity) {
+      data.reachabilityMinSeverity = input.reachability_min_severity;
     }
 
     return tx.appSettings.update({ where: { id: existing.id }, data });
