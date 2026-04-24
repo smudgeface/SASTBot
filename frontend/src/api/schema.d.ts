@@ -829,6 +829,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/repos/{id}/check-connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test git connectivity and credential validity (git ls-remote) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                            branches: string[];
+                        } | {
+                            /** @enum {boolean} */
+                            ok: false;
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/repos/{id}/scopes": {
         parameters: {
             query?: never;
@@ -1057,7 +1136,6 @@ export interface paths {
                             llm_model: string | null;
                             /** Format: uuid */
                             llm_credential_id: string | null;
-                            llm_assistance_enabled: boolean;
                             llm_triage_token_budget: number;
                             reachability_cvss_threshold: number;
                             updated_at: string;
@@ -1187,7 +1265,6 @@ export interface paths {
                             /** Format: date-time */
                             expires_at?: string | null;
                         }) | null;
-                        llm_assistance_enabled?: boolean;
                         llm_triage_token_budget?: number;
                         reachability_cvss_threshold?: number;
                     };
@@ -1214,7 +1291,6 @@ export interface paths {
                             llm_model: string | null;
                             /** Format: uuid */
                             llm_credential_id: string | null;
-                            llm_assistance_enabled: boolean;
                             llm_triage_token_budget: number;
                             reachability_cvss_threshold: number;
                             updated_at: string;
@@ -1311,6 +1387,146 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings/jira/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check Jira connectivity with current settings */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                            account_name: string;
+                            account_email: string;
+                        } | {
+                            /** @enum {boolean} */
+                            ok: false;
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/jira/resolutions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List available Jira resolution values for this org */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            name: string;
+                            description: string | null;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2309,7 +2525,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        status: "confirmed" | "false_positive" | "suppressed" | "pending";
+                        status: "confirmed" | "false_positive" | "suppressed" | "pending" | "fixed";
                         reason?: string;
                     };
                 };
@@ -2386,7 +2602,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scopes": {
+    "/api/scopes": {
         parameters: {
             query?: never;
             header?: never;
@@ -2431,6 +2647,8 @@ export interface paths {
                             active_sca_issue_count: number;
                             critical_count: number;
                             high_count: number;
+                            medium_count: number;
+                            low_count: number;
                             pending_triage_count: number;
                             created_at: string;
                         }[];
@@ -2457,7 +2675,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scopes/{id}": {
+    "/api/scopes/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2501,6 +2719,8 @@ export interface paths {
                             active_sca_issue_count: number;
                             critical_count: number;
                             high_count: number;
+                            medium_count: number;
+                            low_count: number;
                             pending_triage_count: number;
                             created_at: string;
                             resolved_sast_count: number;
@@ -2540,7 +2760,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scopes/{id}/sast-issues": {
+    "/api/scopes/{id}/sast-issues": {
         parameters: {
             query?: never;
             header?: never;
@@ -2553,8 +2773,8 @@ export interface paths {
                 query?: {
                     page?: number;
                     page_size?: number;
-                    severity?: "critical" | "high" | "medium" | "low" | "info";
-                    triage_status?: "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
+                    severity?: ("critical" | "high" | "medium" | "low" | "info")[];
+                    triage_status?: ("pending" | "confirmed" | "planned" | "fixed" | "false_positive" | "suppressed" | "error")[];
                     has_jira_ticket?: "yes" | "no";
                     seen_since_last_scan?: "new" | "unchanged" | "resolved";
                     include_resolved?: boolean;
@@ -2583,7 +2803,7 @@ export interface paths {
                                 scope_id: string;
                                 fingerprint: string;
                                 /** @enum {string} */
-                                triage_status: "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
+                                triage_status: "pending" | "confirmed" | "planned" | "fixed" | "false_positive" | "suppressed" | "error";
                                 triage_confidence: number | null;
                                 triage_reasoning: string | null;
                                 triage_model: string | null;
@@ -2599,6 +2819,7 @@ export interface paths {
                                 latest_rule_id: string;
                                 latest_rule_name: string | null;
                                 latest_rule_message: string | null;
+                                latest_llm_summary: string | null;
                                 /** @enum {string} */
                                 latest_severity: "critical" | "high" | "medium" | "low" | "info";
                                 latest_cwe_ids: string[];
@@ -2648,7 +2869,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scopes/{id}/sca-issues": {
+    "/api/scopes/{id}/sca-issues": {
         parameters: {
             query?: never;
             header?: never;
@@ -2661,9 +2882,10 @@ export interface paths {
                 query?: {
                     page?: number;
                     page_size?: number;
-                    severity?: "critical" | "high" | "medium" | "low" | "unknown";
-                    finding_type?: "cve" | "eol" | "deprecated";
-                    dismissed_status?: "active" | "acknowledged" | "wont_fix" | "false_positive";
+                    severity?: ("critical" | "high" | "medium" | "low" | "unknown")[];
+                    finding_type?: ("cve" | "eol" | "deprecated")[];
+                    dismissed_status?: "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
+                    dismissed_statuses?: ("active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive")[];
                     has_jira_ticket?: "yes" | "no";
                     reachable?: boolean;
                     has_fix?: boolean;
@@ -2696,7 +2918,7 @@ export interface paths {
                                 package_name: string;
                                 osv_id: string;
                                 /** @enum {string} */
-                                dismissed_status: "active" | "acknowledged" | "wont_fix" | "false_positive";
+                                dismissed_status: "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
                                 dismissed_at: string | null;
                                 /** Format: uuid */
                                 dismissed_by_user_id: string | null;
@@ -2715,6 +2937,7 @@ export interface paths {
                                 latest_cvss_score: number | null;
                                 latest_cvss_vector: string | null;
                                 latest_summary: string | null;
+                                latest_llm_summary: string | null;
                                 latest_aliases: string[];
                                 latest_actively_exploited: boolean;
                                 latest_eol_date: string | null;
@@ -2767,7 +2990,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scopes/{id}/components": {
+    "/api/scopes/{id}/components": {
         parameters: {
             query?: never;
             header?: never;
@@ -2846,7 +3069,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scopes/{id}/scans": {
+    "/api/scopes/{id}/scans": {
         parameters: {
             query?: never;
             header?: never;
@@ -2921,7 +3144,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/sast-issues/{id}/triage": {
+    "/api/sast-issues/{id}/triage": {
         parameters: {
             query?: never;
             header?: never;
@@ -2965,7 +3188,7 @@ export interface paths {
                             scope_id: string;
                             fingerprint: string;
                             /** @enum {string} */
-                            triage_status: "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
+                            triage_status: "pending" | "confirmed" | "planned" | "fixed" | "false_positive" | "suppressed" | "error";
                             triage_confidence: number | null;
                             triage_reasoning: string | null;
                             triage_model: string | null;
@@ -2981,6 +3204,7 @@ export interface paths {
                             latest_rule_id: string;
                             latest_rule_name: string | null;
                             latest_rule_message: string | null;
+                            latest_llm_summary: string | null;
                             /** @enum {string} */
                             latest_severity: "critical" | "high" | "medium" | "low" | "info";
                             latest_cwe_ids: string[];
@@ -3035,7 +3259,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/sca-issues/{id}/dismiss": {
+    "/api/sca-issues/{id}/dismiss": {
         parameters: {
             query?: never;
             header?: never;
@@ -3058,7 +3282,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        status: "active" | "acknowledged" | "wont_fix" | "false_positive";
+                        status: "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
                         reason?: string;
                     };
                 };
@@ -3080,7 +3304,7 @@ export interface paths {
                             package_name: string;
                             osv_id: string;
                             /** @enum {string} */
-                            dismissed_status: "active" | "acknowledged" | "wont_fix" | "false_positive";
+                            dismissed_status: "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
                             dismissed_at: string | null;
                             /** Format: uuid */
                             dismissed_by_user_id: string | null;
@@ -3099,6 +3323,7 @@ export interface paths {
                             latest_cvss_score: number | null;
                             latest_cvss_vector: string | null;
                             latest_summary: string | null;
+                            latest_llm_summary: string | null;
                             latest_aliases: string[];
                             latest_actively_exploited: boolean;
                             latest_eol_date: string | null;
@@ -3156,7 +3381,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/sast-issues/{id}/notes": {
+    "/api/sast-issues/{id}/notes": {
         parameters: {
             query?: never;
             header?: never;
@@ -3197,7 +3422,7 @@ export interface paths {
                             scope_id: string;
                             fingerprint: string;
                             /** @enum {string} */
-                            triage_status: "pending" | "confirmed" | "false_positive" | "suppressed" | "error";
+                            triage_status: "pending" | "confirmed" | "planned" | "fixed" | "false_positive" | "suppressed" | "error";
                             triage_confidence: number | null;
                             triage_reasoning: string | null;
                             triage_model: string | null;
@@ -3213,6 +3438,7 @@ export interface paths {
                             latest_rule_id: string;
                             latest_rule_name: string | null;
                             latest_rule_message: string | null;
+                            latest_llm_summary: string | null;
                             /** @enum {string} */
                             latest_severity: "critical" | "high" | "medium" | "low" | "info";
                             latest_cwe_ids: string[];
@@ -3257,7 +3483,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/sca-issues/{id}/notes": {
+    "/api/sca-issues/{id}/notes": {
         parameters: {
             query?: never;
             header?: never;
@@ -3299,7 +3525,7 @@ export interface paths {
                             package_name: string;
                             osv_id: string;
                             /** @enum {string} */
-                            dismissed_status: "active" | "acknowledged" | "wont_fix" | "false_positive";
+                            dismissed_status: "active" | "confirmed" | "acknowledged" | "wont_fix" | "false_positive";
                             dismissed_at: string | null;
                             /** Format: uuid */
                             dismissed_by_user_id: string | null;
@@ -3318,6 +3544,7 @@ export interface paths {
                             latest_cvss_score: number | null;
                             latest_cvss_vector: string | null;
                             latest_summary: string | null;
+                            latest_llm_summary: string | null;
                             latest_aliases: string[];
                             latest_actively_exploited: boolean;
                             latest_eol_date: string | null;
@@ -3359,6 +3586,515 @@ export interface paths {
             };
         };
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sast-issues/{id}/jira-ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link a Jira ticket to a SAST issue (fetches metadata immediately) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        issue_key: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            issue_key: string;
+                            issue_id: string | null;
+                            project_key: string | null;
+                            project_name: string | null;
+                            summary: string | null;
+                            status: string | null;
+                            /** @enum {string|null} */
+                            status_category: "new" | "indeterminate" | "done" | null;
+                            resolution: string | null;
+                            assignee_name: string | null;
+                            assignee_email: string | null;
+                            fix_versions: string[];
+                            issue_type: string | null;
+                            url: string | null;
+                            resolved_at: string | null;
+                            last_synced_at: string | null;
+                            sync_error: string | null;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        /** Unlink Jira ticket from a SAST issue */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": "null" | null;
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sca-issues/{id}/jira-ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link a Jira ticket to a SCA issue (fetches metadata immediately) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        issue_key: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            issue_key: string;
+                            issue_id: string | null;
+                            project_key: string | null;
+                            project_name: string | null;
+                            summary: string | null;
+                            status: string | null;
+                            /** @enum {string|null} */
+                            status_category: "new" | "indeterminate" | "done" | null;
+                            resolution: string | null;
+                            assignee_name: string | null;
+                            assignee_email: string | null;
+                            fix_versions: string[];
+                            issue_type: string | null;
+                            url: string | null;
+                            resolved_at: string | null;
+                            last_synced_at: string | null;
+                            sync_error: string | null;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        /** Unlink Jira ticket from a SCA issue */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": "null" | null;
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scopes/{id}/jira-tickets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List all Jira tickets linked to issues in this scope */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            issue_key: string;
+                            issue_id: string | null;
+                            project_key: string | null;
+                            project_name: string | null;
+                            summary: string | null;
+                            status: string | null;
+                            /** @enum {string|null} */
+                            status_category: "new" | "indeterminate" | "done" | null;
+                            resolution: string | null;
+                            assignee_name: string | null;
+                            assignee_email: string | null;
+                            fix_versions: string[];
+                            issue_type: string | null;
+                            url: string | null;
+                            resolved_at: string | null;
+                            last_synced_at: string | null;
+                            sync_error: string | null;
+                            created_at: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/jira-tickets/{key}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Force-refresh a Jira ticket from the remote API */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            issue_key: string;
+                            issue_id: string | null;
+                            project_key: string | null;
+                            project_name: string | null;
+                            summary: string | null;
+                            status: string | null;
+                            /** @enum {string|null} */
+                            status_category: "new" | "indeterminate" | "done" | null;
+                            resolution: string | null;
+                            assignee_name: string | null;
+                            assignee_email: string | null;
+                            fix_versions: string[];
+                            issue_type: string | null;
+                            url: string | null;
+                            resolved_at: string | null;
+                            last_synced_at: string | null;
+                            sync_error: string | null;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;

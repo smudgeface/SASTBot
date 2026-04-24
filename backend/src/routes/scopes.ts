@@ -15,6 +15,7 @@ import {
   SastIssueTriageBodySchema,
   SastSeveritySchema,
   SastTriageStatusSchema,
+  ScaDismissedStatusSchema,
   ScaIssueDismissBodySchema,
   ScaIssueListSchema,
   ScaIssueOutSchema,
@@ -78,6 +79,7 @@ const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
   severity: toArray(SeveritySchema),
   finding_type: toArray(FindingTypeSchema),
   dismissed_status: z.enum(["active", "confirmed", "acknowledged", "wont_fix", "false_positive"]).optional(),
+  dismissed_statuses: toArray(ScaDismissedStatusSchema),
   has_jira_ticket: z.enum(["yes", "no"]).optional(),
   reachable: z.coerce.boolean().optional(),
   has_fix: z.coerce.boolean().optional(),
@@ -391,7 +393,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       if (!scope) return reply.code(404).send({ detail: "Scope not found" });
 
       const {
-        page, page_size, severity, finding_type, dismissed_status,
+        page, page_size, severity, finding_type, dismissed_status, dismissed_statuses,
         has_jira_ticket, reachable, has_fix, hide_dev,
         seen_since_last_scan, include_resolved,
       } = req.query;
@@ -400,7 +402,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       const where: Record<string, unknown> = { scopeId: req.params.id };
       if (severity?.length)      where.latestSeverity     = severity.length === 1     ? severity[0]      : { in: severity };
       if (finding_type?.length)  where.latestFindingType  = finding_type.length === 1 ? finding_type[0]  : { in: finding_type };
-      if (dismissed_status) where.dismissedStatus = dismissed_status;
+      if (dismissed_statuses?.length)  where.dismissedStatus = dismissed_statuses.length === 1 ? dismissed_statuses[0] : { in: dismissed_statuses };
+      else if (dismissed_status) where.dismissedStatus = dismissed_status;
       if (has_jira_ticket === "yes") where.jiraTicketId = { not: null };
       if (has_jira_ticket === "no") where.jiraTicketId = null;
       if (reachable === true) where.confirmedReachable = true;
