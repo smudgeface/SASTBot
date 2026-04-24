@@ -8,7 +8,10 @@ import {
   ChevronUp,
   Clock,
   ExternalLink,
+  Loader2,
+  RefreshCw,
   ShieldAlert,
+  Unlink,
   Zap,
 } from "lucide-react";
 
@@ -23,6 +26,15 @@ import {
   type SastIssueFilters,
   type ScaIssueFilters,
 } from "@/api/queries/scopes";
+import {
+  useLinkSastIssueToJira,
+  useLinkScaIssueToJira,
+  useRefreshJiraTicket,
+  useScopeJiraTickets,
+  useUnlinkSastIssueFromJira,
+  useUnlinkScaIssueFromJira,
+} from "@/api/queries/jira";
+import type { JiraTicket } from "@/api/types";
 import { useTriggerScan } from "@/api/queries/scans";
 import { useMe } from "@/api/queries/auth";
 import type { SastIssue, ScaIssue } from "@/api/types";
@@ -121,6 +133,123 @@ function VulnLink({ id, className }: { id: string; className?: string }) {
     >
       {id}
     </a>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Jira chip + link popover
+// ---------------------------------------------------------------------------
+
+const SC_COLORS: Record<string, string> = {
+  new: "text-slate-500 border-slate-400",
+  indeterminate: "text-blue-600 border-blue-400",
+  done: "text-green-600 border-green-400",
+};
+
+function JiraChip({
+  ticket,
+  onRefresh,
+  onUnlink,
+  isPending,
+}: {
+  ticket: JiraTicket;
+  onRefresh: () => void;
+  onUnlink: () => void;
+  isPending: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const scColor = SC_COLORS[ticket.status_category ?? ""] ?? SC_COLORS.new;
+  const parts = [
+    ticket.issue_key,
+    ticket.status ?? "—",
+    ticket.resolution ? `· ${ticket.resolution}` : null,
+    ticket.assignee_name ? `· ${ticket.assignee_name.split(" ")[0]}` : null,
+    ticket.fix_versions.length > 0 ? `· ${ticket.fix_versions[0]}` : null,
+  ].filter(Boolean).join(" ");
+
+  return (
+    <div className="relative inline-block">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${scColor} ${ticket.sync_error ? "border-amber-400 text-amber-600" : ""}`}
+      >
+        {ticket.sync_error && <AlertTriangle className="h-2.5 w-2.5" />}
+        {parts}
+        {ticket.url && <ExternalLink className="h-2.5 w-2.5 opacity-60" />}
+      </button>
+      {open && (
+        <div className="absolute z-50 left-0 top-full mt-1 w-64 rounded-md border bg-popover text-popover-foreground shadow-md p-3 space-y-2 text-xs">
+          {ticket.url && (
+            <a href={ticket.url} target="_blank" rel="noopener noreferrer"
+              className="block font-medium hover:underline text-blue-600">
+              {ticket.issue_key}: {ticket.summary ?? ""}
+            </a>
+          )}
+          {ticket.resolution && (
+            <p className="text-muted-foreground">Resolution: <span className="font-medium text-foreground">{ticket.resolution}</span></p>
+          )}
+          {ticket.sync_error && (
+            <p className="text-amber-600">Sync error: {ticket.sync_error}</p>
+          )}
+          {ticket.last_synced_at && (
+            <p className="text-muted-foreground">Last synced: {formatRelative(ticket.last_synced_at)}</p>
+          )}
+          <div className="flex gap-1.5 pt-1 border-t">
+            <button onClick={() => { onRefresh(); setOpen(false); }} disabled={isPending}
+              className="flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] hover:bg-muted disabled:opacity-50">
+              <RefreshCw className="h-2.5 w-2.5" /> Refresh
+            </button>
+            <button onClick={() => { onUnlink(); setOpen(false); }} disabled={isPending}
+              className="flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] hover:bg-muted text-destructive border-destructive/40 disabled:opacity-50">
+              <Unlink className="h-2.5 w-2.5" /> Unlink
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JiraLinkInline({
+  onLink,
+  isPending,
+  error,
+}: {
+  onLink: (key: string) => void;
+  isPending: boolean;
+  error?: string;
+}) {
+  const [key, setKey] = useState("");
+  const [open, setOpen] = useState(false);
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)}
+        className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2">
+        + Link Jira ticket
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        type="text"
+        placeholder="GOS-1234"
+        value={key}
+        onChange={(e) => setKey(e.target.value.toUpperCase())}
+        onKeyDown={(e) => { if (e.key === "Enter" && key) onLink(key); if (e.key === "Escape") setOpen(false); }}
+        className="h-6 w-28 rounded border border-border px-1.5 text-xs font-mono bg-background"
+        autoFocus
+      />
+      <button onClick={() => { if (key) onLink(key); }} disabled={isPending || !key}
+        className="flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px] hover:bg-muted disabled:opacity-50">
+        {isPending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : "Link"}
+      </button>
+      <button onClick={() => { setOpen(false); setKey(""); }}
+        className="text-[10px] text-muted-foreground hover:text-foreground">Cancel</button>
+      {error && <span className="text-[10px] text-destructive">{error}</span>}
+    </div>
   );
 }
 
@@ -240,9 +369,20 @@ function Pager({
 // SAST issues tab
 // ---------------------------------------------------------------------------
 
-function SastIssueRow({ issue, isAdmin }: { issue: SastIssue; isAdmin: boolean }) {
+function SastIssueRow({ issue, isAdmin, jiraTicket }: { issue: SastIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null }) {
   const [expanded, setExpanded] = useState(false);
+  const [linkError, setLinkError] = useState<string>();
   const triage = useTriageSastIssue();
+  const linkJira = useLinkSastIssueToJira();
+  const unlinkJira = useUnlinkSastIssueFromJira();
+  const refreshJira = useRefreshJiraTicket();
+
+  const handleLink = (key: string) => {
+    setLinkError(undefined);
+    linkJira.mutate({ issueId: issue.id, issueKey: key }, {
+      onError: (err) => setLinkError(err instanceof Error ? err.message : "Link failed"),
+    });
+  };
 
   const act = (status: "confirmed" | "false_positive" | "suppressed" | "pending") => {
     triage.mutate({ issueId: issue.id, status });
@@ -300,6 +440,19 @@ function SastIssueRow({ issue, isAdmin }: { issue: SastIssue; isAdmin: boolean }
                 <span><span className="font-medium">CWE: </span>{issue.latest_cwe_ids.join(", ")}</span>
               )}
             </div>
+            {/* Jira */}
+            <div className="mb-3">
+              {jiraTicket ? (
+                <JiraChip
+                  ticket={jiraTicket}
+                  onRefresh={() => refreshJira.mutate(jiraTicket.issue_key)}
+                  onUnlink={() => unlinkJira.mutate(issue.id)}
+                  isPending={refreshJira.isPending || unlinkJira.isPending}
+                />
+              ) : isAdmin ? (
+                <JiraLinkInline onLink={handleLink} isPending={linkJira.isPending} error={linkError} />
+              ) : null}
+            </div>
             {isAdmin && (
               <div className="flex flex-wrap gap-2 pt-1">
                 {/* Open → show action buttons; triaged → show only Reopen */}
@@ -335,6 +488,8 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
   const [filters, setFilters] = useState<SastIssueFilters>({ page: 1, page_size: 50 });
 
   const { data, isLoading } = useScopeSastIssues(scopeId, filters);
+  const { data: jiraTickets } = useScopeJiraTickets(scopeId);
+  const ticketById = new Map((jiraTickets ?? []).map((t) => [t.id, t]));
 
   const SAST_SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
   const SAST_STATUSES = ["pending", "confirmed", "false_positive", "suppressed"] as const;
@@ -412,7 +567,7 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
               </TableHeader>
               <TableBody>
                 {data.items.map((issue) => (
-                  <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} />
+                  <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} />
                 ))}
               </TableBody>
             </Table>
@@ -433,9 +588,20 @@ function SastIssuesTab({ scopeId }: { scopeId: string }) {
 // SCA issues tab
 // ---------------------------------------------------------------------------
 
-function ScaIssueRow({ issue, isAdmin }: { issue: ScaIssue; isAdmin: boolean }) {
+function ScaIssueRow({ issue, isAdmin, jiraTicket }: { issue: ScaIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null }) {
   const [expanded, setExpanded] = useState(false);
+  const [linkError, setLinkError] = useState<string>();
   const dismiss = useDismissScaIssue();
+  const linkJira = useLinkScaIssueToJira();
+  const unlinkJira = useUnlinkScaIssueFromJira();
+  const refreshJira = useRefreshJiraTicket();
+
+  const handleLink = (key: string) => {
+    setLinkError(undefined);
+    linkJira.mutate({ issueId: issue.id, issueKey: key }, {
+      onError: (err) => setLinkError(err instanceof Error ? err.message : "Link failed"),
+    });
+  };
 
   const act = (status: "active" | "acknowledged" | "wont_fix" | "false_positive") => {
     dismiss.mutate({ issueId: issue.id, status });
@@ -529,6 +695,19 @@ function ScaIssueRow({ issue, isAdmin }: { issue: ScaIssue; isAdmin: boolean }) 
                   ))}
               </div>
             )}
+            {/* Jira */}
+            <div>
+              {jiraTicket ? (
+                <JiraChip
+                  ticket={jiraTicket}
+                  onRefresh={() => refreshJira.mutate(jiraTicket.issue_key)}
+                  onUnlink={() => unlinkJira.mutate(issue.id)}
+                  isPending={refreshJira.isPending || unlinkJira.isPending}
+                />
+              ) : isAdmin ? (
+                <JiraLinkInline onLink={handleLink} isPending={linkJira.isPending} error={linkError} />
+              ) : null}
+            </div>
             {isAdmin && (
               <div className="flex flex-wrap gap-2 pt-1">
                 {issue.dismissed_status !== "active" && (
@@ -564,6 +743,8 @@ function ScaIssuesTab({ scopeId }: { scopeId: string }) {
   const [filters, setFilters] = useState<ScaIssueFilters>({ page: 1, page_size: 50 });
 
   const { data, isLoading } = useScopeScaIssues(scopeId, filters);
+  const { data: jiraTickets } = useScopeJiraTickets(scopeId);
+  const ticketById = new Map((jiraTickets ?? []).map((t) => [t.id, t]));
 
   const SCA_SEVERITIES = ["critical", "high", "medium", "low"] as const;
   const SCA_TYPES = ["cve", "eol", "deprecated"] as const;
@@ -654,7 +835,7 @@ function ScaIssuesTab({ scopeId }: { scopeId: string }) {
               </TableHeader>
               <TableBody>
                 {data.items.map((issue) => (
-                  <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} />
+                  <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} />
                 ))}
               </TableBody>
             </Table>

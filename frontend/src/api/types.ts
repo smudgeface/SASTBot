@@ -163,6 +163,7 @@ export interface AdminSettings {
   id: string;
   org_id: string | null;
   jira_base_url: string | null;
+  jira_email: string | null;
   jira_credential_id: string | null;
   llm_base_url: string | null;
   llm_api_format: LlmApiFormat | null;
@@ -176,6 +177,7 @@ export interface AdminSettings {
 
 export interface AdminSettingsUpdate {
   jira_base_url?: string | null;
+  jira_email?: string | null;
   jira_credential_id?: string | null;
   jira_credential?: CredentialCreateInput | null;
   llm_base_url?: string | null;
@@ -365,6 +367,38 @@ export interface ScaIssue {
   last_seen_at: string;
   created_at: string;
   updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Jira (M5c)
+// ---------------------------------------------------------------------------
+
+export interface JiraTicket {
+  id: string;
+  org_id: string | null;
+  issue_key: string;
+  issue_id: string | null;
+  project_key: string | null;
+  project_name: string | null;
+  summary: string | null;
+  status: string | null;
+  status_category: "new" | "indeterminate" | "done" | null;
+  resolution: string | null;
+  assignee_name: string | null;
+  assignee_email: string | null;
+  fix_versions: string[];
+  issue_type: string | null;
+  url: string | null;
+  resolved_at: string | null;
+  last_synced_at: string | null;
+  sync_error: string | null;
+  created_at: string;
+}
+
+export interface JiraResolution {
+  id: string;
+  name: string;
+  description: string | null;
 }
 
 export interface Paginated<T> {
