@@ -23,6 +23,7 @@ import {
   updateRepo,
 } from "../services/repoService.js";
 import { purge as purgeRepoCache } from "../services/repoCache.js";
+import { checkGitConnection } from "../services/gitClone.js";
 import { triggerScan } from "../services/scanService.js";
 
 const adminReposRoutes: FastifyPluginAsync = async (app) => {
@@ -177,6 +178,40 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
         }
         throw err;
       }
+    },
+  );
+
+  typed.post(
+    "/admin/repos/:id/check-connection",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["admin", "repos"],
+        summary: "Test git connectivity and credential validity (git ls-remote)",
+        params: IdParamsSchema,
+        response: {
+          200: z.discriminatedUnion("ok", [
+            z.object({ ok: z.literal(true), branches: z.array(z.string()) }),
+            z.object({ ok: z.literal(false), error: z.string() }),
+          ]),
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      let repo;
+      try {
+        repo = await getRepo(req.params.id, req.user?.orgId ?? null);
+      } catch {
+        return reply.code(404).send({ detail: "Repo not found" });
+      }
+      const result = await checkGitConnection({
+        url: repo.url,
+        credentialId: repo.credentialId,
+      });
+      return result;
     },
   );
 

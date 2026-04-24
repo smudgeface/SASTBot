@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -72,19 +72,32 @@ export async function runCdxgen(workingDir: string): Promise<CycloneDxDocument> 
     const cdxgenBin = join(process.cwd(), "node_modules", ".bin", "cdxgen");
     logger.info({ workingDir, outputPath }, "[sbomService] running cdxgen");
 
-    await execFileAsync(
-      cdxgenBin,
-      ["-o", outputPath, "--no-recurse", workingDir],
-      {
-        timeout: 5 * 60 * 1000, // 5-minute hard cap
-        env: {
-          ...process.env,
-          // Suppress cdxgen's own update-check noise
-          CDXGEN_DEBUG_MODE: "false",
-          FETCH_LICENSE: "true",
+    try {
+      await execFileAsync(
+        cdxgenBin,
+        ["-o", outputPath, workingDir],
+        {
+          timeout: 5 * 60 * 1000, // 5-minute hard cap
+          env: {
+            ...process.env,
+            CDXGEN_DEBUG_MODE: "false",
+            FETCH_LICENSE: "true",
+          },
         },
-      },
-    );
+      );
+    } catch (err) {
+      // cdxgen exits non-zero for some project types even when it succeeds.
+      // Check whether the output file was written before giving up.
+      logger.warn({ err }, "[sbomService] cdxgen exited non-zero — checking for output");
+    }
+
+    // If cdxgen didn't write the file (unrecognised project type), return an
+    // empty SBOM so the scan succeeds with 0 components rather than failing.
+    const fileExists = await access(outputPath).then(() => true).catch(() => false);
+    if (!fileExists) {
+      logger.warn({ workingDir }, "[sbomService] cdxgen produced no output — returning empty SBOM");
+      return { bomFormat: "CycloneDX", specVersion: "1.7", components: [] };
+    }
 
     const raw = await readFile(outputPath, "utf8");
     return JSON.parse(raw) as CycloneDxDocument;

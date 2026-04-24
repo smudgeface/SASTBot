@@ -1,15 +1,20 @@
 import { useMemo, useState } from "react";
 import {
+  CheckCircle2,
   Eraser,
+  Loader2,
   MoreHorizontal,
   Pencil,
   Play,
   Plus,
   Trash2,
+  Wifi,
+  XCircle,
 } from "lucide-react";
 
 import { useCredentials } from "@/api/queries/credentials";
 import {
+  useCheckRepoConnection,
   useCreateRepo,
   useDeleteRepo,
   usePurgeRepoCache,
@@ -70,7 +75,9 @@ export default function ReposPage() {
   const deleteRepo = useDeleteRepo();
   const triggerScan = useTriggerScan();
   const purgeCache = usePurgeRepoCache();
+  const checkConnection = useCheckRepoConnection();
   const { toast } = useToast();
+  const [checkingId, setCheckingId] = useState<string | null>(null);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Repo | null>(null);
@@ -97,6 +104,36 @@ export default function ReposPage() {
         title: "Failed to queue scan",
         description: err instanceof Error ? err.message : "Unknown error",
       });
+    }
+  };
+
+  const onCheckConnection = async (repo: Repo) => {
+    setCheckingId(repo.id);
+    try {
+      const result = await checkConnection.mutateAsync(repo.id);
+      if (result.ok) {
+        const branchList = result.branches.length > 0
+          ? result.branches.slice(0, 5).join(", ") + (result.branches.length > 5 ? ` +${result.branches.length - 5} more` : "")
+          : "no branches found";
+        toast({
+          title: `✓ Connected — ${repo.name}`,
+          description: `Branches: ${branchList}`,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: `Connection failed — ${repo.name}`,
+          description: result.error,
+        });
+      }
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Check failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
+    } finally {
+      setCheckingId(null);
     }
   };
 
@@ -211,6 +248,15 @@ export default function ReposPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onSelect={() => onCheckConnection(repo)}
+                          disabled={checkingId === repo.id}
+                        >
+                          {checkingId === repo.id
+                            ? <Loader2 className="h-4 w-4 animate-spin" />
+                            : <Wifi className="h-4 w-4" />}
+                          Check access
+                        </DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => onScanNow(repo)}>
                           <Play className="h-4 w-4" /> Scan now
                         </DropdownMenuItem>

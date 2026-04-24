@@ -228,3 +228,83 @@ function runGit(
     });
   });
 }
+
+// ---------------------------------------------------------------------------
+// Connection check (git ls-remote) — fast, read-only, no disk footprint
+// ---------------------------------------------------------------------------
+
+export type GitCheckResult =
+  | { ok: true; branches: string[] }
+  | { ok: false; error: string };
+
+/**
+ * Run `git ls-remote --heads <url>` to verify the URL is reachable and
+ * credentials are accepted. Much faster than a clone — no disk writes.
+ */
+export async function checkGitConnection(options: {
+  url: string;
+  credentialId?: string | null;
+  gitBin?: string;
+}): Promise<GitCheckResult> {
+  const bin = options.gitBin ?? "git";
+  const workdir = await (await import("node:fs/promises")).mkdtemp(
+    (await import("node:path")).join((await import("node:os")).tmpdir(), "sastbot-check-"),
+  );
+  try {
+    let cred: import("./credentialService.js").DecodedCredential | null = null;
+    if (options.credentialId) {
+      try {
+        cred = await decodeCredential(options.credentialId);
+      } catch {
+        return { ok: false, error: `Credential not found or cannot be decrypted` };
+      }
+    }
+
+    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    env.GIT_TERMINAL_PROMPT = "0";
+
+    if (cred) {
+      try {
+        await applyCredentialToEnv(cred, workdir, env);
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    // ls-remote: list remote references without cloning
+    const stdout = await new Promise<string>((resolve, reject) => {
+      const proc = spawn(bin, ["ls-remote", "--heads", "--timeout=10", options.url], {
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let out = "";
+      let err = "";
+      proc.stdout.on("data", (c) => { out += c; });
+      proc.stderr.on("data", (c) => { err += c; });
+      proc.on("error", reject);
+      proc.on("close", (code) => {
+        if (code === 0) resolve(out);
+        else reject(new GitCloneError(code, err));
+      });
+    });
+
+    // Parse "refs/heads/<name>" lines
+    const branches = stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const m = line.match(/refs\/heads\/(.+)$/);
+        return m ? m[1] : null;
+      })
+      .filter((b): b is string => b !== null);
+
+    return { ok: true, branches };
+  } catch (err) {
+    const msg = err instanceof GitCloneError
+      ? err.message
+      : err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg };
+  } finally {
+    await (await import("node:fs/promises")).rm(workdir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
