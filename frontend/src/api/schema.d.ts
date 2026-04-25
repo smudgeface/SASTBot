@@ -268,6 +268,7 @@ export interface paths {
                             credential_id: string | null;
                             default_branch: string;
                             scan_paths: string[];
+                            ignore_paths: string[];
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
                             source_url_template: string | null;
@@ -326,6 +327,8 @@ export interface paths {
                          *     ]
                          */
                         scan_paths?: string[];
+                        /** @default [] */
+                        ignore_paths?: string[];
                         /**
                          * @default [
                          *       "sca"
@@ -402,6 +405,7 @@ export interface paths {
                             credential_id: string | null;
                             default_branch: string;
                             scan_paths: string[];
+                            ignore_paths: string[];
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
                             source_url_template: string | null;
@@ -491,6 +495,7 @@ export interface paths {
                             credential_id: string | null;
                             default_branch: string;
                             scan_paths: string[];
+                            ignore_paths: string[];
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
                             source_url_template: string | null;
@@ -555,6 +560,7 @@ export interface paths {
                         protocol?: "ssh" | "https";
                         default_branch?: string;
                         scan_paths?: string[];
+                        ignore_paths?: string[];
                         analysis_types?: ("sca" | "sast")[];
                         schedule_cron?: string | null;
                         source_url_template?: string | null;
@@ -624,6 +630,7 @@ export interface paths {
                             credential_id: string | null;
                             default_branch: string;
                             scan_paths: string[];
+                            ignore_paths: string[];
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
                             source_url_template: string | null;
@@ -785,6 +792,7 @@ export interface paths {
                             credential_id: string | null;
                             default_branch: string;
                             scan_paths: string[];
+                            ignore_paths: string[];
                             analysis_types: ("sca" | "sast")[];
                             schedule_cron: string | null;
                             source_url_template: string | null;

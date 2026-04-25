@@ -114,6 +114,7 @@ model Repo {
   credentialId        String?   @map("credential_id") @db.Uuid
   defaultBranch       String    @default("main") @map("default_branch")
   scanPaths           Json      @default("[\"/\"]") @map("scan_paths")
+  ignorePaths         Json      @default("[]") @map("ignore_paths")
   analysisTypes       Json      @default("[\"sca\"]") @map("analysis_types")
   scheduleCron        String?   @map("schedule_cron")
   sourceUrlTemplate   String?   @map("source_url_template")

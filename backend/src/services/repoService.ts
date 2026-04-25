@@ -87,6 +87,7 @@ export async function createRepo(
           credentialId,
           defaultBranch: input.default_branch ?? "main",
           scanPaths: scanPaths as Prisma.InputJsonValue,
+          ignorePaths: (input.ignore_paths ?? []) as Prisma.InputJsonValue,
           analysisTypes: (input.analysis_types ?? ["sca"]) as Prisma.InputJsonValue,
           scheduleCron: input.schedule_cron ?? null,
           sourceUrlTemplate: input.source_url_template ?? null,
@@ -140,6 +141,9 @@ export async function updateRepo(
       if (input.default_branch !== undefined) data.defaultBranch = input.default_branch;
       if (input.scan_paths !== undefined) {
         data.scanPaths = input.scan_paths as Prisma.InputJsonValue;
+      }
+      if (input.ignore_paths !== undefined) {
+        data.ignorePaths = input.ignore_paths as Prisma.InputJsonValue;
       }
       if (input.analysis_types !== undefined) {
         data.analysisTypes = input.analysis_types as Prisma.InputJsonValue;
