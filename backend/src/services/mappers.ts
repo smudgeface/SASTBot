@@ -153,6 +153,7 @@ export function repoToOut(repo: Repo): RepoOut {
     is_active: repo.isActive,
     retain_clone: repo.retainClone,
     reachability_enabled: repo.reachabilityEnabled,
+    reachability_include_dev_deps: repo.reachabilityIncludeDevDeps,
     last_cloned_at: repo.lastClonedAt ? repo.lastClonedAt.toISOString() : null,
     created_at: repo.createdAt.toISOString(),
   };
