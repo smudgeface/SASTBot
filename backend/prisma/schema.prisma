@@ -128,13 +128,15 @@ model Repo {
   // (skipping the reachability portion of Goal 2 in sast_detection.md).
   // Use for repos where the reachability signal hasn't proven worth the
   // additional output-token cost.
-  reachabilityEnabled        Boolean @default(true)  @map("reachability_enabled")
-  // When reachability is enabled, scope the SCA hint set: by default we
-  // skip components cdxgen marks `optional` (devDependencies / build-time
-  // tooling) since they typically don't ship to production runtime.
-  // Flip this on for repos where dev-deps DO ship (e.g. server-rendered
-  // builds that include dev tooling at runtime).
-  reachabilityIncludeDevDeps Boolean @default(false) @map("reachability_include_dev_deps")
+  reachabilityEnabled             Boolean @default(true) @map("reachability_enabled")
+  // When reachability is enabled, controls whether components cdxgen tags
+  // with CycloneDX `scope: "optional"` are included in the LLM hint set.
+  // Default true — cdxgen lumps devDependencies AND transitive runtime
+  // deps into `optional`, so excluding them drops real reachable runtime
+  // CVEs (e.g. requirejs on the /GoWeb experiment). Flip off only on
+  // repos where you've verified that `optional`-scoped components are
+  // genuinely build-only.
+  reachabilityIncludeOptionalDeps Boolean @default(true) @map("reachability_include_optional_deps")
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)

@@ -73,7 +73,6 @@ export interface ScaIssueFilters {
   has_jira_ticket?: "yes" | "no";
   reachable?: boolean;
   has_fix?: boolean;
-  hide_dev?: boolean;
   seen_since_last_scan?: "new" | "unchanged" | "resolved";
   include_resolved?: boolean;
 }
@@ -92,7 +91,6 @@ export function useScopeScaIssues(scopeId: string | undefined, filters: ScaIssue
       if (filters.has_jira_ticket) params.set("has_jira_ticket", filters.has_jira_ticket);
       if (filters.reachable) params.set("reachable", "true");
       if (filters.has_fix) params.set("has_fix", "true");
-      if (filters.hide_dev) params.set("hide_dev", "true");
       if (filters.seen_since_last_scan) params.set("seen_since_last_scan", filters.seen_since_last_scan);
       if (filters.include_resolved) params.set("include_resolved", "true");
       const qs = params.toString();

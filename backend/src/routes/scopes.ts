@@ -87,6 +87,11 @@ const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
   has_jira_ticket: z.enum(["yes", "no"]).optional(),
   reachable: z.coerce.boolean().optional(),
   has_fix: z.coerce.boolean().optional(),
+  /** @deprecated cdxgen `scope: "optional"` is not a clean dev-only signal —
+   *  it includes transitive runtime deps too. The frontend stopped surfacing
+   *  this filter; the backend accepts but no longer honors it to avoid
+   *  silently filtering out runtime CVEs. Will be removed entirely once any
+   *  external API consumers have been notified. */
   hide_dev: z.coerce.boolean().optional(),
   seen_since_last_scan: z.enum(["new", "unchanged", "resolved"]).optional(),
   include_resolved: z.coerce.boolean().default(false),
@@ -421,7 +426,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       if (has_jira_ticket === "no") where.jiraTicketId = null;
       if (reachable === true) where.confirmedReachable = true;
       if (has_fix === true) where.latestHasFix = true;
-      if (hide_dev === true) where.latestComponentScope = { not: "optional" };
+      // hide_dev is deprecated — see schema comment above. Intentionally a no-op.
+      void hide_dev;
 
       if (seen_since_last_scan && lastScanRunId) {
         if (seen_since_last_scan === "new") {

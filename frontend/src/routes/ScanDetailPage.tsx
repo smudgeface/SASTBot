@@ -168,8 +168,8 @@ function FindingRow({
                 {finding.component_name}
                 {finding.component_version && <span>@{finding.component_version}</span>}
               </span>
-              {finding.component_scope === "optional" && (
-                <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-semibold text-slate-500 border-slate-300">DEV</span>
+              {finding.component_scope && finding.component_scope !== "required" && (
+                <span className="text-[10px] uppercase">scope: {finding.component_scope}</span>
               )}
               {isCve && (
                 <a

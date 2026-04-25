@@ -391,7 +391,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   const [sast, setSast] = useState<boolean>(repo?.analysis_types.includes("sast") ?? true);
   const [retainClone, setRetainClone] = useState<boolean>(repo?.retain_clone ?? false);
   const [reachabilityEnabled, setReachabilityEnabled] = useState<boolean>(repo?.reachability_enabled ?? true);
-  const [reachabilityIncludeDevDeps, setReachabilityIncludeDevDeps] = useState<boolean>(repo?.reachability_include_dev_deps ?? false);
+  const [reachabilityIncludeOptionalDeps, setReachabilityIncludeOptionalDeps] = useState<boolean>(repo?.reachability_include_optional_deps ?? true);
   const [sourceUrlTemplate, setSourceUrlTemplate] = useState<string>(repo?.source_url_template ?? "");
 
   const [credentialChoice, setCredentialChoice] = useState<CredentialChoice>(
@@ -438,7 +438,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       analysis_types,
       retain_clone: retainClone,
       reachability_enabled: reachabilityEnabled,
-      reachability_include_dev_deps: reachabilityIncludeDevDeps,
+      reachability_include_optional_deps: reachabilityIncludeOptionalDeps,
       source_url_template: sourceUrlTemplate.trim() || null,
     };
 
@@ -672,16 +672,17 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 <input
                   type="checkbox"
                   className="mt-0.5"
-                  checked={reachabilityIncludeDevDeps}
-                  onChange={(e) => setReachabilityIncludeDevDeps(e.target.checked)}
+                  checked={reachabilityIncludeOptionalDeps}
+                  onChange={(e) => setReachabilityIncludeOptionalDeps(e.target.checked)}
                 />
                 <div>
-                  Also analyze dev / build-only dependencies
+                  Include cdxgen <code className="text-xs">scope:&nbsp;optional</code> components in the hint set
                   <p className="text-xs text-muted-foreground">
-                    Off by default — dev tooling (webpack, babel, terser, jest, etc.) almost
-                    never ships to production runtime, so reachability verdicts on those
-                    packages are usually noise. Turn on for deployments where dev deps DO
-                    ship at runtime.
+                    On by default — cdxgen lumps devDependencies AND transitive runtime
+                    deps into <code>optional</code>, so excluding them risks dropping real
+                    reachable runtime CVEs. Only flip off if you've separately verified
+                    that this repo's <code>optional</code>-scoped components are
+                    build-only.
                   </p>
                 </div>
               </label>

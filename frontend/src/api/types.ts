@@ -136,7 +136,7 @@ export interface Repo {
   credential_id: string | null;
   retain_clone: boolean;
   reachability_enabled: boolean;
-  reachability_include_dev_deps: boolean;
+  reachability_include_optional_deps: boolean;
   source_url_template: string | null;
   last_cloned_at: string | null;
   created_at?: string;
@@ -153,7 +153,7 @@ export interface RepoUpsertInput {
   analysis_types: AnalysisType[];
   retain_clone?: boolean;
   reachability_enabled?: boolean;
-  reachability_include_dev_deps?: boolean;
+  reachability_include_optional_deps?: boolean;
   source_url_template?: string | null;
   /** Existing credential to link. Ignored if `credential` (inline) is supplied. */
   credential_id?: string | null;
