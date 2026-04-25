@@ -205,6 +205,8 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
               ecosystem: z.string().nullable(),
               licenses: z.array(z.string()),
               component_type: z.string(),
+              scope: z.string().nullable(),
+              manifest_file: z.string().nullable(),
             }),
           ),
           401: ErrorSchema,
@@ -233,6 +235,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         licenses: c.licenses,
         component_type: c.componentType,
         scope: c.scope,
+        manifest_file: c.manifestFile,
       }));
     },
   );

@@ -59,9 +59,14 @@ interface ScaHint {
   version: string | null;
   cveId: string | null;
   osvId: string;
-  summary: string | null;
   cvssScore: number | null;
+  severity: string;
 }
+
+/** Hard cap so the per-prompt overhead stays bounded regardless of backlog
+ *  size. Triage of one SAST finding is a focused decision; 20 of the worst
+ *  dependency vulns is more than enough for opportunistic reachability. */
+const MAX_SCA_HINTS = 20;
 
 function buildPrompt(
   issue: {
@@ -100,7 +105,7 @@ ${issue.latestSnippet ?? "(no snippet available)"}
       const ver = h.version ? `@${h.version}` : "";
       const id = h.cveId ?? h.osvId;
       const score = h.cvssScore != null ? ` (CVSS ${h.cvssScore.toFixed(1)})` : "";
-      prompt += `- [id=${h.id}] ${h.componentName}${ver} - ${id}${score}: ${h.summary ?? "no summary"}\n`;
+      prompt += `- [id=${h.id}] ${h.componentName}${ver} - ${id}${score}\n`;
     }
   }
 
@@ -157,7 +162,9 @@ export async function triageFindings(
     return;
   }
 
-  // Load high/critical ScaIssue rows for reachability context
+  // Load high/critical ScaIssue rows for reachability context.
+  // Cap to MAX_SCA_HINTS by severity then CVSS — including hundreds of hints
+  // in every prompt blew the token budget on large dependency backlogs.
   const scaIssues = await db.scaIssue.findMany({
     where: {
       scopeId,
@@ -166,15 +173,24 @@ export async function triageFindings(
       latestSeverity: { in: ["critical", "high"] },
     },
   });
-  const scaHints: ScaHint[] = scaIssues.map((i) => ({
-    id: i.id,
-    componentName: i.packageName,
-    version: i.latestPackageVersion,
-    cveId: i.latestCveId,
-    osvId: i.osvId,
-    summary: i.latestSummary,
-    cvssScore: i.latestCvssScore,
-  }));
+  const SEV_RANK: Record<string, number> = { critical: 0, high: 1 };
+  const scaHints: ScaHint[] = scaIssues
+    .slice()
+    .sort(
+      (a, b) =>
+        (SEV_RANK[a.latestSeverity] ?? 9) - (SEV_RANK[b.latestSeverity] ?? 9) ||
+        (b.latestCvssScore ?? 0) - (a.latestCvssScore ?? 0),
+    )
+    .slice(0, MAX_SCA_HINTS)
+    .map((i) => ({
+      id: i.id,
+      componentName: i.packageName,
+      version: i.latestPackageVersion,
+      cveId: i.latestCveId,
+      osvId: i.osvId,
+      cvssScore: i.latestCvssScore,
+      severity: i.latestSeverity,
+    }));
 
   const budget = settings.llmTriageTokenBudget;
   const useToolUse = (settings.llmApiFormat ?? "openai-chat") === "anthropic-messages";
