@@ -199,6 +199,10 @@ export const RepoCreateSchema = z.object({
    *  high+critical SCA issues, saving output-token cost on repos where
    *  the reachability signal hasn't proven worth it. */
   reachability_enabled: z.boolean().default(true),
+  /** When reachability is enabled, also include cdxgen `optional`-scoped
+   *  components (dev / build-time deps) in the hint set. Default false:
+   *  most dev-only CVEs aren't worth a token-paid reachability verdict. */
+  reachability_include_dev_deps: z.boolean().default(false),
   credential_id: UuidSchema.nullable().optional(),
   // NOTE: the contract names the inline field `credential`, NOT `new_credential`.
   credential: CredentialCreateSchema.nullable().optional(),
@@ -218,6 +222,7 @@ export const RepoUpdateSchema = z.object({
   is_active: z.boolean().optional(),
   retain_clone: z.boolean().optional(),
   reachability_enabled: z.boolean().optional(),
+  reachability_include_dev_deps: z.boolean().optional(),
   credential_id: UuidSchema.nullable().optional(),
   credential: CredentialCreateSchema.nullable().optional(),
 });
@@ -239,6 +244,7 @@ export const RepoOutSchema = z.object({
   is_active: z.boolean(),
   retain_clone: z.boolean(),
   reachability_enabled: z.boolean(),
+  reachability_include_dev_deps: z.boolean(),
   /** Set whenever the worker finishes a clone/fetch for this repo. Null
    *  means no local cache exists — "Purge cache" should be disabled. */
   last_cloned_at: IsoDateTimeSchema.nullable(),

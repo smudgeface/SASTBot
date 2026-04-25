@@ -60,6 +60,7 @@ interface LlmSastPipelineInput {
     llmSastTokenBudget: number;
     llmRecheckTokenBudget: number;
     reachabilityEnabled: boolean;
+    reachabilityIncludeDevDeps: boolean;
   };
   run: { scopeId: string; orgId: string | null };
   scanDir: string;
@@ -80,13 +81,22 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
     //    save the output tokens that would have gone into 100+ verdicts.
     let scaHints: ScaHintInput[] = [];
     if (repo.reachabilityEnabled) {
+      // Filter cdxgen `optional`-scoped components (devDependencies / build
+      // tooling) unless the repo opts in. cdxgen reuses the CycloneDX
+      // `scope` field — `required` for runtime, `optional` for dev/build.
+      // The /GoWeb experiment showed dev-tooling CVEs dominated the hint
+      // list with no actionable verdicts; this filter cuts that noise.
+      const where: Prisma.ScaIssueWhereInput = {
+        scopeId: run.scopeId,
+        lastSeenScanRunId: scanRunId,
+        latestFindingType: "cve",
+        latestSeverity: { in: ["critical", "high"] },
+      };
+      if (!repo.reachabilityIncludeDevDeps) {
+        where.latestComponentScope = { not: "optional" };
+      }
       const scaIssues = await prisma.scaIssue.findMany({
-        where: {
-          scopeId: run.scopeId,
-          lastSeenScanRunId: scanRunId,
-          latestFindingType: "cve",
-          latestSeverity: { in: ["critical", "high"] },
-        },
+        where,
         orderBy: [
           { latestSeverity: "asc" },
           { latestCvssScore: "desc" },
@@ -102,6 +112,10 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         cvss_score: i.latestCvssScore,
         summary: i.latestSummary,
       }));
+      log.info(
+        { count: scaHints.length, includeDevDeps: repo.reachabilityIncludeDevDeps },
+        "[worker] built SCA hint set",
+      );
     } else {
       log.info("[worker] reachability disabled on this repo — skipping SCA hint injection");
     }

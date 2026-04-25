@@ -391,6 +391,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   const [sast, setSast] = useState<boolean>(repo?.analysis_types.includes("sast") ?? true);
   const [retainClone, setRetainClone] = useState<boolean>(repo?.retain_clone ?? false);
   const [reachabilityEnabled, setReachabilityEnabled] = useState<boolean>(repo?.reachability_enabled ?? true);
+  const [reachabilityIncludeDevDeps, setReachabilityIncludeDevDeps] = useState<boolean>(repo?.reachability_include_dev_deps ?? false);
   const [sourceUrlTemplate, setSourceUrlTemplate] = useState<string>(repo?.source_url_template ?? "");
 
   const [credentialChoice, setCredentialChoice] = useState<CredentialChoice>(
@@ -437,6 +438,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       analysis_types,
       retain_clone: retainClone,
       reachability_enabled: reachabilityEnabled,
+      reachability_include_dev_deps: reachabilityIncludeDevDeps,
       source_url_template: sourceUrlTemplate.trim() || null,
     };
 
@@ -665,6 +667,25 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 </p>
               </div>
             </label>
+            {reachabilityEnabled && (
+              <label className="inline-flex items-start gap-2 text-sm pl-6">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={reachabilityIncludeDevDeps}
+                  onChange={(e) => setReachabilityIncludeDevDeps(e.target.checked)}
+                />
+                <div>
+                  Also analyze dev / build-only dependencies
+                  <p className="text-xs text-muted-foreground">
+                    Off by default — dev tooling (webpack, babel, terser, jest, etc.) almost
+                    never ships to production runtime, so reachability verdicts on those
+                    packages are usually noise. Turn on for deployments where dev deps DO
+                    ship at runtime.
+                  </p>
+                </div>
+              </label>
+            )}
           </div>
 
           <div className="space-y-1.5">
