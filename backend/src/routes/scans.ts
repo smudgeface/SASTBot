@@ -17,6 +17,7 @@ import {
   ScanRunOutSchema,
 } from "../schemas.js";
 import { scanFindingToOut, scanRunToOut, sastFindingToOut } from "../services/mappers.js";
+import { cancelScanRun, ScanRunNotFoundError } from "../services/scanService.js";
 
 const scansRoutes: FastifyPluginAsync = async (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
@@ -70,6 +71,40 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(404).send({ detail: "Scan run not found" });
       }
       return scanRunToOut(run);
+    },
+  );
+
+  typed.post(
+    "/scans/:id/cancel",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["scans"],
+        summary: "Cancel a pending or running scan run (admin-only). Idempotent on terminal runs.",
+        params: IdParamsSchema,
+        response: {
+          200: ScanRunOutSchema,
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      try {
+        const updated = await cancelScanRun(req.params.id, orgId);
+        const withScope = await prisma.scanRun.findUnique({
+          where: { id: updated.id },
+          include: { scope: { select: { path: true } } },
+        });
+        return scanRunToOut(withScope!);
+      } catch (err) {
+        if (err instanceof ScanRunNotFoundError) {
+          return reply.code(404).send({ detail: "Scan run not found" });
+        }
+        throw err;
+      }
     },
   );
 

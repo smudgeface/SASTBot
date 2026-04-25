@@ -288,7 +288,7 @@ export type AppSettingsOut = z.infer<typeof AppSettingsOutSchema>;
 // Scans
 // ---------------------------------------------------------------------------
 
-export const ScanStatusSchema = z.enum(["pending", "running", "success", "failed"]);
+export const ScanStatusSchema = z.enum(["pending", "running", "success", "failed", "cancelled"]);
 export const ScanTriggeredBySchema = z.enum(["user", "api", "schedule"]);
 
 export const ScanWarningSchema = z.object({

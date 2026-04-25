@@ -77,6 +77,21 @@ export function useScanFindings(
   });
 }
 
+/** Cancel a pending or running scan run. Removes the BullMQ job if it's
+ *  still queued; if the worker already picked it up, sets status=cancelled
+ *  and the worker bails on its next phase boundary. Idempotent. */
+export function useCancelScan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (scanRunId: string) =>
+      apiFetch<Scan>(`/scans/${scanRunId}/cancel`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: scansKey });
+      qc.invalidateQueries({ queryKey: ["scopes"] });
+    },
+  });
+}
+
 /** Trigger a scan for a given repo (one run per active scope).
  *  Synchronously prepends the new pending run(s) onto the per-scope scans
  *  cache so the "Scanning…" spinner on /scopes/:id is up the instant the
