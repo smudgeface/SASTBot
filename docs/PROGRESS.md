@@ -442,5 +442,27 @@ If we ever want opengrep back — for hybrid dual-engine runs, deterministic CI 
 1. `20260425100711_m6_llm_sast_engine` — `sast_engine`, `llm_sast_token_budget`, `llm_recheck_token_budget`, `discovery_method`, `evidence_line`
 2. `20260425191231_m6_reachability_toggle` — `reachability_enabled`
 3. `20260425200000_m6g_drop_sast_engine` — drop `sast_engine`
+4. `20260425220000_repo_reachability_dev_filter` — original (mis-)named `reachability_include_dev_deps` column. Superseded by #5.
+5. `20260425230000_rename_optional_deps_filter` — renames the column to `reachability_include_optional_deps` and flips the default to `true`. Updates existing rows to match the new default.
 
-**Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, the future-improvements section in `docs/M6_LLM_SAST_PLAN.md` lists the deep-reasoning model option, streaming UI, and a few smaller items.
+### Post-M6g corrections (same day)
+
+**Snippet rule for multi-line findings (`6ae1325`).** The original system prompt said "include 7 lines centered on the finding." Multi-line findings (e.g., the two adjacent `#define` macros at `GsHostProtocol.h:68-69`) came back with no before/after context. Re-spelled the rule as: 3 lines above `start_line` + the `[start_line..end_line]` span + 3 lines below `end_line`. Single-line findings stay at 7 lines; multi-line findings expand to span+6.
+
+**Reachability dev-deps filter saga (`3876021` → `9a55d95`).** First cut tried to skip cdxgen `scope: "optional"` components from the reachability hint set, on the assumption that `optional == dev`. Real data on /GoWeb showed cdxgen marks BOTH devDependencies AND transitive runtime deps as `optional` (CycloneDX scope is overloaded by cdxgen), so the filter dropped at least one verified-reachable runtime CVE (`requirejs@2.3.5` at `ModuleLoader.js:30`).
+
+Correction:
+- Renamed column `reachability_include_dev_deps` → `reachability_include_optional_deps`.
+- Flipped default `false` → `true` (filter inert by default — include everything, no false negatives).
+- Removed the misleading "DEV" badge from SCA issue rows, raw SCA detection rows, and the Components tab.
+- Removed the "Hide DEV" filter toggle from the SCA filter bar.
+- Deprecated the `hide_dev` API query parameter to a no-op (kept for back-compat).
+- The whole `reachability_include_optional_deps` feature is flagged "Under review" in `docs/M6_LLM_SAST_PLAN.md` — it only delivers value with a real lockfile-based dev/runtime classifier (e.g. parsing `package-lock.json`'s `"dev": true`); without that, it's mostly cosmetic and may be ripped entirely.
+
+### What we learned from the dev-deps misadventure
+
+- **CycloneDX `scope` semantics are overloaded by cdxgen.** The CycloneDX spec means `optional` as "optional component"; cdxgen lumps in transitive runtime deps too. Treating `optional` as a clean dev-only signal is a category error.
+- **Reachability ROI on a frontend repo is genuinely thin** — but most of the noise is dev tooling that *would* be filtered correctly with a proper lockfile-based classifier. The signal (`requirejs`, `underscore`'s `_.template`, `three`) is exactly what reachability is meant to surface.
+- **Don't ship a UI label that lies, even if it's convenient.** A "DEV" badge on a transitive runtime dep is worse than no badge — it tricks the operator into deprioritizing a real risk.
+
+**Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, `docs/M6_LLM_SAST_PLAN.md` has an "Under review" section (the optional-deps filter feature) and a "Future improvements" section (deep-reasoning model option, streaming UI, lockfile-based dev classifier, etc.).
