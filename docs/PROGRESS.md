@@ -475,8 +475,19 @@ Follow-up after the dev-deps correction. User research mentioned a possible `dev
 - **The CycloneDX `dependencies` graph isn't a runtime classifier either.** It's an adjacency list of "X depends on Y" relationships. We tested by walking from the root component's `bom-ref`: 99%+ of components are reachable, including obvious dev tools like `webpack-dev-server`, `terser`, `babel-traverse`, `react-dev-utils`. The graph mixes runtime + dev paths.
 - **What `required` actually means in cdxgen**: first-level direct deps from `package.json:dependencies`. `optional` is everything else — devDependencies AND transitive runtime deps lumped together. So `--required-only` would drop transitive runtime CVEs (`qs` reachable through Express, `body-parser`, etc.) — *worse* than the current state, not better.
 
-**Conclusion**: cdxgen's output as-shipped does not give us a usable dev-vs-runtime classifier. To get a real one, we'd need to walk `package.json` ourselves: from `dependencies` (runtime direct), traverse the lockfile's runtime closure, mark anything reached as runtime; anything in `components` outside that closure is dev-only. ~1 day per ecosystem (npm, Python, Java each need their own lockfile-walking logic).
+**Conclusion (initial)**: cdxgen's output as-shipped on v10.11.0 does not give us a usable dev-vs-runtime classifier. To get a real one we'd need to walk `package.json` ourselves: from `dependencies` (runtime direct), traverse the lockfile's runtime closure, mark anything reached as runtime; anything in `components` outside that closure is dev-only. ~1 day per ecosystem (npm, Python, Java each need their own lockfile-walking logic).
 
-The plan doc's "Under review" item already covers this — the optional-deps filter stays default-off (no-op) until that classifier exists.
+**Update — cdxgen 12.2 ships a real dev marker.** Found via cdxgen issue [#3927](https://github.com/cdxgen/cdxgen/issues/3927) (and the PR it follows from, #3925, merged 2026-04-24 → released as v12.2.1 the same day). cdxgen 12.2+ emits `cdx:npm:package:development=true` as a component property for npm packages whose lockfile entry has `dev: true`. We're pinned to `^10.10.7`, so we don't have it. The fix is small:
+
+1. Bump `@cyclonedx/cdxgen` from `^10.10.7` → `^12.2`. Major-version jump; verify SBOM shape didn't change in incompatible ways for the rest of the pipeline.
+2. In `sbomService.persistComponents`, read the `cdx:npm:package:development` property and persist a new `SbomComponent.isDevOnly` boolean.
+3. In the worker LLM SAST pipeline, use `isDevOnly` instead of (or in addition to) the `latestComponentScope === "optional"` filter.
+4. UI: optionally bring back a "DEV" badge — this time with truthful semantics, sourced from `isDevOnly`.
+
+**Caveats:**
+- Issue #3927 (still open) — `devOptional: true` lockfile entries don't get the marker yet. Most dev deps will be tagged correctly; a small fraction of devOptional ones won't. Acceptable for v1.
+- npm-only. Python (poetry/pip), Java (maven/gradle), Go, etc. still need their own logic. Document the limitation; ship npm support first; expand as needed.
+
+The plan doc's "Under review" item is updated with this path forward.
 
 **Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, `docs/M6_LLM_SAST_PLAN.md` has an "Under review" section (the optional-deps filter feature) and a "Future improvements" section (deep-reasoning model option, streaming UI, lockfile-based dev classifier, etc.).

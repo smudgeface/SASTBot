@@ -392,30 +392,54 @@ be re-added with a default of `'llm'`.
 **Optional-scope filtering of SCA hints (`reachability_include_optional_deps`).**
 The first cut filtered cdxgen `scope: "optional"` components from the
 reachability hint set, on the assumption that `optional == dev`. Real
-data on /GoWeb showed cdxgen marks BOTH devDependencies AND transitive
-runtime deps as `optional` (CycloneDX scope is overloaded by cdxgen),
-so the filter dropped at least one verified-reachable runtime CVE
-(`requirejs` at `ModuleLoader.js:30`). The flag was renamed and the
-default flipped to `true` (include all `optional`-scope components),
-making the filter inert by default. The UI's "DEV" badge and "Hide DEV"
-toggle were removed because labeling `optional` as "DEV" is the same
-misrepresentation in another shape.
+data on /GoWeb showed cdxgen v10.x marks BOTH devDependencies AND
+transitive runtime deps as `optional` (CycloneDX scope is overloaded
+by cdxgen), so the filter dropped at least one verified-reachable
+runtime CVE (`requirejs` at `ModuleLoader.js:30`). The flag was
+renamed and the default flipped to `true` (include all `optional`-scope
+components), making the filter inert by default. The UI's "DEV" badge
+and "Hide DEV" toggle were removed because labeling `optional` as "DEV"
+is the same misrepresentation in another shape.
 
-The whole feature may be ripped entirely. It only adds value with a
-*real* dev-vs-runtime classifier — e.g. parsing `package-lock.json`'s
-`"dev": true` flags to determine genuine devDependency-only paths.
-Without that, the per-repo flag, the UI badges, and the related filter
-button all encode a wrong understanding of cdxgen output. Decide:
+**Path forward — upgrade cdxgen to 12.2+ for a real dev marker.** PR
+[cdxgen#3925](https://github.com/cdxgen/cdxgen/pull/3925) (merged
+2026-04-24, released in v12.2.1 the same day) added a per-component
+property `cdx:npm:package:development=true` for npm packages whose
+lockfile entry has `dev: true`. Issue
+[#3927](https://github.com/cdxgen/cdxgen/issues/3927) is an open
+follow-up — `devOptional: true` entries miss the marker. Acceptable
+gap for v1; most dev deps tag correctly.
 
-- **Keep** the rename + default flip + opt-in flag, with the
-  understanding that operators must verify their `optional`-scoped
-  components are build-only before flipping it off.
-- **Remove** the flag entirely; build a real lockfile-driven classifier
-  later if the noise becomes a real cost problem on large repos.
+Migration plan when we pick this up:
+
+1. Bump `@cyclonedx/cdxgen` from `^10.10.7` → `^12.2`. Verify SBOM
+   shape compat for the rest of the pipeline (the PURL / scope /
+   evidence shapes have stayed steady across this range, but the
+   major bump warrants smoke-testing on test-vuln-repo and Gocator
+   `/`).
+2. New `SbomComponent.isDevOnly Boolean @default(false)` column.
+   Migration `m6h_sbom_component_dev_marker`.
+3. `sbomService.persistComponents` reads
+   `properties[name === "cdx:npm:package:development"].value === "true"`
+   and writes `isDevOnly`.
+4. Worker `runLlmSastPipeline` uses `isDevOnly` instead of the
+   `latestComponentScope === "optional"` filter for the
+   `reachability_include_optional_deps` gate. The flag's semantics
+   become honest: "include dev-only components in the reachability
+   hint set."
+5. UI: re-introduce a "DEV" badge sourced from `isDevOnly`. Same
+   placement as before but truthful this time.
+6. Limitation note in the form help text + OPERATIONS.md: npm-only
+   today; Python/Java/Go components stay "is_dev_only=false" until
+   we add per-ecosystem support.
+
+Other ecosystems can land later (Python via `poetry.lock`, Java via
+maven `scope: test/provided`, etc.) — same column, different
+detection logic per ecosystem.
 
 The deprecated `hide_dev` query param on the SCA list endpoint is now
-a no-op; remove it once we're confident no external API consumers rely
-on it.
+a no-op; remove it after the cdxgen-12 upgrade lands and we've
+re-introduced a truthful filter.
 
 ## Future improvements (post-cutover)
 
