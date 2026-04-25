@@ -47,6 +47,7 @@ const ALLOWED_STATUS: ReadonlyArray<ScanStatus> = [
   "running",
   "success",
   "failed",
+  "cancelled",
 ];
 const ALLOWED_TRIGGERED: ReadonlyArray<ScanTriggeredBy> = [
   "user",

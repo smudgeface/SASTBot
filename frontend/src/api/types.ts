@@ -197,7 +197,7 @@ export interface AdminSettingsUpdate {
 // Scans
 // ---------------------------------------------------------------------------
 
-export type ScanStatus = "pending" | "running" | "success" | "failed";
+export type ScanStatus = "pending" | "running" | "success" | "failed" | "cancelled";
 export type ScanTrigger = "user" | "api" | "schedule";
 
 export interface ScanWarning {

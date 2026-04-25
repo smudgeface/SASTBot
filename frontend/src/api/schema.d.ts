@@ -1044,7 +1044,7 @@ export interface paths {
                             scope_id: string;
                             scope_path: string;
                             /** @enum {string} */
-                            status: "pending" | "running" | "success" | "failed";
+                            status: "pending" | "running" | "success" | "failed" | "cancelled";
                             /** @enum {string} */
                             triggered_by: "user" | "api" | "schedule";
                             /** Format: uuid */
@@ -2096,7 +2096,7 @@ export interface paths {
                             scope_id: string;
                             scope_path: string;
                             /** @enum {string} */
-                            status: "pending" | "running" | "success" | "failed";
+                            status: "pending" | "running" | "success" | "failed" | "cancelled";
                             /** @enum {string} */
                             triggered_by: "user" | "api" | "schedule";
                             /** Format: uuid */
@@ -2182,7 +2182,7 @@ export interface paths {
                             scope_id: string;
                             scope_path: string;
                             /** @enum {string} */
-                            status: "pending" | "running" | "success" | "failed";
+                            status: "pending" | "running" | "success" | "failed" | "cancelled";
                             /** @enum {string} */
                             triggered_by: "user" | "api" | "schedule";
                             /** Format: uuid */
@@ -2237,6 +2237,114 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scans/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a pending or running scan run (admin-only). Idempotent on terminal runs. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            org_id: string | null;
+                            /** Format: uuid */
+                            repo_id: string;
+                            /** Format: uuid */
+                            scope_id: string;
+                            scope_path: string;
+                            /** @enum {string} */
+                            status: "pending" | "running" | "success" | "failed" | "cancelled";
+                            /** @enum {string} */
+                            triggered_by: "user" | "api" | "schedule";
+                            /** Format: uuid */
+                            triggered_by_user_id: string | null;
+                            started_at: string | null;
+                            finished_at: string | null;
+                            error: string | null;
+                            component_count: number;
+                            critical_count: number;
+                            high_count: number;
+                            medium_count: number;
+                            low_count: number;
+                            warnings: {
+                                code: string;
+                                message: string;
+                                context?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                            llm_input_tokens: number;
+                            llm_output_tokens: number;
+                            llm_request_count: number;
+                            sast_finding_count: number;
+                            confirmed_reachable_count: number;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
