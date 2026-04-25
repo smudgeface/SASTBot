@@ -14,6 +14,7 @@ import { queryAndPersistFindings, backfillCvssScores, backfillManifestOrigin } f
 import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { backfillReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
+import { toRepoRelative } from "./services/scopePath.js";
 import {
   applyRecheckVerdicts,
   cleanupTmp as cleanupLlmTmp,
@@ -64,6 +65,10 @@ interface LlmSastPipelineInput {
   };
   run: { scopeId: string; orgId: string | null };
   scanDir: string;
+  /** Repo-rooted scope path ("/" or "/GoWeb" etc.). Threaded through to
+   *  llmSastService so it can translate between LLM-emitted scope-relative
+   *  paths and the repo-rooted form we persist. */
+  scopePath: string;
   log: pino.Logger;
 }
 
@@ -71,7 +76,7 @@ const LLM_SCA_HINT_CAP = 200;
 const TERMINAL_TRIAGE_STATUSES = ["fixed", "suppressed", "false_positive"];
 
 async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
-  const { scanRunId, repo, run, scanDir, log } = input;
+  const { scanRunId, repo, run, scanDir, scopePath, log } = input;
 
   try {
     // 1. Build the SCA hint list (top-N by severity then CVSS) from rows the
@@ -153,6 +158,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       scanRunId,
       scopeId: run.scopeId,
       scopeDir: scanDir,
+      scopePath,
       orgId: run.orgId,
       records: detection.records,
       modelName: "claude-code-cli",
@@ -161,13 +167,16 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
 
     // 4. Stamp llm summary on every SastIssue from the detection records so
     //    the scope page shows the LLM's one-liner instead of just rule_id.
+    //    SastIssue.latestFilePath is repo-rooted; translate the LLM's
+    //    scope-relative path before matching.
     for (const r of detection.records) {
       if (r.kind === "sast" || r.kind === "sast_absence") {
+        const scopeRelFile = r.kind === "sast" ? r.file_path : r.evidence_file;
         await prisma.sastIssue.updateMany({
           where: {
             scopeId: run.scopeId,
             lastSeenScanRunId: scanRunId,
-            latestFilePath: r.kind === "sast" ? r.file_path : r.evidence_file,
+            latestFilePath: toRepoRelative(scopePath, scopeRelFile),
             latestStartLine: r.kind === "sast" ? r.start_line : r.evidence_line,
           },
           data: { latestLlmSummary: r.summary, triageConfidence: r.confidence },
@@ -199,6 +208,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       const recheck = await runRecheck({
         scanRunId,
         scopeDir: scanDir,
+        scopePath,
         issues: recheckIssues,
         tokenBudget: repo.llmRecheckTokenBudget,
         orgId: run.orgId,
@@ -359,8 +369,109 @@ async function backfillLlmSummaries(): Promise<void> {
   );
 }
 
+// ---------------------------------------------------------------------------
+// One-shot: prepend scope.path to file paths persisted scope-relative under
+// the previous (buggy) behavior. Idempotent — only prepends when the stored
+// path doesn't already start with the scope's slug.
+// ---------------------------------------------------------------------------
+async function backfillRepoRelativePaths(): Promise<void> {
+  const scopes = await prisma.scanScope.findMany({
+    select: { id: true, path: true },
+    where: { path: { not: "/" } },
+  });
+  if (scopes.length === 0) return;
+
+  let sastUpdated = 0, scaManifestUpdated = 0, scaCallSitesUpdated = 0, sbomUpdated = 0;
+
+  for (const scope of scopes) {
+    const slug = scope.path.replace(/^\/+/, "").replace(/\/+$/, "");
+    if (!slug) continue;
+    const prefix = `${slug}/`;
+
+    // SastIssue.latestFilePath
+    const sast = await prisma.sastIssue.findMany({
+      where: { scopeId: scope.id, NOT: { latestFilePath: { startsWith: prefix } } },
+      select: { id: true, latestFilePath: true },
+    });
+    for (const i of sast) {
+      // Skip rows whose path is already absolute or the synthetic absence marker.
+      if (!i.latestFilePath || i.latestFilePath.startsWith("__absence__") || i.latestFilePath.startsWith("/")) continue;
+      await prisma.sastIssue.update({
+        where: { id: i.id },
+        data: { latestFilePath: `${prefix}${i.latestFilePath}` },
+      });
+      sastUpdated++;
+    }
+
+    // ScaIssue.latestManifestFile
+    const sca = await prisma.scaIssue.findMany({
+      where: {
+        scopeId: scope.id,
+        latestManifestFile: { not: null },
+        NOT: { latestManifestFile: { startsWith: prefix } },
+      },
+      select: { id: true, latestManifestFile: true, reachableCallSites: true },
+    });
+    for (const i of sca) {
+      const data: Prisma.ScaIssueUpdateInput = {};
+      if (i.latestManifestFile && !i.latestManifestFile.startsWith("/")) {
+        data.latestManifestFile = `${prefix}${i.latestManifestFile}`;
+        scaManifestUpdated++;
+      }
+      // reachable_call_sites[].file — JSONB array, translate elements that need it
+      if (Array.isArray(i.reachableCallSites)) {
+        const sites = i.reachableCallSites as unknown as Array<{ file?: string; line?: number; snippet?: string }>;
+        let touched = false;
+        const next = sites.map((s) => {
+          if (s.file && !s.file.startsWith(prefix) && !s.file.startsWith("/")) {
+            touched = true;
+            return { ...s, file: `${prefix}${s.file}` };
+          }
+          return s;
+        });
+        if (touched) {
+          data.reachableCallSites = next as unknown as Prisma.InputJsonValue;
+          scaCallSitesUpdated++;
+        }
+      }
+      if (Object.keys(data).length > 0) {
+        await prisma.scaIssue.update({ where: { id: i.id }, data });
+      }
+    }
+
+    // SbomComponent.manifestFile (joined via scan_runs.scope_id)
+    const sbom = await prisma.sbomComponent.findMany({
+      where: {
+        manifestFile: { not: null },
+        NOT: { manifestFile: { startsWith: prefix } },
+        scanRun: { scopeId: scope.id },
+      },
+      select: { id: true, manifestFile: true },
+    });
+    for (const c of sbom) {
+      if (!c.manifestFile || c.manifestFile.startsWith("/")) continue;
+      await prisma.sbomComponent.update({
+        where: { id: c.id },
+        data: { manifestFile: `${prefix}${c.manifestFile}` },
+      });
+      sbomUpdated++;
+    }
+  }
+
+  if (sastUpdated || scaManifestUpdated || scaCallSitesUpdated || sbomUpdated) {
+    logger.info(
+      { sastUpdated, scaManifestUpdated, scaCallSitesUpdated, sbomUpdated },
+      "[worker] backfilled repo-rooted file paths for non-root scopes",
+    );
+  }
+}
+
 backfillLlmSummaries().catch((err) => {
   logger.warn({ err }, "[worker] backfill failed — will retry on next scan");
+});
+
+backfillRepoRelativePaths().catch((err) => {
+  logger.warn({ err }, "[worker] repo-rooted path backfill failed");
 });
 
 backfillCvssScores(prisma).catch((err) => {
@@ -452,13 +563,13 @@ const worker = new Worker<ScanJobData>(
             componentCount,
           },
         });
-        return persistComponents(scanRunId, sbomDoc, tx, scanDir);
+        return persistComponents(scanRunId, sbomDoc, tx, scanDir, scopePath);
       });
       log.info({ inserted: components.length }, "[worker] components persisted");
 
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");
-      const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir);
+      const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir, scopePath);
       log.info({ findings: cveFindings.length }, "[worker] CVE findings persisted");
 
       // ── Step 5: EOL / deprecation check ─────────────────────────────────
@@ -482,6 +593,7 @@ const worker = new Worker<ScanJobData>(
           repo,
           run,
           scanDir,
+          scopePath,
           log,
         });
       }

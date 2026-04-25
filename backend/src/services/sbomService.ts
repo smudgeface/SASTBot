@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { toRepoRelative } from "./scopePath.js";
+
 import type { Prisma, PrismaClient, SbomComponent } from "@prisma/client";
 import { pino } from "pino";
 
@@ -173,12 +175,18 @@ type Tx = PrismaClient | Prisma.TransactionClient;
 /**
  * Persist CycloneDX components for a scan run. Returns the inserted rows.
  * Deduplicates by purl within the same scan run so re-entrant calls are safe.
+ *
+ * `scopePath` is the repo-rooted path of the scope being scanned ("/" for
+ * root, "/GoWeb" etc. for sub-scopes). It's used to translate scope-
+ * relative manifest paths from cdxgen into repo-rooted paths so file
+ * links work consistently across scopes.
  */
 export async function persistComponents(
   scanRunId: string,
   doc: CycloneDxDocument,
   client: Tx,
   scopeDir = "",
+  scopePath = "/",
 ): Promise<SbomComponent[]> {
   const components = doc.components ?? [];
   const unique = new Map<string, CdxComponent>();
@@ -206,7 +214,10 @@ export async function persistComponents(
       // CycloneDX scope: "required" | "optional" | "excluded"
       // npm devDependencies → scope="optional"
       scope: c.scope ?? null,
-      manifestFile: extractManifestFile(c, scopeDir),
+      manifestFile: (() => {
+        const sr = extractManifestFile(c, scopeDir);
+        return sr ? toRepoRelative(scopePath, sr) : null;
+      })(),
     })),
     skipDuplicates: true,
   });
