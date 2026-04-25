@@ -6,7 +6,7 @@ This file is the entry point for humans and AI agents contributing to SASTBot. I
 
 ```bash
 cp .env.example .env                                           # once
-docker compose -f docker/compose/docker-compose.yml up --build # bring up all services
+docker compose -f docker/compose/docker-compose.yml --env-file .env up --build # bring up all services
 ```
 
 Then:
@@ -56,7 +56,9 @@ SASTBot/
 │       ├── plugins/auth.ts      # Fastify auth plugin (requireAdmin, authenticate)
 │       ├── routes/              # health, auth, adminRepos, adminSettings, adminCredentials, scans, scopes (M5)
 │       ├── services/            # repoService, settingsService, credentialService, issueService,
-│       │                        #   jiraClient, jiraTicketService, sbomService, osvService, bootstrap
+│       │                        #   jiraClient, jiraTicketService, sbomService, osvService, bootstrap,
+│       │                        #   reachabilityService, cveKnowledgeService, llmClient, llmTriageService,
+│       │                        #   cvss4 (CVSS v4.0 macro-vector calculator)
 │       ├── queue/               # BullMQ queue + connection
 │       └── cli/                 # bootstrap-admin CLI
 ├── frontend/                    # React + Vite + TypeScript
@@ -125,7 +127,7 @@ Prints a random password to stdout.
 
 ### Bring up / tear down
 ```bash
-docker compose -f docker/compose/docker-compose.yml up --build       # up
+docker compose -f docker/compose/docker-compose.yml --env-file .env up --build  # up
 docker compose -f docker/compose/docker-compose.yml down             # stop
 docker compose -f docker/compose/docker-compose.yml down -v          # stop AND wipe postgres volume
 ```
@@ -165,6 +167,10 @@ docker compose -f docker/compose/docker-compose.yml down -v          # stop AND 
 - New API routes go in `backend/src/routes/scopes.ts` (issue/scope routes) or their own file; prefix with `/api/` to avoid Vite SPA path collision.
 - The scan detail page (`/scans/:id`) is a demoted audit view since M5b. Primary UX is `/scopes`.
 - Jira integration is read-only. No ticket creation. `jiraClient.ts` handles all Jira HTTP.
+- **Worker-startup backfills.** `worker.ts` runs four idempotent backfills on boot: `backfillLlmSummaries`, `backfillSastContextSnippets`, `backfillCvssScores` (vector→score, plus re-queries OSV for rows missing both), `backfillReachability`, `backfillManifestOrigin`. Each filters its own work and is safe to re-run. Adding a new column that needs to be filled in for existing data? Mirror this pattern instead of forcing users to re-scan.
+- **`StatusBadge` always shows the true status.** No "implicit" overrides based on Jira linkage or anything else. Transitions are explicit — either through the link/unlink flow (which only auto-transitions `pending`/`confirmed` → `planned`) or through the next-status buttons in the expanded row.
+- **Source URL template** on the repo (`repos.source_url_template`, supports `$FILE` and `$LINE` placeholders) drives the `<FileLink>` component in the SAST/SCA detail views. Wrap any path span in `<FileLink template={scope.source_url_template} file=… line=…>`; with no template it's a plain span.
+- **Sibling-scope exclusions + `ignore_paths`.** When a repo has overlapping scan paths or per-repo ignore paths, `computeScopeExclusions(currentPath, [...scanPaths, ...ignorePaths])` yields the subdirs to exclude (relative to the current scope's working dir). Both `runCdxgen` and `runOpengrep` accept the result as `excludes: string[]`.
 
 ### Model selection and context management
 

@@ -204,3 +204,63 @@ Common errors:
 - `Authentication failed`: wrong credential kind or value. Bitbucket Server requires `https_basic` (username + API token as password), not `https_token`.
 - `Remote branch not found`: the configured `default_branch` doesn't exist on the remote. Update the repo's default branch.
 - `not appear to be a git repository`: `file://` URL is wrong path, or the repo hasn't been initialized.
+
+## Worker-startup backfills (M5 polish)
+
+Each time the worker container boots it runs five idempotent backfills before accepting jobs. Each one filters its own work and is safe to re-run; logs go to the worker's stdout (`docker compose -f docker/compose/docker-compose.yml logs worker | grep backfill`).
+
+| Backfill | Updates | Skips | Cost |
+|---|---|---|---|
+| `backfillLlmSummaries` | `latest_llm_summary` for SAST + SCA issues with no summary | rows whose LLM call returned null this boot (tracked by id) | one LLM call per row |
+| `backfillSastContextSnippets` | `latest_snippet` for SAST issues whose snippet has no newlines (predates the ±3 lines feature) | rows in scopes with no retained clone | one file read per row |
+| `backfillCvssScores` | `latest_cvss_score` from the existing vector; for rows with neither, re-queries OSV to capture vectors that older ingestion code dropped (e.g. `CVSS_V4`-only advisories) | rows whose vector still resolves to no numeric score | local for pass 1; one OSV HTTP call per missing-vector row for pass 2 |
+| `backfillReachability` | `confirmed_reachable`, `reachable_confidence`, `reachable_call_sites`, `reachable_reasoning` for CVE issues at or above the configured severity gate | rows in scopes with no retained clone; rows already structured-assessed | one ripgrep + ~one LLM call per row |
+| `backfillManifestOrigin` | `latest_manifest_file/line/snippet` on SCA issues, by reading each scope's stored `sbom_json` | rows in scopes with no retained clone | local file reads |
+
+If you add a new column that needs to be populated for existing data, mirror this pattern in `backend/src/worker.ts` rather than forcing users to re-scan.
+
+## Reachability minimum severity (Settings → LLM)
+
+The reachability analysis only runs against CVE findings at or above the configured severity. Default: `high` (covers Critical + High). Stored as `app_settings.reachability_min_severity` (TEXT). Settings page shows a dropdown ("Critical only" / "High and above" / "Medium and above" / "Low and above").
+
+If you change the threshold, the next worker boot's `backfillReachability` picks up newly-eligible rows automatically — no manual rerun needed.
+
+## Per-repo source URL template
+
+Edit a repo → "Source URL template": a URL with `$FILE` and `$LINE` placeholders that SASTBot uses to make file paths clickable in the SAST/SCA detail views and reachability call-sites.
+
+Examples:
+
+```
+# Bitbucket Server
+https://git.example.com/projects/X/repos/Y/browse/$FILE#$LINE
+
+# GitHub
+https://github.com/org/repo/blob/main/$FILE#L$LINE
+```
+
+`$FILE` is URI-encoded; `$LINE` is the integer line number. When the template is empty, paths render as plain text.
+
+## Scan paths and ignore paths
+
+A repo's **Scan paths** are a comma-separated list of repo-relative paths; each becomes its own scope. Issues are tracked, triaged, and reported per scope.
+
+When two scan paths overlap (e.g. `/` and `/services/api`), the deeper path owns its tree — the broader scope skips it at scan time via `--exclude services/api/**`. This works for arbitrary nesting.
+
+A repo's **Ignore paths** are paths to skip from every scan (vendored code, generated output, internal-only scripts). They're combined with the sibling-scope exclusions and applied to both cdxgen and Opengrep. Stored as `repos.ignore_paths` (JSONB array, default `[]`).
+
+## OSV alias-overlap warning
+
+When ingesting an OSV record whose aliases overlap an existing SCA issue in the same scope+package but whose `osv_id` differs, the worker logs a structured warning:
+
+```
+[osvService] alias overlap — two OSV records for the same vuln; review needed
+{
+  "package": "form-data",
+  "existing": { "osv_id": "GHSA-fjxv-7rqg-78g4", "cvss": 9.5 },
+  "incoming": { "osv_id": "CVE-2025-7783", "cvss": 7.5 },
+  "overlapping_aliases": ["CVE-2025-7783"]
+}
+```
+
+This currently doesn't fire — OSV emits one primary record per advisory for our ecosystems. If it ever does, the warning is the signal to design the dedup-or-merge strategy. Watch for it via `docker compose logs worker | grep "alias overlap"`.

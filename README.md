@@ -4,11 +4,14 @@ LLM-augmented SAST/SCA tool for EU Cyber Resilience Act (CRA) compliance.
 
 SASTBot scans git repositories for security issues using:
 
-- **SCA** (Software Composition Analysis) — dependency extraction, CycloneDX 1.7 SBOM generation, CVE/EOL/deprecated checks via OSV.dev and endoflife.date
-- **SAST** (Static Application Security Testing) — [Opengrep](https://opengrep.dev/) with LLM-augmented triage, reachability analysis, and code context
+- **SCA** (Software Composition Analysis) — CycloneDX 1.7 SBOM via cdxgen, CVE/EOL/deprecated checks via OSV.dev and endoflife.date, CVSS v3.1 + v4.0 base-score calculation from advisory vectors
+- **SAST** (Static Application Security Testing) — [Opengrep](https://opengrep.dev/) with LLM-augmented triage, ±3 lines of code context per finding
 - **Issue identity** — stable Issue rows (not per-scan findings) so triage decisions, Jira links, and status survive repeated scans
-- **Jira read-only sync** — link Jira ticket keys to issues; SASTBot pulls status, resolution, assignee, and fix versions from Jira Cloud
-- **Scope-centric views** — `/scopes` landing page with severity breakdown, per-issue status workflow (pending → To do → planned → fixed), shareable issue links
+- **LLM-augmented summaries** — every issue has a one-line action-oriented summary generated from the rule/advisory text, populated on scan and via worker-startup backfill
+- **Reachability analysis** — for CVE issues at the configured severity threshold, ripgrep + LLM confirm whether the vulnerable function is actually called from your code; verdicts include confidence + call-site code blocks, with one-click "Mark Invalid" / "Won't fix" suggestions for high-confidence "not reachable" results
+- **Jira read-only sync** — link Jira ticket keys to issues; SASTBot pulls status, resolution, assignee, and fix versions from Jira Cloud (linking auto-transitions pending/To do issues to Planned)
+- **Scope-centric views** — `/scopes` landing page with stacked severity bar, per-issue status workflow (pending → To do → planned → fixed), shareable issue links, clickable file paths to your repo browser via per-repo URL template
+- **Configurable scan paths** — multiple scan paths per repo become independent scopes; nested overlaps are de-duplicated automatically; per-repo `ignore_paths` skip vendored or generated subtrees
 
 ## Architecture
 
@@ -39,8 +42,10 @@ Prerequisites: Docker Desktop (or any engine with Compose v2).
 git clone https://github.com/smudgeface/SASTBot.git
 cd SASTBot
 cp .env.example .env   # generate a fresh MASTER_KEY (see .env.example)
-docker compose -f docker/compose/docker-compose.yml up --build
+docker compose -f docker/compose/docker-compose.yml --env-file .env up --build
 ```
+
+> **Note:** `--env-file .env` is required because the compose file lives in `docker/compose/` and Compose resolves `.env` relative to that directory, not the repo root.
 
 On first boot the backend seeds the default org and prints a bootstrap admin password to the container logs. Log in at <http://localhost:5173> with `admin@sastbot.local` and the printed password, then change it via the admin UI.
 

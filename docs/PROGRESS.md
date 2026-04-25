@@ -256,4 +256,89 @@ Note on test 4: `normalizeSnippet` collapses whitespace runs but does not remove
 - 46 SAST issues (Opengrep Python rules), severity properly mapped via `rule.defaultConfiguration.level` fallback (Opengrep omits `result.level`).
 - Jira integration live: linked `GOS-14158` (Complete · Fixed · 1.4, 1.5), `GOS-15261` (In Progress · To do).
 
+---
+
+## M5 polish — UX, reachability v2, CVSS calculators, manifest origin, source links (2026-04-24)
+
+### What shipped
+
+**Severity bar header + LLM summaries everywhere**
+- Replaced the row of summary chips on `/scopes/:id` with a single **stacked severity bar** card: full-width proportional bar, large total ("111 Open Issues"), per-severity legend, and a secondary line for SCA / SAST / Pending triage counts. Empty state shows "No open issues in this scope." with a check icon.
+- LLM summaries are now the authoritative one-liner everywhere (50/50 SAST and 108/108 SCA backfilled in dev). Action-oriented, e.g. *"Replace xml.etree.ElementTree.parse with defusedxml to prevent XXE attacks"* / *"Allows attackers to pollute JavaScript object prototypes via crafted query strings"*.
+- Fixed `backfillLlmSummaries` pagination bug: the offset-based loop silently skipped any row whose LLM call returned null (50/108 SCA rows missed in our DB). Replaced with a `notIn(attemptedIds)` filter so successes drop out via the null filter and failures aren't retried infinitely.
+- `ContextSnippet` gained absolute line numbers in the gutter, so blank lines render with their number — clear that "3 lines before" still counts an empty line.
+- `shortRuleSummary()` extracts the first sentence (≤100 chars) of a SAST rule message as a fallback when no LLM summary exists.
+
+**Honest status badges + correct triage workflow**
+- `StatusBadge` no longer overrides to "Planned" whenever a Jira ticket is linked — it always shows the actual status. The override hid the reason `false_positive` issues weren't counted as Critical.
+- Conditional Jira link/unlink transitions:
+  - Link: only `pending`/`confirmed` auto-transition to `planned`. Other statuses keep their value (a ticket link doesn't reopen a closed issue).
+  - Unlink: only `planned` reverts to `confirmed`. Other statuses stay as-is.
+- Inline ⚠ next to the badge when an issue is `planned` AND its Jira ticket has `statusCategory=done`. SCA tab gained the same "N need attention" banner that SAST already had.
+- Complete next-status button matrix:
+  | Status      | Buttons                                          |
+  |-------------|--------------------------------------------------|
+  | pending     | Confirm · Won't fix · Invalid                    |
+  | confirmed   | **Planned** · Won't fix · Invalid · Reopen       |
+  | planned     | Mark fixed · Won't fix · Invalid · Reopen        |
+  | fixed/won't fix/invalid | Reopen                               |
+  Forced workflow: confirmed → planned → fixed (no jumping straight to fixed from To do).
+
+**Reachability v2 — confidence, call-sites, one-click dismiss**
+- Severity-based threshold replaces the old `reachability_cvss_threshold` (Float) with `reachability_min_severity` (enum: critical/high/medium/low, default high). Settings UI is now a dropdown. Backend query becomes a single severity-IN comparison.
+- Worker-startup `backfillReachability`: any SCA CVE that hasn't been assessed and meets the severity gate gets ripgrep + LLM confirmation on boot. Only works for retain-clone repos. Idempotent.
+- LLM tool schema extended to return `{reachable, confidence, reasoning, call_sites: [{file, line, snippet}]}`. New columns `sca_issues.reachable_confidence` (Float) and `reachable_call_sites` (JSONB). Re-runs for rows assessed before the schema change.
+- New `ReachabilityVerdict` block in the SCA expanded view: "Reachable / Not reachable" headline, confidence %, reasoning, code-block per call site. When `reachable=false && confidence ≥ 0.85`, shows one-click "Mark Invalid" / "Mark Won't fix" CTAs (suggestion, not auto-action).
+
+**CVSS calculators (3.1 + 4.0)**
+- `parseCvssScore` now handles full vectors as well as plain numbers. CVSS v3.1 calculator implements FIRST.org's deterministic formula (AV/AC/PR/UI/S/C/I/A weights → impact + exploitability → roundUp1).
+- New `cvss4.ts` ports the v4.0 macro-vector lookup (270 entries from the spec's Appendix A). Uses macro-vector score directly; the within-bucket fractional refinement is not yet ported (within ±0.5 of FIRST.org calculator; severity bucket always exact).
+- `pickCvss` prefers V4 → V3 → V2 from OSV's severity[] array. Many GitHub-reviewed advisories now ship only `CVSS_V4` — we were silently dropping them before.
+- Backfill ran on 65/65 v3 vectors and 9/9 v4 vectors. form-data@2.3.3 (`CVSS:4.0/AV:N/AC:H/...`) now scores 9.5 (Critical), matching its GitHub advisory severity.
+- Alias-overlap detector at OSV ingest: when a new record's aliases overlap an existing issue in the same scope+package but the `osv_id`s differ, we log a structured warning rather than silently inserting a duplicate. Doesn't fire on current data.
+
+**SCA manifest origin (parity with SAST file paths)**
+- `sbom_components.manifest_file` captures cdxgen's `evidence.identity.methods[].value` (technique=manifest-analysis) plus `properties[name=SrcFile]`, stripped to repo-relative.
+- `sca_issues.latest_manifest_file/line/snippet` mirror the SAST `latest_file_path/start_line/snippet` trio.
+- `osvService.readManifestSnippet` greps the manifest for the package name and captures ±3 lines (handles `"name"`, `'name'`, `name==`, `name~=`, plain).
+- Worker-startup `backfillManifestOrigin`: reads each scope's stored sbom_json, indexes by package name, fills the new fields for retained-clone repos. Idempotent.
+- SCA row Location column now shows `package-lock.json:4014` (basename + line, like SAST), with package@version as secondary text. Expanded view shows the full repo-relative path and 7-line ContextSnippet centred on the declaration. CVE link moved from row chips into the expanded metadata block.
+
+**Clickable file paths via per-repo URL template**
+- Repos can configure a `source_url_template` (e.g. `https://git.example.com/projects/X/repos/Y/browse/$FILE#$LINE`). Two placeholders: `$FILE` (URI-encoded) and `$LINE`.
+- Frontend `<FileLink>` wraps any path span; renders an external `<a target="_blank">` with stopPropagation (clicks don't toggle the row). Used for SAST file paths, SCA manifest paths, and reachability call-sites. When no template is set, paths render as plain text.
+
+**Sibling-scope exclusions + ignore_paths**
+- Repos with overlapping scopes (e.g. `["/", "/GoWeb"]`) no longer double-scan. `computeScopeExclusions` returns the subdirs (relative to the current scope's working dir) that should be excluded — works for arbitrary nesting.
+- New per-repo `ignore_paths` (JSONB array, default `[]`): paths to skip from every scan. Useful for vendored code, generated output, internal-only scripts. Concatenated with sibling scopes before the exclusion calc — no separate code path.
+- Excludes flow into both `runCdxgen --exclude <dir>/**` and `runOpengrep --exclude <dir>` so SBOM and SAST agree on what's in/out of scope.
+
+**Operational polish**
+- "Save & test connection" replaces "Check connection" on the Settings page. Persists the form state before testing so first-time users don't get a confusing "not configured" error after typing valid credentials.
+- Fixed credential silent-unset: when a user created a new Jira/LLM credential and clicked Save again, the second click sent `{credential_id: null, credential: null}` which the backend interpreted as "disconnect". Now we omit credential keys when the user hasn't supplied usable data, and reset choice → "existing" pointing at the new id after save.
+- "Scan now" → "Scanning…" spinner: `useScopeScans` polls every 3s while the latest run is pending/running, drives the button label, and invalidates scope detail + issue queries on completion so counts refresh without a page reload. `useTriggerScan` synchronously prepends the new pending run to the per-scope cache so the spinner is up the instant the HTTP trigger returns (no flicker). Backend `triggerScan` now skips scopes that already have a pending/running run, so accidental double-clicks don't queue duplicate scans.
+- Repo edit form copy polish: "Default branch" → "Branch", "URL" → "Clone URL", added help text under every field, Scan paths help explains "each path becomes its own scope" and the deeper-path-wins rule for overlaps.
+
+### What we learned
+
+- **`hasOwnProperty` partial-update semantics are subtle.** Two flavors of the same bug bit us this session: the credential silent-unset (sending `null` for both `credential_id` and `credential` to a backend that uses `hasOwnProperty` to detect intent), and the `backfillLlmSummaries` `skip:offset` issue. In both cases, "did the user supply a value?" needs to be distinct from "is the value null?". Omit the key when there's no intent.
+- **CVSS 4.0 is now the default for npm advisories.** OSV records for newly-reviewed GHSAs increasingly ship only `CVSS_V4`. A V3-only ingest path silently drops them. The alias-overlap warning would tell us if OSV ever emits both for the same vuln, but for now V4 fallback is essential.
+- **CVSS 4.0 macro-vector lookup is a clean approximation of the spec.** The 270-entry table matches the FIRST.org calculator's output to ±0.5. The within-bucket fractional refinement is non-trivial and we deferred it; the severity bucket (Critical/High/Medium/Low) is always exact, which is what triage actually keys off.
+- **Status semantics matter more than UI niceness.** Auto-overriding `false_positive` to "Planned" because there was a Jira ticket made the count of Critical look wrong, even though the count was right. Honest labels exposed the actual data state and made the existing logic legible. Pattern: badge always shows the truth; transitions are explicit (link/unlink) or via buttons; never "implicit" override.
+- **Reachability scoring should be deterministic from the metadata we already have.** The CVSS-score threshold made sense in theory, but only 0/108 issues had numeric scores until we computed them from vectors. Severity is what users think in and what NVD/GHSA classify into anyway. Switching the threshold to severity simplified both UI and query.
+- **LLM verdicts need confidence + provenance to be actionable.** We had `reachable: bool + reasoning: string` for weeks; nobody dismissed anything because it didn't feel safe to act on. Surfacing confidence ("85% confident") and call-site code blocks made the same verdicts feel concrete enough for one-click suggested dismissals. Same data, very different UX.
+- **`offset += BATCH` is unsafe with a delete-on-success filter.** When you query "rows where X is null" and update some to non-null, you can't paginate with skip — you'll skip past rows that stayed null. Track attempted IDs with `notIn` instead.
+- **Async UI feedback needs synchronous cache writes when the polling interval > the user's reaction time.** The spinner regression was instructive: a 3 s poll plus a TanStack invalidate-only `onSuccess` left a 100–300 ms window where the cache held the *previous* run's terminal status, so the button flickered back to "Scan now" and users double-clicked. Fix: `setQueryData` synchronously on trigger success so isScanning is true the moment the HTTP call returns, then let the poll catch up. Always pair the optimistic update with a backend defense-in-depth check (skip scopes that already have pending/running runs).
+
+### Migrations applied this batch
+1. `20260424120000_add_llm_summary_remove_llm_enabled` — `latest_llm_summary` columns; drop `llm_assistance_enabled`
+2. `20260424130000_unify_sca_states` — converts `active`→`pending`, `wont_fix`→`suppressed`, `acknowledged`→`suppressed`
+3. `20260424140000_reachability_min_severity` — replaces `reachability_cvss_threshold` (Float) with `reachability_min_severity` (Text, default `'high'`)
+4. `20260424150000_reachability_call_sites` — `reachable_confidence` (Float?), `reachable_call_sites` (JSONB?)
+5. `20260424160000_sca_manifest_origin` — `latest_manifest_file/line/snippet` on sca_issues, `manifest_file` on sbom_components
+6. `20260424170000_repo_source_url_template` — `repos.source_url_template`
+7. `20260424180000_repo_ignore_paths` — `repos.ignore_paths` JSONB default `'[]'`
+
+**Next — M5d Scheduler + M5e Hardening, or M6**
+
 **Next — M5 remaining (5d Scheduler + 5e Hardening) or M6**
