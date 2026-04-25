@@ -1618,8 +1618,11 @@ export default function ScopeDetailPage() {
   const highlightIssueId = searchParams.get("issue") ?? undefined;
   const { data: scope, isLoading, isError } = useScopeDetail(id);
   const { data: appSettings } = useSettings();
+  const { data: scans } = useScopeScans(id, 1);
   const triggerScan = useTriggerScan();
   const llmConfigured = !!(appSettings?.llm_base_url && appSettings?.llm_model && appSettings?.llm_credential_id);
+  const activeScanStatus = scans?.[0]?.status;
+  const isScanning = activeScanStatus === "pending" || activeScanStatus === "running" || triggerScan.isPending;
 
   if (isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (isError || !scope) return <p className="text-sm text-destructive">Scope not found.</p>;
@@ -1652,10 +1655,17 @@ export default function ScopeDetailPage() {
         <Button
           size="sm"
           onClick={handleTriggerScan}
-          disabled={triggerScan.isPending || !llmConfigured}
+          disabled={isScanning || !llmConfigured}
           title={!llmConfigured ? "LLM not configured — set up LLM settings before scanning" : undefined}
         >
-          Scan now
+          {isScanning ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Scanning…
+            </>
+          ) : (
+            "Scan now"
+          )}
         </Button>
       </div>
 
