@@ -83,6 +83,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CLONE_CACHE_DIR: /app/clones
+      # Claude Code CLI auth (M6 LLM-mode SAST) is sourced at scan time from
+      # AppSettings.llmBaseUrl + the decrypted credential at llmCredentialId,
+      # then injected into the `claude -p` subprocess env. No container-wide
+      # secrets.
     volumes:
       - ../../backend:/app/backend
       - sastbot_backend_node_modules:/app/backend/node_modules

@@ -274,6 +274,9 @@ export interface paths {
                             source_url_template: string | null;
                             is_active: boolean;
                             retain_clone: boolean;
+                            /** @enum {string} */
+                            sast_engine: "opengrep" | "llm";
+                            reachability_enabled: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         }[];
@@ -341,6 +344,13 @@ export interface paths {
                         is_active?: boolean;
                         /** @default false */
                         retain_clone?: boolean;
+                        /**
+                         * @default opengrep
+                         * @enum {string}
+                         */
+                        sast_engine?: "opengrep" | "llm";
+                        /** @default true */
+                        reachability_enabled?: boolean;
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -411,6 +421,9 @@ export interface paths {
                             source_url_template: string | null;
                             is_active: boolean;
                             retain_clone: boolean;
+                            /** @enum {string} */
+                            sast_engine: "opengrep" | "llm";
+                            reachability_enabled: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -501,6 +514,9 @@ export interface paths {
                             source_url_template: string | null;
                             is_active: boolean;
                             retain_clone: boolean;
+                            /** @enum {string} */
+                            sast_engine: "opengrep" | "llm";
+                            reachability_enabled: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -566,6 +582,9 @@ export interface paths {
                         source_url_template?: string | null;
                         is_active?: boolean;
                         retain_clone?: boolean;
+                        /** @enum {string} */
+                        sast_engine?: "opengrep" | "llm";
+                        reachability_enabled?: boolean;
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -636,6 +655,9 @@ export interface paths {
                             source_url_template: string | null;
                             is_active: boolean;
                             retain_clone: boolean;
+                            /** @enum {string} */
+                            sast_engine: "opengrep" | "llm";
+                            reachability_enabled: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -798,6 +820,9 @@ export interface paths {
                             source_url_template: string | null;
                             is_active: boolean;
                             retain_clone: boolean;
+                            /** @enum {string} */
+                            sast_engine: "opengrep" | "llm";
+                            reachability_enabled: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -2508,6 +2533,8 @@ export interface paths {
                             ecosystem: string | null;
                             licenses: string[];
                             component_type: string;
+                            scope: string | null;
+                            manifest_file: string | null;
                         }[];
                     };
                 };

@@ -23,6 +23,39 @@ import { loadConfig } from "../config.js";
 import { prisma } from "../db.js";
 import { gitClone, type GitCloneOptions } from "./gitClone.js";
 
+/**
+ * Thrown when the git remote can't be reached at all (DNS failure,
+ * connection timeout, refused, etc.). Distinct from generic git
+ * failures so callers can preserve the local cache rather than
+ * destroying it on a transient network blip.
+ */
+export class RemoteUnreachableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RemoteUnreachableError";
+  }
+}
+
+/**
+ * Heuristic — true when a git error looks like a network/connectivity
+ * issue versus a true git problem (corrupt repo, bad ref, auth fail,
+ * etc.). Pattern set is conservative; widen as we observe new strings
+ * in the wild.
+ */
+function isNetworkError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return [
+    "Failed to connect",
+    "Couldn't connect",
+    "Could not resolve host",
+    "Operation timed out",
+    "Connection refused",
+    "Connection timed out",
+    "Network is unreachable",
+    "Temporary failure in name resolution",
+  ].some((s) => msg.includes(s));
+}
+
 /** Directory reserved for a given repo's cached clone. Safe to call
  *  before the path actually exists on disk. */
 export function repoCachePath(repoId: string): string {
@@ -93,6 +126,11 @@ export async function cloneOrRefresh(
   const parent = loadConfig().cloneCacheDir;
   await mkdir(parent, { recursive: true });
 
+  // Pre-flight reachability probe BEFORE any destructive op. Cheap
+  // (a few KB at most) and prevents a network blip from wiping a
+  // working cache.
+  await probeRemote({ url, credentialId });
+
   const reusable = await isGitWorkingTree(cacheDir);
   if (reusable) {
     try {
@@ -101,9 +139,14 @@ export async function cloneOrRefresh(
         .update({ where: { id: repoId }, data: { lastClonedAt: new Date() } })
         .catch(() => undefined);
       return { workingDir: cacheDir, fromCache: true, ephemeral: false };
-    } catch {
-      // Cache is corrupted or the remote's changed shape — fall back to
-      // a fresh clone. Purge first so the clone target is empty.
+    } catch (err) {
+      if (err instanceof RemoteUnreachableError) {
+        // Don't wipe — propagate so the caller can retry with the cache
+        // still intact once the network comes back.
+        throw err;
+      }
+      // True cache corruption (bad refs, missing objects, etc.) — wipe
+      // and re-clone from scratch.
       await rm(cacheDir, { recursive: true, force: true });
     }
   }
@@ -118,6 +161,43 @@ export async function cloneOrRefresh(
     .update({ where: { id: repoId }, data: { lastClonedAt: new Date() } })
     .catch(() => undefined);
   return { workingDir: cacheDir, fromCache: false, ephemeral: false };
+}
+
+/**
+ * Pre-flight check: `git ls-remote --heads <url>` with a hard timeout.
+ * Throws `RemoteUnreachableError` on network failure. Other git errors
+ * (auth fail, bad ref, etc.) propagate as plain Error so the caller can
+ * fail-fast on real problems instead of silently swallowing them.
+ */
+async function probeRemote(input: { url: string; credentialId?: string | null }): Promise<void> {
+  const { decodeCredential } = await import("./credentialService.js");
+  const { applyCredentialToEnv } = await import("./gitClone.js");
+  const { mkdtemp } = await import("node:fs/promises");
+
+  const helperDir = await mkdtemp(join(tmpdir(), "sastbot-git-probe-"));
+  try {
+    const env: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+    };
+    env.GIT_TERMINAL_PROMPT = "0";
+    if (input.credentialId) {
+      const cred = await decodeCredential(input.credentialId);
+      await applyCredentialToEnv(cred, helperDir, env);
+    }
+
+    try {
+      await runGit(["ls-remote", "--heads", "--exit-code", input.url], helperDir, env, 10_000);
+    } catch (err) {
+      if (isNetworkError(err)) {
+        throw new RemoteUnreachableError(
+          `Cannot reach git remote ${input.url}: ${(err as Error).message}`,
+        );
+      }
+      throw err;
+    }
+  } finally {
+    await rm(helperDir, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 interface RefreshInput {
@@ -146,7 +226,16 @@ async function refreshCache(input: RefreshInput): Promise<void> {
       await applyCredentialToEnv(cred, helperDir, env);
     }
 
-    await runGit(["fetch", "--prune", "--quiet"], input.cacheDir, env);
+    try {
+      await runGit(["fetch", "--prune", "--quiet"], input.cacheDir, env);
+    } catch (err) {
+      if (isNetworkError(err)) {
+        throw new RemoteUnreachableError(
+          `git fetch failed — remote unreachable: ${(err as Error).message}`,
+        );
+      }
+      throw err;
+    }
     await runGit(
       ["reset", "--hard", `origin/${input.defaultBranch}`, "--quiet"],
       input.cacheDir,
@@ -161,6 +250,7 @@ function runGit(
   args: string[],
   cwd: string,
   env: Record<string, string>,
+  timeoutMs?: number,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn("git", args, {
@@ -169,11 +259,26 @@ function runGit(
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stderr = "";
+    let timer: NodeJS.Timeout | undefined;
+    if (timeoutMs && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        proc.kill("SIGKILL");
+      }, timeoutMs);
+    }
     proc.stderr.on("data", (c) => (stderr += c.toString()));
-    proc.on("error", reject);
-    proc.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`git ${args.join(" ")} failed (${code}): ${stderr}`));
+    proc.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      reject(err);
+    });
+    proc.on("close", (code, signal) => {
+      if (timer) clearTimeout(timer);
+      if (code === 0) {
+        resolve();
+      } else if (signal === "SIGKILL" && timeoutMs) {
+        reject(new Error(`git ${args.join(" ")} Operation timed out after ${timeoutMs}ms`));
+      } else {
+        reject(new Error(`git ${args.join(" ")} failed (${code}): ${stderr}`));
+      }
     });
   });
 }

@@ -22,7 +22,7 @@ import {
   useUpdateRepo,
 } from "@/api/queries/repos";
 import { useTriggerScan } from "@/api/queries/scans";
-import type { AnalysisType, Repo, RepoProtocol, RepoUpsertInput } from "@/api/types";
+import type { AnalysisType, Repo, RepoProtocol, RepoUpsertInput, SastEngine } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -390,6 +390,8 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   const [sca, setSca] = useState<boolean>(repo?.analysis_types.includes("sca") ?? true);
   const [sast, setSast] = useState<boolean>(repo?.analysis_types.includes("sast") ?? true);
   const [retainClone, setRetainClone] = useState<boolean>(repo?.retain_clone ?? false);
+  const [sastEngine, setSastEngine] = useState<SastEngine>(repo?.sast_engine ?? "opengrep");
+  const [reachabilityEnabled, setReachabilityEnabled] = useState<boolean>(repo?.reachability_enabled ?? true);
   const [sourceUrlTemplate, setSourceUrlTemplate] = useState<string>(repo?.source_url_template ?? "");
 
   const [credentialChoice, setCredentialChoice] = useState<CredentialChoice>(
@@ -435,6 +437,8 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       ignore_paths,
       analysis_types,
       retain_clone: retainClone,
+      sast_engine: sastEngine,
+      reachability_enabled: reachabilityEnabled,
       source_url_template: sourceUrlTemplate.trim() || null,
     };
 
@@ -640,6 +644,44 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 <p className="text-xs text-muted-foreground">
                   Trades disk space for scan speed — subsequent scans do a `git fetch` instead
                   of re-cloning. Purge from the row menu to recover the space or force a clean run.
+                </p>
+              </div>
+            </label>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="sast-engine">SAST engine</Label>
+            <select
+              id="sast-engine"
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+              value={sastEngine}
+              onChange={(e) => setSastEngine(e.target.value as SastEngine)}
+            >
+              <option value="opengrep">Opengrep + LLM triage (legacy)</option>
+              <option value="llm">Claude Code CLI (LLM-mode)</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              <strong>Opengrep</strong>: rule-based static analyzer; LLM triages each finding.
+              {" "}<strong>LLM-mode</strong>: a single Claude Code CLI agentic pass replaces Opengrep,
+              also identifies vendored libraries and reachable SCA call sites in one go.
+              LLM-mode requires the LLM endpoint in Settings to be configured.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Reachability analysis</Label>
+            <label className="inline-flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={reachabilityEnabled}
+                onChange={(e) => setReachabilityEnabled(e.target.checked)}
+              />
+              <div>
+                Assess whether high+critical SCA findings are actually reachable
+                <p className="text-xs text-muted-foreground">
+                  Adds time and LLM token cost. Disable if you want SAST + SCA scans without
+                  the call-site reachability check.
                 </p>
               </div>
             </label>

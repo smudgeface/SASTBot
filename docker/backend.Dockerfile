@@ -44,6 +44,18 @@ RUN MACHINE=$(uname -m) \
  && chmod +x /usr/local/bin/opengrep \
  || echo "WARN: opengrep install failed — SAST will be unavailable"
 
+# Claude Code CLI — used by the LLM-mode SAST pass (M6). Auth via env vars
+# (ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL) injected by the worker per-scan
+# from AppSettings.
+RUN npm install -g @anthropic-ai/claude-code \
+ || echo "WARN: claude-code install failed — LLM-mode SAST will be unavailable"
+
+# claude-p refuses --dangerously-skip-permissions (its mapping for our chosen
+# permission-mode) when the calling process is root. Add a dedicated unprivileged
+# user the worker process drops to when spawning claude. The worker itself stays
+# root for the rest of its work (npm, prisma, /app file writes).
+RUN useradd --create-home --uid 1001 --shell /bin/bash claudeuser
+
 WORKDIR /app/backend
 
 # Copy manifest + Prisma schema first so the install layer is cached.
@@ -92,8 +104,10 @@ ENV NODE_ENV=production \
 
 RUN corepack enable && corepack prepare pnpm@latest --activate \
  && apt-get update \
- && apt-get install -y --no-install-recommends openssl ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends openssl ca-certificates ripgrep \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g @anthropic-ai/claude-code \
+ || echo "WARN: prod-stage tool install partial failure"
 
 WORKDIR /app/backend
 
