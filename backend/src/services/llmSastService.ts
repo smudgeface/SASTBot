@@ -17,6 +17,7 @@ import { z } from "zod";
 import { loadConfig } from "../config.js";
 import { decodeCredential } from "./credentialService.js";
 import { upsertSastIssueFromDetection } from "./issueService.js";
+import { toRepoRelative, toScopeRelative } from "./scopePath.js";
 import { getOrCreateSettings } from "./settingsService.js";
 import { loadPrompt } from "./promptLoader.js";
 
@@ -504,6 +505,10 @@ export interface RecheckIssueInput {
 export interface RunRecheckInput {
   scanRunId: string;
   scopeDir: string;
+  /** Repo-rooted scope path. Issue paths in `issues` are stored repo-rooted;
+   *  we translate them to scope-relative form for the LLM (which runs with
+   *  cwd=scopeDir and needs paths it can read directly). */
+  scopePath: string;
   issues: RecheckIssueInput[];
   tokenBudget: number;
   orgId: string | null;
@@ -547,7 +552,13 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
   const { tmpDir, claudeHome } = await ensureTmpDir(input.scanRunId);
 
   const issuesInputPath = path.join(tmpDir, "recheck_issues.jsonl");
-  const jsonl = input.issues.map((i) => JSON.stringify(i)).join("\n") + "\n";
+  // The model reads files with cwd=scopeDir, so input file paths must be
+  // scope-relative. DB stores repo-rooted; translate per-issue.
+  const issuesForModel = input.issues.map((i) => ({
+    ...i,
+    file: toScopeRelative(input.scopePath, i.file),
+  }));
+  const jsonl = issuesForModel.map((i) => JSON.stringify(i)).join("\n") + "\n";
   await fs.writeFile(issuesInputPath, jsonl, { encoding: "utf8", mode: 0o644 });
 
   const systemPrompt = loadPrompt("sast_system", {});
@@ -731,6 +742,10 @@ export interface PersistDetectionInput {
   scanRunId: string;
   scopeId: string;
   scopeDir: string;
+  /** Repo-rooted scope path ("/" for root scopes, "/GoWeb" etc. otherwise).
+   *  Used to translate the LLM's scope-relative paths into repo-rooted
+   *  paths before persisting, so file links work correctly across scopes. */
+  scopePath: string;
   orgId: string | null;
   records: DetectionRecord[];
   modelName: string;
@@ -821,6 +836,11 @@ export async function persistDetection(
     vendoredLibsAdded: 0,
   };
 
+  // The LLM emits paths relative to scopeDir (its cwd). Translate them to
+  // repo-rooted form for persistence so the FE's <FileLink> works across
+  // scopes consistently. The fingerprint helper reads the file from disk
+  // and so still wants the scope-relative form — it gets the LLM's raw
+  // r.file_path before translation.
   for (const r of input.records) {
     if (r.kind === "sast") {
       const fingerprint = await computeSastFingerprint(
@@ -836,7 +856,7 @@ export async function persistDetection(
         ruleMessage: r.summary,
         severity: r.severity,
         cweIds: [r.cwe],
-        filePath: r.file_path,
+        filePath: toRepoRelative(input.scopePath, r.file_path),
         startLine: r.start_line,
         snippet: r.snippet,
       });
@@ -850,7 +870,7 @@ export async function persistDetection(
         ruleMessage: r.summary,
         severity: r.severity,
         cweIds: [r.cwe],
-        filePath: r.evidence_file,
+        filePath: toRepoRelative(input.scopePath, r.evidence_file),
         startLine: r.evidence_line,
         snippet: `__absence__:${r.cwe}`,
       });
@@ -870,14 +890,18 @@ export async function persistDetection(
         );
         continue;
       }
+      const repoRootedSites = r.call_sites.map((s) => ({
+        ...s,
+        file: toRepoRelative(input.scopePath, s.file),
+      }));
       await db.scaIssue.update({
         where: { id: r.sca_issue_id },
         data: {
           confirmedReachable: r.reachable,
           reachableConfidence: r.confidence,
           reachableReasoning: r.reasoning,
-          reachableCallSites: r.call_sites.length > 0
-            ? (r.call_sites as unknown as Prisma.InputJsonValue)
+          reachableCallSites: repoRootedSites.length > 0
+            ? (repoRootedSites as unknown as Prisma.InputJsonValue)
             : Prisma.DbNull,
           reachableAssessedAt: new Date(),
           reachableModel: input.modelName,
@@ -914,7 +938,7 @@ export async function persistDetection(
           licenses: r.license ? [r.license] : [],
           componentType: "library",
           scope: "required",
-          manifestFile: r.evidence_file,
+          manifestFile: toRepoRelative(input.scopePath, r.evidence_file),
           discoveryMethod: "vendored_inspection",
           evidenceLine: r.evidence_line ?? null,
         },

@@ -8,6 +8,7 @@ import { loadConfig } from "../config.js";
 import type { Severity } from "../schemas.js";
 import { upsertScaIssueFromDetection } from "./issueService.js";
 import { computeCvss40BaseScore } from "./cvss4.js";
+import { toRepoRelative, toScopeRelative } from "./scopePath.js";
 
 const logger = pino({ level: loadConfig().logLevel, name: "osvService" });
 
@@ -265,6 +266,7 @@ export async function queryAndPersistFindings(
   components: SbomComponent[],
   client: Tx,
   scopeDir = "",
+  scopePath = "/",
 ): Promise<ScanFinding[]> {
   const withPurl = components.filter((c) => c.purl);
   if (withPurl.length === 0) return [];
@@ -292,9 +294,15 @@ export async function queryAndPersistFindings(
 
       // Resolve manifest origin (e.g. package-lock.json) and grab a ±3-line
       // snippet around the package declaration so the SCA detail can mirror
-      // SAST's code-context view. component.manifestFile is repo-relative.
+      // SAST's code-context view. component.manifestFile is repo-rooted;
+      // strip the scope prefix before reading from disk (the file lives at
+      // scopeDir + scope-relative-path).
       const manifestFields = scopeDir && component.manifestFile
-        ? await readManifestSnippet(scopeDir, component.manifestFile, component.name)
+        ? await readManifestSnippet(
+            scopeDir,
+            toScopeRelative(scopePath, component.manifestFile),
+            component.name,
+          )
         : { line: null, snippet: null };
 
       // Detect the "two records, same underlying vuln" case: another issue in
@@ -493,7 +501,12 @@ export async function backfillManifestOrigin(db: PrismaClient): Promise<void> {
       const { line, snippet } = await readManifestSnippet(scopeDir, manifestFile, issue.packageName);
       await db.scaIssue.update({
         where: { id: issue.id },
-        data: { latestManifestFile: manifestFile, latestManifestLine: line, latestManifestSnippet: snippet },
+        data: {
+          // Persist repo-rooted so the FE link works across scopes.
+          latestManifestFile: toRepoRelative(scope.path, manifestFile),
+          latestManifestLine: line,
+          latestManifestSnippet: snippet,
+        },
       });
       totalUpdated++;
     }

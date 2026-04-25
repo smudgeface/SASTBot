@@ -138,6 +138,7 @@ async function main(): Promise<void> {
       const result = await runRecheck({
         scanRunId: fakeScanRunId,
         scopeDir: cloneDir,
+        scopePath: scope.path,
         issues,
         tokenBudget: recheckBudget,
         orgId: scope.repo.orgId ?? null,
@@ -259,6 +260,7 @@ async function main(): Promise<void> {
         scanRunId,
         scopeId: scope.id,
         scopeDir: cloneDir,
+        scopePath: scope.path,
         orgId: scope.repo.orgId ?? null,
         records: result.records,
         modelName: "claude-code-cli",
