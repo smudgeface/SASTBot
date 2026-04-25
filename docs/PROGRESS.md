@@ -465,4 +465,18 @@ Correction:
 - **Reachability ROI on a frontend repo is genuinely thin** — but most of the noise is dev tooling that *would* be filtered correctly with a proper lockfile-based classifier. The signal (`requirejs`, `underscore`'s `_.template`, `three`) is exactly what reachability is meant to surface.
 - **Don't ship a UI label that lies, even if it's convenient.** A "DEV" badge on a transitive runtime dep is worse than no badge — it tricks the operator into deprioritizing a real risk.
 
+### Investigated: can cdxgen tell us dev vs runtime?
+
+Follow-up after the dev-deps correction. User research mentioned a possible `development` scope value and a `--required-only` flag in cdxgen docs. We checked our actual cdxgen v10.x output:
+
+- **CycloneDX 1.6 spec defines only three `scope` values**: `required`, `optional`, `excluded`. There is no `development` value in the spec. Whatever doc the user saw is either older, aspirational, or referring to some non-spec extension that v10.x doesn't emit.
+- **Our SBOM data confirms**: distinct `scope` values across 18,935 components on the /GoWeb scan are exactly `required` (629), `optional` (18,057), and null (249). No `development`.
+- **`cdxgen --help` confirms**: `--required-only` is the only scope-aware filter flag. Nothing produces a per-component dev marker, no `dev: true` property, no separate `development` scope.
+- **The CycloneDX `dependencies` graph isn't a runtime classifier either.** It's an adjacency list of "X depends on Y" relationships. We tested by walking from the root component's `bom-ref`: 99%+ of components are reachable, including obvious dev tools like `webpack-dev-server`, `terser`, `babel-traverse`, `react-dev-utils`. The graph mixes runtime + dev paths.
+- **What `required` actually means in cdxgen**: first-level direct deps from `package.json:dependencies`. `optional` is everything else — devDependencies AND transitive runtime deps lumped together. So `--required-only` would drop transitive runtime CVEs (`qs` reachable through Express, `body-parser`, etc.) — *worse* than the current state, not better.
+
+**Conclusion**: cdxgen's output as-shipped does not give us a usable dev-vs-runtime classifier. To get a real one, we'd need to walk `package.json` ourselves: from `dependencies` (runtime direct), traverse the lockfile's runtime closure, mark anything reached as runtime; anything in `components` outside that closure is dev-only. ~1 day per ecosystem (npm, Python, Java each need their own lockfile-walking logic).
+
+The plan doc's "Under review" item already covers this — the optional-deps filter stays default-off (no-op) until that classifier exists.
+
 **Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, `docs/M6_LLM_SAST_PLAN.md` has an "Under review" section (the optional-deps filter feature) and a "Future improvements" section (deep-reasoning model option, streaming UI, lockfile-based dev classifier, etc.).
