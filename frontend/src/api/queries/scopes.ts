@@ -121,10 +121,29 @@ export function useScopeComponents(
 }
 
 export function useScopeScans(scopeId: string | undefined, limit = 20) {
+  const qc = useQueryClient();
   return useQuery<ScanRunSummary[]>({
     queryKey: [...scopesKey, scopeId, "scans"],
-    queryFn: () => apiFetch<ScanRunSummary[]>(`/api/scopes/${scopeId}/scans?limit=${limit}`),
+    queryFn: async () => {
+      const data = await apiFetch<ScanRunSummary[]>(`/api/scopes/${scopeId}/scans?limit=${limit}`);
+      // When a scan is active we poll; when the most recent run flips to a
+      // terminal state, refresh the scope detail + issues so counts and
+      // last-scan time update without a page reload.
+      const top = data[0];
+      if (top && (top.status === "success" || top.status === "failed")) {
+        const cached = qc.getQueryData<ScanRunSummary[]>([...scopesKey, scopeId, "scans"]);
+        const prevTop = cached?.[0];
+        if (prevTop && (prevTop.status === "pending" || prevTop.status === "running")) {
+          qc.invalidateQueries({ queryKey: scopesKey });
+        }
+      }
+      return data;
+    },
     enabled: !!scopeId,
+    refetchInterval: (query) => {
+      const top = query.state.data?.[0];
+      return top && (top.status === "pending" || top.status === "running") ? 3000 : false;
+    },
   });
 }
 
