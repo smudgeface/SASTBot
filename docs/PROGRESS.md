@@ -339,6 +339,16 @@ Note on test 4: `normalizeSnippet` collapses whitespace runs but does not remove
 6. `20260424170000_repo_source_url_template` — `repos.source_url_template`
 7. `20260424180000_repo_ignore_paths` — `repos.ignore_paths` JSONB default `'[]'`
 
-**Next — M5d Scheduler + M5e Hardening, or M6**
+### Late additions (same day, post-doc-commit)
 
-**Next — M5 remaining (5d Scheduler + 5e Hardening) or M6**
+**Scan cancellation + Scan-now hardening**
+- New `cancelled` value on `ScanStatus` (no migration — `scan_runs.status` is plain TEXT). `scanService.cancelScanRun` walks the BullMQ queue (waiting / delayed / paused), removes the matching job by `scanRunId`, and marks the row cancelled with a clear error message. Idempotent on terminal runs.
+- Worker checks `scan_run.status` on pickup; if it's already `cancelled` (set while the job was waiting), it logs and exits cleanly without writing partial results.
+- New `POST /scans/:id/cancel` admin route. `useCancelScan` hook + Cancel link in the Recent scans drawer (scope page) and a new last column on the Scans audit page (admin-only, on pending/running rows).
+- Backend `triggerScan` now skips scopes that already have a pending/running run before creating a new ScanRun, so accidental double-clicks produce zero new rows.
+- Frontend `useTriggerScan` synchronously prepends the new pending run to each affected scope's scans cache via `setQueryData`, so the "Scanning…" spinner is up the instant the trigger HTTP call returns. No flicker, no double-click window.
+- **Mapper fallback bit us again.** `scanRunToOut.toStatus()` had a four-status allowlist (`pending/running/success/failed`) and silently fell back to `"pending"` for anything else — so cancelled DB rows came out of the API as "pending". Added `cancelled` to the list. Same pattern as the SCA `ALLOWED_DISMISSED` bug ("active" → "pending") earlier this milestone. Lesson reinforced: every hand-written allowlist that mirrors a Zod enum needs an automated way to stay in sync, or it will drift silently.
+
+**Known limitation (not fixed this batch):** when a scan is cancelled while the worker is mid-tool (cdxgen / opengrep already executing), the row is marked cancelled but the external process keeps running. When it finishes, the worker writes `status="success"` and overwrites the cancelled flag. Future fix: status-check between phase boundaries and bail; or check status before the final update and refuse to overwrite cancelled.
+
+**Next — M5d Scheduler + M5e Hardening, or M6**

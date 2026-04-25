@@ -249,6 +249,20 @@ When two scan paths overlap (e.g. `/` and `/services/api`), the deeper path owns
 
 A repo's **Ignore paths** are paths to skip from every scan (vendored code, generated output, internal-only scripts). They're combined with the sibling-scope exclusions and applied to both cdxgen and Opengrep. Stored as `repos.ignore_paths` (JSONB array, default `[]`).
 
+## Cancelling a scan
+
+Pending or running scans can be cancelled by an admin from two places:
+
+- **Scope detail → Recent scans drawer** (the collapsible at the bottom of the scope page).
+- **Scans (audit) page** (`/scans`) — last column on each pending/running row.
+
+Both call `POST /scans/:id/cancel`. The behavior:
+
+- **Pending (queued in BullMQ but not picked up):** the BullMQ job is removed and the row is marked `cancelled` immediately. No worker time consumed.
+- **Running (worker has picked it up):** the row is marked `cancelled` but the worker may already be inside an external process (cdxgen / opengrep) and won't stop mid-tool. The row reflects the user's intent; on next pickup the worker honors `cancelled` status and skips. Known limitation: a tool already executing will finish and the worker's success-write may overwrite the cancelled flag — see PROGRESS.md M5-polish note.
+
+Defense in depth on the trigger path: `POST /admin/repos/:id/scan` checks for pending/running runs per scope and skips creating a new one if any exist. Accidental double-clicks return the existing run rather than queueing duplicates.
+
 ## OSV alias-overlap warning
 
 When ingesting an OSV record whose aliases overlap an existing SCA issue in the same scope+package but whose `osv_id` differs, the worker logs a structured warning:
