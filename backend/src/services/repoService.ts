@@ -93,7 +93,6 @@ export async function createRepo(
           sourceUrlTemplate: input.source_url_template ?? null,
           isActive: input.is_active ?? true,
           retainClone: input.retain_clone ?? false,
-          sastEngine: input.sast_engine ?? "opengrep",
           reachabilityEnabled: input.reachability_enabled ?? true,
         },
       });
@@ -158,7 +157,6 @@ export async function updateRepo(
       }
       if (input.is_active !== undefined) data.isActive = input.is_active;
       if (input.retain_clone !== undefined) data.retainClone = input.retain_clone;
-      if (input.sast_engine !== undefined) data.sastEngine = input.sast_engine;
       if (input.reachability_enabled !== undefined) data.reachabilityEnabled = input.reachability_enabled;
 
       const updated = await tx.repo.update({ where: { id }, data });

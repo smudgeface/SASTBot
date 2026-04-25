@@ -292,16 +292,25 @@ in source).
 right, leave Gocator Classic on `llm`. If not, flip back, file the
 gaps, iterate.
 
-### Phase 6g — Opengrep deprecation
+### Phase 6g — Opengrep deprecation ✅ landed 2026-04-25
 
-- Remove `OPENGREP_BIN` install step from `docker/backend.Dockerfile`.
-- Drop `sastService.ts` (Opengrep wrapper) and its callers in
-  `worker.ts`.
-- Remove the `sast_engine` column or pin all repos to `llm`.
-- Update CLAUDE.md repo-layout section.
+- Removed `OPENGREP_BIN` install step from `docker/backend.Dockerfile`.
+- Deleted `sastService.ts` and `llmTriageService.ts` (per-finding triage
+  was opengrep-only; LLM-mode does it inline during detection).
+- Dropped the opengrep branch from `worker.ts`. Dispatch is now: if
+  `analysis_types` includes "sast", run `runLlmSastPipeline` — no
+  per-engine dispatch.
+- Removed the `repos.sast_engine` column (migration
+  `20260425200000_m6g_drop_sast_engine`) and the `SAST engine` dropdown
+  from the Repo edit form.
+- `backfillSastContextSnippets` worker-startup hook removed.
+- Updated `CLAUDE.md` repo-layout notes.
 
-**Gate:** all active repos are on `sast_engine = "llm"` and have at
-least one successful scan. No regressions surfaced in the past N days.
+**Rollback path** if a hybrid or fallback ever needed: cherry-pick the
+removed pieces from commit `c2c03e8`'s tree (sastService, llmTriageService,
+the worker dispatch, the Dockerfile install). Roughly 10 minutes of
+mechanical work; no schema migration needed since `repos.sast_engine` can
+be re-added with a default of `'llm'`.
 
 ## Pitfalls — read before each phase
 

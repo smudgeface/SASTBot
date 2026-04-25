@@ -12,9 +12,7 @@ import { cloneOrRefresh, RemoteUnreachableError } from "./services/repoCache.js"
 import { persistComponents, runCdxgen } from "./services/sbomService.js";
 import { queryAndPersistFindings, backfillCvssScores, backfillManifestOrigin } from "./services/osvService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
-import { runOpengrep, parseSarif, persistSastFindings, backfillSastContextSnippets } from "./services/sastService.js";
-import { triageFindings } from "./services/llmTriageService.js";
-import { assessReachability, backfillReachability } from "./services/reachabilityService.js";
+import { backfillReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
 import {
   applyRecheckVerdicts,
@@ -348,10 +346,6 @@ backfillLlmSummaries().catch((err) => {
   logger.warn({ err }, "[worker] backfill failed — will retry on next scan");
 });
 
-backfillSastContextSnippets(prisma).catch((err) => {
-  logger.warn({ err }, "[worker] SAST context backfill failed");
-});
-
 backfillCvssScores(prisma).catch((err) => {
   logger.warn({ err }, "[worker] CVSS score backfill failed");
 });
@@ -457,17 +451,15 @@ const worker = new Worker<ScanJobData>(
 
       const findings = [...cveFindings, ...eolFindings];
 
-      // ── Step 6: SAST ─────────────────────────────────────────────────────
-      // Dispatch on repo.sastEngine. "opengrep" preserves the legacy pipeline
-      // (Opengrep + LLM triage). "llm" runs a single Claude Code CLI pass for
-      // SAST + reachability + vendored-library identification.
+      // ── Step 6: SAST (LLM-mode only — Opengrep removed in M6g) ───────────
+      // The LLM pass also emits reachability verdicts and vendored-library
+      // records; standalone reachability + opengrep-era SAST summary backfill
+      // are no longer needed.
       const analysisTypes = Array.isArray(repo.analysisTypes)
         ? (repo.analysisTypes as string[])
         : [];
-      const sastEngine = repo.sastEngine ?? "opengrep";
-      let llmSastRan = false;
 
-      if (analysisTypes.includes("sast") && sastEngine === "llm") {
+      if (analysisTypes.includes("sast")) {
         await runLlmSastPipeline({
           scanRunId,
           repo,
@@ -475,64 +467,6 @@ const worker = new Worker<ScanJobData>(
           scanDir,
           log,
         });
-        llmSastRan = true;
-      } else if (analysisTypes.includes("sast")) {
-        log.info({ scanDir, excludes }, "[worker] running opengrep SAST");
-        const sarif = await runOpengrep(scanDir, excludes);
-        if (sarif === null) {
-          log.warn("[worker] opengrep binary missing — SAST skipped");
-          await appendWarning(scanRunId, {
-            code: "opengrep_missing",
-            message:
-              "Opengrep binary not found; SAST analysis skipped. Install opengrep in the backend image.",
-          });
-        } else {
-          const inputs = parseSarif(sarif, scanDir);
-          log.info({ inputCount: inputs.length }, "[worker] SARIF parsed");
-          const sastFindings = await persistSastFindings(
-            scanRunId,
-            run.scopeId,
-            run.orgId,
-            inputs,
-            prisma,
-            scanDir, // pass the working directory so snippets get ±3 lines of context
-          );
-          log.info({ count: sastFindings.length }, "[worker] SAST findings persisted");
-          await prisma.scanRun.update({
-            where: { id: scanRunId },
-            data: { sastFindingCount: sastFindings.length },
-          });
-
-          // ── Step 6b: LLM triage ───────────────────────────────────────────
-          if (sastFindings.length > 0) {
-            log.info("[worker] starting LLM triage");
-            await triageFindings(scanRunId, run.scopeId, run.orgId, prisma);
-            log.info("[worker] LLM triage complete");
-          }
-
-          // ── Step 6c: LLM summaries for SAST issues ───────────────────────
-          const sastNeedingSummary = await prisma.sastIssue.findMany({
-            where: { scopeId: run.scopeId, lastSeenScanRunId: scanRunId, latestLlmSummary: null },
-            select: { id: true, latestRuleId: true, latestRuleName: true, latestRuleMessage: true, latestFilePath: true, latestSnippet: true },
-          });
-          if (sastNeedingSummary.length > 0) {
-            log.info({ count: sastNeedingSummary.length }, "[worker] generating SAST summaries");
-            for (const issue of sastNeedingSummary) {
-              const summary = await generateIssueSummary("sast", {
-                ruleId: issue.latestRuleId,
-                ruleName: issue.latestRuleName,
-                ruleMessage: issue.latestRuleMessage,
-                filePath: issue.latestFilePath,
-                snippet: issue.latestSnippet,
-                scanRunId,
-                orgId: run.orgId,
-              });
-              if (summary) {
-                await prisma.sastIssue.update({ where: { id: issue.id }, data: { latestLlmSummary: summary } });
-              }
-            }
-          }
-        }
       }
 
       // ── Step 6d: LLM summaries for SCA issues ───────────────────────────
@@ -559,38 +493,12 @@ const worker = new Worker<ScanJobData>(
         }
       }
 
-      // ── Step 7: SCA reachability analysis ────────────────────────────────
-      // In LLM mode, the detection pass already emitted reachability verdicts;
-      // running the standalone service would duplicate the work and
-      // potentially overwrite higher-quality LLM-reasoned verdicts.
-      // When the repo has reachabilityEnabled=false we skip both code paths.
-      if (!repo.reachabilityEnabled) {
-        log.info("[worker] reachability disabled on this repo — skipping");
-      } else if (!llmSastRan) {
-        log.info("[worker] assessing SCA reachability");
-        await assessReachability(scanRunId, run.scopeId, scanDir, run.orgId, prisma);
-        log.info("[worker] reachability assessment complete");
-      } else {
-        log.info("[worker] skipping standalone reachability — handled by LLM SAST pass");
-      }
-
-      // ── Step 8: auto-fix SAST and SCA issues no longer detected in this scan ─
-      // Any non-terminal issue that wasn't seen in this scan is now "fixed".
-      // Exception: in LLM mode, the recheck pass already produced explicit
-      // verdicts (still_present / fixed / file_deleted) for missing SAST issues.
-      // Skipping the SAST sweep avoids closing issues that the recheck judged
-      // still-present (e.g., relocated to a new file).
+      // ── Step 7: SCA auto-fix ─────────────────────────────────────────────
+      // Reachability + SAST recheck are handled inside runLlmSastPipeline.
+      // SCA findings still need the simple "wasn't detected this run → mark
+      // resolved" sweep since cdxgen + OSV don't have an analogous recheck
+      // mechanism (a manifest entry that disappears IS the resolution).
       const TERMINAL_STATUSES = ["fixed", "suppressed", "false_positive"];
-      if (!llmSastRan) {
-        await prisma.sastIssue.updateMany({
-          where: {
-            scopeId: run.scopeId,
-            lastSeenScanRunId: { not: scanRunId },
-            triageStatus: { notIn: TERMINAL_STATUSES },
-          },
-          data: { triageStatus: "fixed" },
-        });
-      }
       await prisma.scaIssue.updateMany({
         where: {
           scopeId: run.scopeId,
@@ -599,9 +507,9 @@ const worker = new Worker<ScanJobData>(
         },
         data: { dismissedStatus: "fixed" },
       });
-      log.info("[worker] auto-fixed resolved issues");
+      log.info("[worker] auto-fixed resolved SCA issues");
 
-      // ── Step 9: update SCA severity summary counters ─────────────────────
+      // ── Step 8: update SCA severity summary counters ─────────────────────
       const counts = { critical: 0, high: 0, medium: 0, low: 0 };
       for (const f of findings) {
         if (f.severity === "critical") counts.critical++;

@@ -352,3 +352,95 @@ Note on test 4: `normalizeSnippet` collapses whitespace runs but does not remove
 **Known limitation (not fixed this batch):** when a scan is cancelled while the worker is mid-tool (cdxgen / opengrep already executing), the row is marked cancelled but the external process keeps running. When it finishes, the worker writes `status="success"` and overwrites the cancelled flag. Future fix: status-check between phase boundaries and bail; or check status before the final update and refuse to overwrite cancelled.
 
 **Next — M5d Scheduler + M5e Hardening, or M6**
+
+---
+
+## M6 — LLM-mode SAST replaces Opengrep (2026-04-25)
+
+### Why we did this
+
+A side-by-side experiment on the Gocator Classic repo showed that Opengrep with `--config auto` fired only 16 distinct rules across 16K files and missed several findings the user's reference Claude-driven CRA audit caught — most notably the CWE-798 super-user password macros at `GsHostProtocol.h:68-69`. Adding a custom rule pack closed that specific gap, but the broader gap (whatever the codebase contains that we haven't yet encoded a rule for) remains. Hand-curated rules are inherently retrospective.
+
+The Claude-driven audit produced a strict superset of Opengrep's findings on the same codebase, plus identified vendored libraries cdxgen literally cannot see (no manifest = invisible to manifest-based SBOM tools). It did so in ~200K total tokens by orchestrating `grep`/`find`/`cat` rather than reading every file end-to-end.
+
+### What shipped
+
+**LLM-mode SAST is now the only SAST path.** A single `claude -p` agentic pass produces JSON-Lines findings parsed and persisted into the existing `SastIssue` table. cdxgen + OSV.dev stays for SCA — manifest-based dep extraction with canonical CVE lookup is a solved problem worth keeping. Reachability and vendored-library identification fold into the same LLM pass; the standalone `reachabilityService` is now only invoked by the worker-startup backfill (still useful for retroactively scoring older issues).
+
+**A targeted re-check pass** verifies any non-terminal `SastIssue` the new detection didn't re-emit before marking it fixed. The model handles the case where a vulnerability moved files (file disappeared at original path → grep across scope → if found, return `still_present` with `current_snippet` from new location). Validated against four synthetic cases (real-still-present, fixed-on-real-line, file-deleted, refactor-relocation) — all four verdicts correct.
+
+**Three prompts under `backend/prompts/`** as Markdown text files, not embedded TS strings, so humans can review and red-pen them: `sast_system.md` (role, honesty rules, snippet rule, severity calibration via CVSS), `sast_detection.md` (scan a scope, emit JSONL records), `sast_recheck.md` (verify N specific issues from a JSONL input file). Variable substitution is `{{KEY}}` → throws on unresolved at load time.
+
+**Auth from `AppSettings`, not env vars.** `claude -p` is invoked with a per-scan subprocess env that injects `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL` from the AppSettings credential the user already configured for LLM triage. No container-wide secrets, no `~/.claude/settings.json` sync. Worker drops to a non-root `claudeuser` (uid 1001) for the subprocess because `claude -p` refuses `--dangerously-skip-permissions` when run as root.
+
+**`repos.reachability_enabled`** flag (default true) — when false, the LLM SAST pass receives an empty SCA-hint file and skips the reachability portion. Useful where reachability output cost ($1.99 of detection on /GoWeb) outweighs signal value (4/120 reachable, mostly on transitive deps that aren't directly imported).
+
+**`cloneOrRefresh` no longer wipes the cache on transient network failure.** New `RemoteUnreachableError` class + `isNetworkError` heuristic; pre-flight `git ls-remote --heads` probe with a 10-second timeout before any destructive operation. Refresh-time `git fetch` failures are classified — only true cache corruption (bad refs, missing objects) triggers the wipe-and-reclone recovery. Triggered by the VPN-drop incident during 6f testing where Gocator Classic's cache got wiped twice. New vitest tests for both branches.
+
+**Schema additions and removals**
+- `repos.llm_sast_token_budget INT DEFAULT 300000` — detection-pass budget
+- `repos.llm_recheck_token_budget INT DEFAULT 50000` — recheck-pass budget
+- `repos.reachability_enabled BOOL DEFAULT true`
+- `sbom_components.discovery_method TEXT DEFAULT 'manifest'` (alt: `'vendored_inspection'`)
+- `sbom_components.evidence_line INT?` — line in the manifest/header file where the LLM identified the version
+- `repos.sast_engine` was added during 6e and removed in 6g — never persisted in production
+
+**Migrations**
+- `20260425100711_m6_llm_sast_engine` — added `sast_engine` and the budgets
+- `20260425191231_m6_reachability_toggle` — added `reachability_enabled`
+- `20260425200000_m6g_drop_sast_engine` — dropped the engine column when LLM-mode became the only path
+
+**UI surfaces**
+- Repo edit form: `Reachability analysis` checkbox (the SAST engine dropdown was removed in 6g)
+- Scope detail SAST tab: new `Conf.` column showing the LLM's detection-time confidence (or "—" for legacy opengrep findings)
+
+### Validation results
+
+**Gocator Classic / scope** — $2.10 ($1.52 detection + $0.58 recheck), ~12 min:
+- Found `GsHostProtocol.h:68-69` super-user password (the original motivating gap), conf 0.99
+- 5 vendored libs surfaced (`nlohmann/json 3.8.0`, `CLI11 1.8.0`, `libzip 1.5.2`, `googletest 1.7.0`, `xxHash`)
+- Bonus finding not in the reference report: hardcoded PIN at `GsHttpServer.cpp:797`
+- 36/36 baseline opengrep findings recheck-confirmed `still_present`. Zero silent loss.
+
+**Gocator Classic /GoWeb scope** — $5.14 ($1.99 detection + $3.15 recheck), ~31 min:
+- 7 vendored libs surfaced (jQuery 1.11.0, jQuery UI 1.8, Raphaël 2.1.4, g.Raphael 0.51, Google Closure Library, CodeMirror, AjaxUpload) — all matching the reference CRA report's CRITICAL/HIGH list
+- Caught all 7 SAST findings the reference report flagged for /GoWeb (lodash _.template injection, eval in rescue upload, innerHTML XSS sites, postMessage origin issues, no-TLS WebSockets, empty default admin password)
+- 276/280 baseline opengrep findings recheck-confirmed `still_present`. 4 missing-verdict + 1 parse error left untouched (no false closure).
+
+**Cost shape**: claude-p reports `total_cost_usd` and the math reconciles to standard-tier pricing ($3/M input, $15/M output, $0.30/M cache_read, $3.75/M cache_create). Across both Gocator scopes — 8.6M total tokens, 252 requests — no API call exceeded the 200K-context tier. Total spend $7.24 for the full Gocator Classic LLM scan, vs. previously $0 for opengrep but missing every C/C++ macro password and every vendored lib.
+
+### What we learned
+
+- **Hindsight pattern matching is the wrong tool for the unknown.** Custom Opengrep rules can recover the specific findings we already know about; they can't help with the next class of problem. The Claude reference report caught CWE-798 macros without anyone hand-encoding a rule for `#define`-macro password literals — that recall floor is what makes the LLM approach durable.
+
+- **Fingerprinting on LLM-emitted snippets is too brittle.** Tiny whitespace drift between runs broke identity and produced duplicate `SastIssue` rows. Fixed by reading the actual source line at `(file_path, start_line)` from disk and hashing that — `sha256(normalize(file_line)).slice(0, 16)`. The orchestrator owns the fingerprint; the LLM only emits CWE + location + snippet for display.
+
+- **CWE drift between siblings (CWE-352 vs CWE-862, CWE-798 vs CWE-259) is real but bounded.** Per-location findings hash on snippet alone — CWE drift doesn't split them. Absence findings hash `__absence__:CWE-XXX` and may occasionally duplicate; tolerated for v1, addressable later via a dedicated `AbsenceIssue` table if it bites.
+
+- **Recheck pass must search-elsewhere for moved files.** The first recheck design returned `file_deleted` whenever the cited path was missing. After feedback, the prompt was updated to grep for the snippet's distinctive content across the codebase first. Validated against a synthetic relocation case where a vulnerability "moved" from `src/old-routes.js` to `src/routes/app.js` — recheck correctly returned `still_present` with `current_snippet` from the new location.
+
+- **`cloneOrRefresh` was destructive on the wrong errors.** A 75-second fetch timeout doesn't mean "your cache is corrupt"; it means "the network is broken." The recovery-by-wipe path was making a transient outage permanent. Distinguishing `RemoteUnreachableError` from genuine cache corruption is two functions and a unit test; the value is letting a VPN reconnect resume the next scan in seconds rather than re-cloning the world.
+
+- **Reachability ROI is debatable.** On /GoWeb at cap=200, 120 hints produced 4 reachable + 116 not-reachable verdicts and burned ~30% of the detection's output token budget. Most "not reachable" verdicts hit transitive deps that aren't directly imported by application code — work the user could shortcut with a `package.json` glance. The per-repo `reachability_enabled` toggle makes that tradeoff visible. We may revisit how/when to run reachability after more real-world data.
+
+- **claude-p refuses `--dangerously-skip-permissions` as root.** Required adding a non-root `claudeuser` (uid 1001) to the worker image and passing `uid` / `gid` to `spawn()`. The per-scan `$HOME` lives at `/tmp/sastbot-<scanRunId>/home/` so concurrent scans (future) won't collide on session state.
+
+- **One stable run isn't enough — but two stable runs back-to-back is signal.** The 6c verification did one persisted scan, looked great, then a second persisted scan produced 11 parse errors and dropped reachability records. Reproducibly intermittent. Two more clean runs after that suggested the API or cache state of claude-p occasionally hits a bad path; orchestrator-level telemetry (parse-error count surfaced as a scan warning) catches it without blocking.
+
+### What's gone
+
+- `backend/src/services/sastService.ts` (Opengrep wrapper)
+- `backend/src/services/llmTriageService.ts` (per-finding triage that LLM-mode does inline)
+- `OPENGREP_VERSION` ARG + binary install in `docker/backend.Dockerfile`
+- `backfillSastContextSnippets` worker-startup hook (opengrep-era SARIF reparse)
+- `repos.sast_engine` column
+- The opengrep branch in `worker.ts`
+
+If we ever want opengrep back — for hybrid dual-engine runs, deterministic CI gates, or as a fallback when the LLM endpoint is down — the implementation lives in commit `c2c03e8^`'s tree and can be cherry-picked back. Roughly 10 minutes of mechanical work plus a feature flag.
+
+### Migrations applied this batch
+1. `20260425100711_m6_llm_sast_engine` — `sast_engine`, `llm_sast_token_budget`, `llm_recheck_token_budget`, `discovery_method`, `evidence_line`
+2. `20260425191231_m6_reachability_toggle` — `reachability_enabled`
+3. `20260425200000_m6g_drop_sast_engine` — drop `sast_engine`
+
+**Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, the future-improvements section in `docs/M6_LLM_SAST_PLAN.md` lists the deep-reasoning model option, streaming UI, and a few smaller items.
