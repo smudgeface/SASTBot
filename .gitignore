@@ -27,6 +27,9 @@ node_modules/
 .pnpm-store/
 frontend/dist/
 frontend/.vite/
+# tsc artifacts of vite.config.ts (we keep the .ts source only)
+frontend/vite.config.js
+frontend/vite.config.d.ts
 *.tsbuildinfo
 
 # Editor / OS
