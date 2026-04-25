@@ -37,7 +37,7 @@ import {
   useUnlinkScaIssueFromJira,
 } from "@/api/queries/jira";
 import type { JiraTicket } from "@/api/types";
-import { useTriggerScan } from "@/api/queries/scans";
+import { useTriggerScan, useCancelScan } from "@/api/queries/scans";
 import { useSettings } from "@/api/queries/settings";
 import { useMe } from "@/api/queries/auth";
 import type { SastIssue, ScaIssue } from "@/api/types";
@@ -1552,6 +1552,7 @@ function ComponentsTab({ scopeId }: { scopeId: string }) {
 function RecentScansSection({ scopeId }: { scopeId: string }) {
   const [open, setOpen] = useState(false);
   const { data: scans } = useScopeScans(scopeId, 10);
+  const cancelScan = useCancelScan();
 
   return (
     <div className="border rounded-lg">
@@ -1569,7 +1570,9 @@ function RecentScansSection({ scopeId }: { scopeId: string }) {
             <p className="p-4 text-sm text-muted-foreground">No scans yet.</p>
           ) : (
             <ul className="divide-y">
-              {scans.map((s) => (
+              {scans.map((s) => {
+                const isActive = s.status === "pending" || s.status === "running";
+                return (
                 <li key={s.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
                   <div className="flex items-center gap-3">
                     <span
@@ -1578,11 +1581,21 @@ function RecentScansSection({ scopeId }: { scopeId: string }) {
                           ? "bg-green-500"
                           : s.status === "failed"
                           ? "bg-destructive"
+                          : s.status === "cancelled"
+                          ? "bg-muted-foreground/40"
                           : "bg-amber-400"
                       }`}
                     />
                     <span className="text-muted-foreground text-xs">
-                      {s.finished_at ? formatRelative(s.finished_at) : "running…"}
+                      {s.status === "running"
+                        ? "running…"
+                        : s.status === "pending"
+                        ? "queued"
+                        : s.status === "cancelled"
+                        ? "cancelled"
+                        : s.finished_at
+                        ? formatRelative(s.finished_at)
+                        : "—"}
                     </span>
                     {s.critical_count > 0 && (
                       <span className="text-[10px] text-destructive">{s.critical_count}C</span>
@@ -1591,15 +1604,28 @@ function RecentScansSection({ scopeId }: { scopeId: string }) {
                       <span className="text-[10px] text-muted-foreground">{s.sast_finding_count} SAST</span>
                     )}
                   </div>
-                  <Link
-                    to={`/scans/${s.id}`}
-                    className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    View <ExternalLink className="h-3 w-3" />
-                  </Link>
+                  <div className="flex items-center gap-3">
+                    {isActive && (
+                      <button
+                        type="button"
+                        className="text-xs text-destructive hover:underline disabled:opacity-50"
+                        disabled={cancelScan.isPending}
+                        onClick={(e) => { e.stopPropagation(); cancelScan.mutate(s.id); }}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                    <Link
+                      to={`/scans/${s.id}`}
+                      className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      View <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  </div>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>

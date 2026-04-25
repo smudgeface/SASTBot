@@ -4,6 +4,10 @@ import { prisma } from "../db.js";
 import { RepoNotFoundError } from "./repoService.js";
 import { getScanQueue } from "../queue/scanQueue.js";
 
+export class ScanRunNotFoundError extends Error {
+  constructor() { super("Scan run not found"); }
+}
+
 export interface TriggerScanInput {
   repoId: string;
   orgId: string | null;
@@ -69,4 +73,49 @@ export async function triggerScan(input: TriggerScanInput): Promise<ScanRun[]> {
   }
 
   return runs;
+}
+
+/**
+ * Cancel a pending or running scan run. For waiting/delayed BullMQ jobs we
+ * remove the job from the queue. For an already-running job we set the
+ * scan_run row to "cancelled" so the worker bails on the next phase boundary
+ * (the worker checks status before each major step). Returns the updated
+ * ScanRun. Raises ScanRunNotFoundError if the id doesn't exist.
+ *
+ * Idempotent: cancelling a run that's already in a terminal state is a no-op
+ * and returns the row unchanged.
+ */
+export async function cancelScanRun(scanRunId: string, orgId: string | null): Promise<ScanRun> {
+  const run = await prisma.scanRun.findFirst({
+    where: { id: scanRunId, orgId: orgId ?? null },
+  });
+  if (!run) throw new ScanRunNotFoundError();
+
+  if (run.status === "success" || run.status === "failed" || run.status === "cancelled") {
+    return run;
+  }
+
+  // Best-effort: remove the BullMQ job for this run. The job's data carries
+  // scanRunId so we look it up rather than trusting BullMQ's incrementing id.
+  const queue = getScanQueue();
+  const jobs = await queue.getJobs(["waiting", "delayed", "paused", "wait"]);
+  for (const job of jobs) {
+    const data = job.data as { scanRunId?: string };
+    if (data?.scanRunId === scanRunId) {
+      try { await job.remove(); } catch {
+        // ignore: job may have moved to active between lookup and remove
+      }
+    }
+  }
+
+  return prisma.scanRun.update({
+    where: { id: scanRunId },
+    data: {
+      status: "cancelled",
+      finishedAt: new Date(),
+      error: run.status === "running"
+        ? "Cancelled by user while running — partial results may have been written"
+        : "Cancelled by user before scan started",
+    },
+  });
 }

@@ -177,6 +177,11 @@ const worker = new Worker<ScanJobData>(
       log.warn("[worker] scan run or repo missing — nothing to do");
       return;
     }
+    // Honor cancel requests that landed while the job was queued.
+    if (run.status === "cancelled") {
+      log.info("[worker] scan run was cancelled before start — skipping");
+      return;
+    }
     const { repo } = run;
 
     await prisma.scanRun.update({
