@@ -37,6 +37,17 @@ export async function triggerScan(input: TriggerScanInput): Promise<ScanRun[]> {
   const queue = getScanQueue();
 
   for (const scope of scopes) {
+    // Defense in depth: don't queue another run for a scope that already has
+    // a pending/running one. Frontend disables the button while scanning, but
+    // a fast double-click or stale state shouldn't pile scans up either.
+    const existing = await prisma.scanRun.findFirst({
+      where: { scopeId: scope.id, status: { in: ["pending", "running"] } },
+    });
+    if (existing) {
+      runs.push(existing);
+      continue;
+    }
+
     const run = await prisma.scanRun.create({
       data: {
         orgId: repo.orgId,

@@ -78,14 +78,42 @@ export function useScanFindings(
 }
 
 /** Trigger a scan for a given repo (one run per active scope).
- *  Invalidates the scans list so the new pending rows appear immediately. */
+ *  Synchronously prepends the new pending run(s) onto the per-scope scans
+ *  cache so the "Scanning…" spinner on /scopes/:id is up the instant the
+ *  trigger HTTP call returns — without this the polling cache still holds
+ *  the previous run's success/failed status until the next 3s tick and the
+ *  button flickers back to "Scan now" in between. */
 export function useTriggerScan() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (repoId: string) =>
       apiFetch<Scan[]>(`/admin/repos/${repoId}/scan`, { method: "POST" }),
-    onSuccess: () => {
+    onSuccess: (runs) => {
+      // 1. Prepend each new run to its scope's scans cache (used by the
+      //    polling hook on the scope detail page).
+      for (const run of runs) {
+        const key = ["scopes", run.scope_id, "scans"] as const;
+        qc.setQueryData<{ id: string; status: string }[]>(key, (old) => {
+          const stub = {
+            id: run.id,
+            status: run.status, // "pending" — guarantees isScanning=true
+            triggered_by: run.triggered_by,
+            started_at: run.started_at,
+            finished_at: run.finished_at,
+            error: run.error,
+            component_count: run.component_count,
+            critical_count: run.critical_count,
+            high_count: run.high_count,
+            sast_finding_count: 0,
+            created_at: new Date().toISOString(),
+          };
+          return [stub, ...(old ?? [])];
+        });
+      }
+      // 2. Standard invalidations so the audit list and any other consumers
+      //    refresh from the server too.
       qc.invalidateQueries({ queryKey: scansKey });
+      qc.invalidateQueries({ queryKey: ["scopes"] });
     },
   });
 }
