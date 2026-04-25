@@ -38,7 +38,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { severityChipClass, formatDate } from "@/lib/format";
 
@@ -67,6 +67,46 @@ function SeverityBadge({ severity }: { severity: string }) {
   );
 }
 
+function basename(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/");
+  return parts[parts.length - 1] ?? path;
+}
+
+function buildSourceUrl(template: string | null | undefined, file: string, line?: number | null): string | null {
+  if (!template) return null;
+  return template
+    .replace(/\$FILE/g, encodeURI(file))
+    .replace(/\$LINE/g, line != null ? String(line) : "");
+}
+
+function FileLink({
+  template,
+  file,
+  line,
+  className,
+  children,
+}: {
+  template: string | null | undefined;
+  file: string;
+  line?: number | null;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const url = buildSourceUrl(template, file, line);
+  if (!url) return <span className={className}>{children}</span>;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={cn("hover:underline hover:text-foreground", className)}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {children}
+    </a>
+  );
+}
+
 function SummaryCard({ label, value, severity }: { label: string; value: number; severity?: FindingSeverity }) {
   return (
     <Card>
@@ -84,9 +124,19 @@ function SummaryCard({ label, value, severity }: { label: string; value: number;
 // SCA findings tab (raw detections)
 // ---------------------------------------------------------------------------
 
-function FindingRow({ finding }: { finding: ScanFinding }) {
+function FindingRow({
+  finding,
+  manifestFile,
+  sourceUrlTemplate,
+}: {
+  finding: ScanFinding;
+  manifestFile: string | null | undefined;
+  sourceUrlTemplate: string | null | undefined;
+}) {
   const [expanded, setExpanded] = useState(false);
   const isCve = finding.finding_type === "cve";
+  const summary = finding.summary
+    ?? (finding.finding_type === "eol" ? "End of life" : finding.finding_type === "deprecated" ? "Deprecated package" : "—");
 
   return (
     <>
@@ -94,35 +144,64 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
         <TableCell className="w-6">
           {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
         </TableCell>
-        <TableCell className="w-28"><SeverityBadge severity={finding.severity} /></TableCell>
-        <TableCell className="font-medium">
-          {finding.component_name}
-          {finding.component_version && <span className="ml-1 text-xs text-muted-foreground">@{finding.component_version}</span>}
-          {finding.component_scope === "optional" && (
-            <span className="ml-1 inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-semibold text-slate-500 border-slate-300">DEV</span>
-          )}
+        <TableCell className="w-24"><SeverityBadge severity={finding.severity} /></TableCell>
+        <TableCell className="text-sm">
+          <div className="line-clamp-1">{summary}</div>
+          <div className="text-xs text-muted-foreground font-mono mt-0.5">
+            {finding.component_name}
+            {finding.component_version && <span>@{finding.component_version}</span>}
+          </div>
         </TableCell>
-        <TableCell className="font-mono text-xs">
-          {isCve ? (
-            <a href={vulnUrl(finding.cve_id ?? finding.osv_id)} target="_blank" rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()} className="hover:underline text-blue-600 dark:text-blue-400">
-              {finding.cve_id ?? finding.osv_id}
-            </a>
-          ) : (
-            <span className={cn("inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase",
-              finding.finding_type === "eol"
-                ? "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300"
-                : "bg-amber-100 text-amber-800 border-amber-200")}>
-              {finding.finding_type === "eol" ? "End of Life" : "Deprecated"}
-            </span>
-          )}
+        <TableCell
+          className="w-64 font-mono text-xs text-muted-foreground truncate"
+          title={manifestFile ?? undefined}
+        >
+          {manifestFile ? basename(manifestFile) : "—"}
         </TableCell>
-        <TableCell className="max-w-sm text-sm text-muted-foreground line-clamp-1">{finding.summary ?? "—"}</TableCell>
       </TableRow>
       {expanded && (
         <TableRow>
-          <TableCell colSpan={5} className="bg-muted/30 py-3 px-6 space-y-2 text-sm">
+          <TableCell colSpan={4} className="bg-muted/30 py-3 px-6 space-y-2 text-sm">
             {finding.summary && <p>{finding.summary}</p>}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span className="font-mono">
+                {finding.component_name}
+                {finding.component_version && <span>@{finding.component_version}</span>}
+              </span>
+              {finding.component_scope === "optional" && (
+                <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-semibold text-slate-500 border-slate-300">DEV</span>
+              )}
+              {isCve && (
+                <a
+                  href={vulnUrl(finding.cve_id ?? finding.osv_id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="font-mono hover:underline text-blue-600 dark:text-blue-400"
+                >
+                  {finding.cve_id ?? finding.osv_id}
+                </a>
+              )}
+              {finding.finding_type === "eol" && (
+                <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300">
+                  End of Life
+                </span>
+              )}
+              {finding.finding_type === "deprecated" && (
+                <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-amber-100 text-amber-800 border-amber-200">
+                  Deprecated
+                </span>
+              )}
+              {finding.has_fix && <span className="text-green-600 font-medium">✓ Fix available</span>}
+            </div>
+            {manifestFile && (
+              <p className="text-xs">
+                <span className="text-muted-foreground">Declared in </span>
+                <FileLink template={sourceUrlTemplate} file={manifestFile} className="font-mono">
+                  {manifestFile}
+                </FileLink>
+              </p>
+            )}
             {finding.eol_date && <p className="text-xs text-muted-foreground">EOL date: {finding.eol_date.slice(0, 10)}</p>}
             {isCve && finding.aliases.length > 0 && (
               <div className="flex flex-wrap gap-1">
@@ -136,7 +215,6 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
             {isCve && finding.cvss_vector && (
               <p className="font-mono text-xs text-muted-foreground">{finding.cvss_vector}</p>
             )}
-            {finding.has_fix && <p className="text-xs text-green-600 font-medium">✓ Fix available</p>}
           </TableCell>
         </TableRow>
       )}
@@ -148,7 +226,13 @@ function FindingRow({ finding }: { finding: ScanFinding }) {
 // SAST detections tab (raw detections, no triage actions)
 // ---------------------------------------------------------------------------
 
-function SastRow({ finding }: { finding: SastFinding }) {
+function SastRow({
+  finding,
+  sourceUrlTemplate,
+}: {
+  finding: SastFinding;
+  sourceUrlTemplate: string | null | undefined;
+}) {
   const [expanded, setExpanded] = useState(false);
   const summary = finding.rule_message ?? finding.rule_id.split(".").pop()?.replace(/-/g, " ") ?? finding.rule_id;
 
@@ -158,25 +242,36 @@ function SastRow({ finding }: { finding: SastFinding }) {
         <TableCell className="w-6">
           {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
         </TableCell>
-        <TableCell><SeverityBadge severity={finding.severity} /></TableCell>
-        <TableCell className="text-sm text-muted-foreground max-w-sm truncate">{summary}</TableCell>
-        <TableCell className="font-mono text-xs text-muted-foreground">{finding.file_path}:{finding.start_line}</TableCell>
+        <TableCell className="w-24"><SeverityBadge severity={finding.severity} /></TableCell>
+        <TableCell className="text-sm text-muted-foreground line-clamp-1">{summary}</TableCell>
+        <TableCell
+          className="w-64 font-mono text-xs text-muted-foreground truncate"
+          title={`${finding.file_path}:${finding.start_line}`}
+        >
+          {basename(finding.file_path)}:{finding.start_line}
+        </TableCell>
       </TableRow>
       {expanded && (
         <TableRow>
           <TableCell colSpan={4} className="bg-muted/30 py-3 px-6 space-y-2">
+            <p className="text-xs">
+              <FileLink
+                template={sourceUrlTemplate}
+                file={finding.file_path}
+                line={finding.start_line}
+                className="font-mono"
+              >
+                {finding.file_path}:{finding.start_line}
+              </FileLink>
+            </p>
             {finding.snippet && (
               <pre className="rounded bg-background border p-3 text-xs overflow-x-auto font-mono whitespace-pre-wrap">{finding.snippet}</pre>
             )}
             {finding.rule_message && <p className="text-sm text-muted-foreground">{finding.rule_message}</p>}
+            <p className="font-mono text-xs text-muted-foreground">{finding.rule_id}</p>
             {finding.cwe_ids.length > 0 && (
               <div className="flex gap-1">{finding.cwe_ids.map((c) => <Badge key={c} variant="outline" className="font-mono text-xs">{c}</Badge>)}</div>
             )}
-            <p className="text-xs text-muted-foreground">
-              Issue ID: <Link to={`/scopes/${/* issue links to scope */ ""}`} className="font-mono">{finding.issue_id.slice(0, 8)}…</Link>
-              {" — "}
-              <Link to={`/scopes/${""}`} className="underline">View triage on scope page</Link>
-            </p>
           </TableCell>
         </TableRow>
       )}
@@ -284,7 +379,10 @@ export default function ScanDetailPage() {
     setter(next);
   }
 
-  const repoName = repos.data?.find((r) => r.id === scan.data?.repo_id)?.name;
+  const repo = repos.data?.find((r) => r.id === scan.data?.repo_id);
+  const repoName = repo?.name;
+  const sourceUrlTemplate = repo?.source_url_template ?? null;
+  const componentsById = new Map((components.data ?? []).map((c) => [c.id, c]));
   const allFindings = findings.data ?? [];
   const sortedFindings = [...allFindings].sort(
     (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || (b.cvss_score ?? 0) - (a.cvss_score ?? 0),
@@ -442,13 +540,21 @@ export default function ScanDetailPage() {
                     <TableHeader>
                       <TableRow>
                         <TableHead className="w-6" />
-                        <TableHead className="w-28">Severity</TableHead>
-                        <TableHead>Package</TableHead>
-                        <TableHead>Finding</TableHead>
+                        <TableHead className="w-24">Severity</TableHead>
                         <TableHead>Summary</TableHead>
+                        <TableHead className="w-64">Location</TableHead>
                       </TableRow>
                     </TableHeader>
-                    <TableBody>{filteredFindings.map((f) => <FindingRow key={f.id} finding={f} />)}</TableBody>
+                    <TableBody>
+                      {filteredFindings.map((f) => (
+                        <FindingRow
+                          key={f.id}
+                          finding={f}
+                          manifestFile={componentsById.get(f.component_id)?.manifest_file ?? null}
+                          sourceUrlTemplate={sourceUrlTemplate}
+                        />
+                      ))}
+                    </TableBody>
                   </Table>
                 </Card>
               )}
@@ -485,12 +591,16 @@ export default function ScanDetailPage() {
                     <TableHeader>
                       <TableRow>
                         <TableHead className="w-6" />
-                        <TableHead>Severity</TableHead>
+                        <TableHead className="w-24">Severity</TableHead>
                         <TableHead>Summary</TableHead>
-                        <TableHead>Location</TableHead>
+                        <TableHead className="w-64">Location</TableHead>
                       </TableRow>
                     </TableHeader>
-                    <TableBody>{filteredSast.map((f) => <SastRow key={f.id} finding={f} />)}</TableBody>
+                    <TableBody>
+                      {filteredSast.map((f) => (
+                        <SastRow key={f.id} finding={f} sourceUrlTemplate={sourceUrlTemplate} />
+                      ))}
+                    </TableBody>
                   </Table>
                 </Card>
               )}
