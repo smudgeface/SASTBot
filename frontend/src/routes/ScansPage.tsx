@@ -2,8 +2,9 @@ import { FileSearch } from "lucide-react";
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { useMe } from "@/api/queries/auth";
 import { useRepos } from "@/api/queries/repos";
-import { useScans } from "@/api/queries/scans";
+import { useScans, useCancelScan } from "@/api/queries/scans";
 import type { ScanStatus } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +24,7 @@ const STATUS_STYLE: Record<ScanStatus, string> = {
   running: "bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200",
   success: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
   failed: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200",
+  cancelled: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
 };
 
 const STATUS_LABEL: Record<ScanStatus, string> = {
@@ -30,6 +32,7 @@ const STATUS_LABEL: Record<ScanStatus, string> = {
   running: "running",
   success: "complete",
   failed: "failed",
+  cancelled: "cancelled",
 };
 
 function StatusBadge({ status }: { status: ScanStatus }) {
@@ -97,6 +100,9 @@ export default function ScansPage() {
   const navigate = useNavigate();
   const scans = useScans();
   const repos = useRepos();
+  const { data: user } = useMe();
+  const isAdmin = user?.role === "admin";
+  const cancelScan = useCancelScan();
 
   const repoNameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -146,10 +152,13 @@ export default function ScansPage() {
                 <TableHead>Trigger</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead>Duration</TableHead>
+                <TableHead className="w-20" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.map((scan) => (
+              {items.map((scan) => {
+                const isActive = scan.status === "pending" || scan.status === "running";
+                return (
                 <TableRow
                   key={scan.id}
                   className="cursor-pointer hover:bg-muted/50"
@@ -186,8 +195,21 @@ export default function ScansPage() {
                   <TableCell className="text-muted-foreground">
                     {formatDuration(scan.started_at, scan.finished_at)}
                   </TableCell>
+                  <TableCell>
+                    {isAdmin && isActive && (
+                      <button
+                        type="button"
+                        className="text-xs text-destructive hover:underline disabled:opacity-50"
+                        disabled={cancelScan.isPending}
+                        onClick={(e) => { e.stopPropagation(); cancelScan.mutate(scan.id); }}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </Card>
