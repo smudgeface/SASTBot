@@ -185,6 +185,7 @@ export const RepoCreateSchema = z.object({
   protocol: RepoProtocolSchema,
   default_branch: z.string().min(1).max(255).default("main"),
   scan_paths: z.array(z.string()).default(["/"]),
+  ignore_paths: z.array(z.string()).default([]),
   analysis_types: z.array(AnalysisTypeSchema).default(["sca"]),
   schedule_cron: z.string().nullable().optional(),
   /** Optional URL template used to make file paths in SAST/SCA detail views
@@ -206,6 +207,7 @@ export const RepoUpdateSchema = z.object({
   protocol: RepoProtocolSchema.optional(),
   default_branch: z.string().min(1).max(255).optional(),
   scan_paths: z.array(z.string()).optional(),
+  ignore_paths: z.array(z.string()).optional(),
   analysis_types: z.array(AnalysisTypeSchema).optional(),
   schedule_cron: z.string().nullable().optional(),
   source_url_template: z.string().max(2048).nullable().optional(),
@@ -225,6 +227,7 @@ export const RepoOutSchema = z.object({
   credential_id: UuidSchema.nullable(),
   default_branch: z.string(),
   scan_paths: z.array(z.string()),
+  ignore_paths: z.array(z.string()),
   analysis_types: z.array(AnalysisTypeSchema),
   schedule_cron: z.string().nullable(),
   source_url_template: z.string().nullable(),

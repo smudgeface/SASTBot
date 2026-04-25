@@ -211,8 +211,13 @@ const worker = new Worker<ScanJobData>(
       // When the same repo defines nested scopes (e.g. "/" and "/GoWeb"),
       // the broader scope excludes the deeper sibling so files aren't
       // double-counted. We also strip excluded subtrees from opengrep.
+      // Per-repo ignore_paths are concatenated with sibling scopes — both
+      // are "things to skip from this scope's tree", so the same logic
+      // handles them. An ignore path that isn't under this scope is
+      // filtered out by computeScopeExclusions.
       const allScanPaths = (Array.isArray(repo.scanPaths) ? repo.scanPaths : ["/"]) as string[];
-      const excludes = computeScopeExclusions(scopePath, allScanPaths);
+      const ignorePaths = (Array.isArray(repo.ignorePaths) ? repo.ignorePaths : []) as string[];
+      const excludes = computeScopeExclusions(scopePath, [...allScanPaths, ...ignorePaths]);
 
       log.info({ scanDir, scopePath, excludes }, "[worker] running cdxgen");
       const sbomDoc = await runCdxgen(scanDir, excludes);

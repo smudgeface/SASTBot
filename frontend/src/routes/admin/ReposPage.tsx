@@ -384,6 +384,9 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   const [scanPathsText, setScanPathsText] = useState(
     (repo?.scan_paths ?? []).join(", "),
   );
+  const [ignorePathsText, setIgnorePathsText] = useState(
+    (repo?.ignore_paths ?? []).join(", "),
+  );
   const [sca, setSca] = useState<boolean>(repo?.analysis_types.includes("sca") ?? true);
   const [sast, setSast] = useState<boolean>(repo?.analysis_types.includes("sast") ?? true);
   const [retainClone, setRetainClone] = useState<boolean>(repo?.retain_clone ?? false);
@@ -418,12 +421,18 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       .map((p) => p.trim())
       .filter(Boolean);
 
+    const ignore_paths = ignorePathsText
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+
     const payload: RepoUpsertInput = {
       name: name.trim(),
       url: url.trim(),
       protocol,
       default_branch: defaultBranch.trim() || "main",
       scan_paths,
+      ignore_paths,
       analysis_types,
       retain_clone: retainClone,
       source_url_template: sourceUrlTemplate.trim() || null,
@@ -466,6 +475,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
         setProtocol("https");
         setDefaultBranch("main");
         setScanPathsText("");
+        setIgnorePathsText("");
         setSca(true);
         setSast(true);
         setRetainClone(false);
@@ -561,6 +571,20 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
             />
             <p className="text-xs text-muted-foreground">
               Comma-separated paths, relative to the repo root. Leave blank to scan everything.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="repo-ignore-paths">Ignore paths</Label>
+            <Input
+              id="repo-ignore-paths"
+              value={ignorePathsText}
+              onChange={(e) => setIgnorePathsText(e.target.value)}
+              placeholder="scripts/internal, tools/dev"
+            />
+            <p className="text-xs text-muted-foreground">
+              Comma-separated paths to skip across all scopes. Useful for internal-only scripts,
+              vendored code, or generated output. Applied at scan time.
             </p>
           </div>
 

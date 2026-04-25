@@ -131,6 +131,7 @@ export interface Repo {
   protocol: RepoProtocol;
   default_branch: string;
   scan_paths: string[];
+  ignore_paths: string[];
   analysis_types: AnalysisType[];
   credential_id: string | null;
   retain_clone: boolean;
@@ -146,6 +147,7 @@ export interface RepoUpsertInput {
   protocol: RepoProtocol;
   default_branch: string;
   scan_paths: string[];
+  ignore_paths?: string[];
   analysis_types: AnalysisType[];
   retain_clone?: boolean;
   source_url_template?: string | null;

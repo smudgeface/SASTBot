@@ -145,6 +145,7 @@ export function repoToOut(repo: Repo): RepoOut {
     credential_id: repo.credentialId,
     default_branch: repo.defaultBranch,
     scan_paths: toStringArray(repo.scanPaths),
+    ignore_paths: toStringArray(repo.ignorePaths),
     analysis_types: toAnalysisArray(repo.analysisTypes),
     schedule_cron: repo.scheduleCron,
     source_url_template: repo.sourceUrlTemplate,
