@@ -275,7 +275,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_dev_deps: boolean;
+                            reachability_include_optional_deps: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         }[];
@@ -345,8 +345,8 @@ export interface paths {
                         retain_clone?: boolean;
                         /** @default true */
                         reachability_enabled?: boolean;
-                        /** @default false */
-                        reachability_include_dev_deps?: boolean;
+                        /** @default true */
+                        reachability_include_optional_deps?: boolean;
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -418,7 +418,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_dev_deps: boolean;
+                            reachability_include_optional_deps: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -510,7 +510,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_dev_deps: boolean;
+                            reachability_include_optional_deps: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -577,7 +577,7 @@ export interface paths {
                         is_active?: boolean;
                         retain_clone?: boolean;
                         reachability_enabled?: boolean;
-                        reachability_include_dev_deps?: boolean;
+                        reachability_include_optional_deps?: boolean;
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -649,7 +649,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_dev_deps: boolean;
+                            reachability_include_optional_deps: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -813,7 +813,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_dev_deps: boolean;
+                            reachability_include_optional_deps: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };

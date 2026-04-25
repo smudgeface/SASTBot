@@ -199,10 +199,13 @@ export const RepoCreateSchema = z.object({
    *  high+critical SCA issues, saving output-token cost on repos where
    *  the reachability signal hasn't proven worth it. */
   reachability_enabled: z.boolean().default(true),
-  /** When reachability is enabled, also include cdxgen `optional`-scoped
-   *  components (dev / build-time deps) in the hint set. Default false:
-   *  most dev-only CVEs aren't worth a token-paid reachability verdict. */
-  reachability_include_dev_deps: z.boolean().default(false),
+  /** Whether to include cdxgen `scope: "optional"` components in the LLM
+   *  reachability hint set. Default true — cdxgen's `optional` scope
+   *  conflates devDependencies with transitive runtime deps, so excluding
+   *  it would drop real reachable runtime CVEs. Operators who have
+   *  separately verified that their `optional`-scoped components are
+   *  build-only can flip this off to save output tokens. */
+  reachability_include_optional_deps: z.boolean().default(true),
   credential_id: UuidSchema.nullable().optional(),
   // NOTE: the contract names the inline field `credential`, NOT `new_credential`.
   credential: CredentialCreateSchema.nullable().optional(),
@@ -222,7 +225,7 @@ export const RepoUpdateSchema = z.object({
   is_active: z.boolean().optional(),
   retain_clone: z.boolean().optional(),
   reachability_enabled: z.boolean().optional(),
-  reachability_include_dev_deps: z.boolean().optional(),
+  reachability_include_optional_deps: z.boolean().optional(),
   credential_id: UuidSchema.nullable().optional(),
   credential: CredentialCreateSchema.nullable().optional(),
 });
@@ -244,7 +247,7 @@ export const RepoOutSchema = z.object({
   is_active: z.boolean(),
   retain_clone: z.boolean(),
   reachability_enabled: z.boolean(),
-  reachability_include_dev_deps: z.boolean(),
+  reachability_include_optional_deps: z.boolean(),
   /** Set whenever the worker finishes a clone/fetch for this repo. Null
    *  means no local cache exists — "Purge cache" should be disabled. */
   last_cloned_at: IsoDateTimeSchema.nullable(),

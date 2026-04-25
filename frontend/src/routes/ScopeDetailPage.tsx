@@ -1077,7 +1077,16 @@ function ScaIssueRow({
     dismiss.mutate({ issueId: issue.id, status });
   };
 
-  const isDev = issue.latest_component_scope === "optional";
+  // NOTE: `latest_component_scope === "optional"` is NOT a reliable
+  // dev-only signal. cdxgen marks both devDependencies AND transitive
+  // runtime deps as "optional" — see PROGRESS.md M6 retrospective. We
+  // surface the raw scope value in the expanded view but do not badge
+  // it on the row, since "DEV" would misrepresent transitive runtime
+  // deps as dev-only.
+  const componentScopeLabel =
+    issue.latest_component_scope === "required"
+      ? "runtime"
+      : (issue.latest_component_scope ?? "unknown");
 
   return (
     <>
@@ -1137,11 +1146,6 @@ function ScaIssueRow({
             <span className="text-[10px] text-muted-foreground uppercase font-medium">
               {issue.latest_finding_type === "deprecated" ? "Deprecated" : issue.latest_finding_type.toUpperCase()}
             </span>
-            {isDev && (
-              <Badge variant="outline" className="text-[9px] px-1 py-0 text-slate-500 border-slate-300">
-                DEV
-              </Badge>
-            )}
             {issue.latest_has_fix && (
               <Badge variant="outline" className="text-[9px] px-1 py-0 text-green-600 border-green-400">
                 Has fix
@@ -1240,7 +1244,7 @@ function ScaIssueRow({
               )}
               <span>
                 <span className="font-medium">Scope:</span>{" "}
-                {isDev ? "dev / optional" : issue.latest_component_scope === "required" ? "runtime" : (issue.latest_component_scope ?? "unknown")}
+                {componentScopeLabel}
               </span>
             </div>
             {issue.reachable_assessed_at && (
@@ -1376,7 +1380,7 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeI
 
   const hasScaFilter = !!(
     filters.severities?.length || filters.finding_types?.length || filters.dismissed_statuses?.length ||
-    filters.reachable || filters.has_fix || filters.hide_dev || filters.include_resolved
+    filters.reachable || filters.has_fix || filters.include_resolved
   );
 
   const attentionCount = (data?.items ?? []).filter(
@@ -1413,7 +1417,6 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeI
           items={[
             { key: "reachable", label: "Reachable", active: !!filters.reachable, onToggle: () => setFilters((f) => ({ ...f, page: 1, reachable: !f.reachable })) },
             { key: "has_fix",   label: "Has fix",   active: !!filters.has_fix,   onToggle: () => setFilters((f) => ({ ...f, page: 1, has_fix: !f.has_fix })) },
-            { key: "hide_dev",  label: "Hide DEV",  active: !!filters.hide_dev,  onToggle: () => setFilters((f) => ({ ...f, page: 1, hide_dev: !f.hide_dev })) },
           ]}
         />
         <Pipe />
@@ -1534,10 +1537,8 @@ function ComponentsTab({ scopeId }: { scopeId: string }) {
                     <TableCell className="text-sm text-muted-foreground">{c.version ?? "—"}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{c.ecosystem ?? "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{c.component_type}</TableCell>
-                    <TableCell className="text-xs">
-                      {c.scope === "optional" ? (
-                        <Badge variant="outline" className="text-[9px] text-slate-500">DEV</Badge>
-                      ) : c.scope ?? "—"}
+                    <TableCell className="text-xs text-muted-foreground">
+                      {c.scope === "required" ? "runtime" : (c.scope ?? "—")}
                     </TableCell>
                   </TableRow>
                 ))}

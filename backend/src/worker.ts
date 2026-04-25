@@ -60,7 +60,7 @@ interface LlmSastPipelineInput {
     llmSastTokenBudget: number;
     llmRecheckTokenBudget: number;
     reachabilityEnabled: boolean;
-    reachabilityIncludeDevDeps: boolean;
+    reachabilityIncludeOptionalDeps: boolean;
   };
   run: { scopeId: string; orgId: string | null };
   scanDir: string;
@@ -81,18 +81,21 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
     //    save the output tokens that would have gone into 100+ verdicts.
     let scaHints: ScaHintInput[] = [];
     if (repo.reachabilityEnabled) {
-      // Filter cdxgen `optional`-scoped components (devDependencies / build
-      // tooling) unless the repo opts in. cdxgen reuses the CycloneDX
-      // `scope` field — `required` for runtime, `optional` for dev/build.
-      // The /GoWeb experiment showed dev-tooling CVEs dominated the hint
-      // list with no actionable verdicts; this filter cuts that noise.
+      // Optionally exclude cdxgen `scope: "optional"` components from the
+      // hint set. CAVEAT: cdxgen marks first-level direct deps as
+      // `required` and lumps BOTH devDependencies AND transitive runtime
+      // deps into `optional`. So filtering by this scope drops real
+      // reachable runtime CVEs (verified case: requirejs on /GoWeb).
+      // Default leaves the filter off (include everything). The whole
+      // optional-scope-as-classifier feature is under review — see the
+      // M6 future-improvements note.
       const where: Prisma.ScaIssueWhereInput = {
         scopeId: run.scopeId,
         lastSeenScanRunId: scanRunId,
         latestFindingType: "cve",
         latestSeverity: { in: ["critical", "high"] },
       };
-      if (!repo.reachabilityIncludeDevDeps) {
+      if (!repo.reachabilityIncludeOptionalDeps) {
         where.latestComponentScope = { not: "optional" };
       }
       const scaIssues = await prisma.scaIssue.findMany({
@@ -113,7 +116,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         summary: i.latestSummary,
       }));
       log.info(
-        { count: scaHints.length, includeDevDeps: repo.reachabilityIncludeDevDeps },
+        { count: scaHints.length, includeOptional: repo.reachabilityIncludeOptionalDeps },
         "[worker] built SCA hint set",
       );
     } else {

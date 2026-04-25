@@ -387,6 +387,36 @@ be re-added with a default of `'llm'`.
    falls back to opengrep if `sast_engine = "llm"`. Or scan just
    fails. TBD; lean toward fail-clear so we notice outages.
 
+## Under review
+
+**Optional-scope filtering of SCA hints (`reachability_include_optional_deps`).**
+The first cut filtered cdxgen `scope: "optional"` components from the
+reachability hint set, on the assumption that `optional == dev`. Real
+data on /GoWeb showed cdxgen marks BOTH devDependencies AND transitive
+runtime deps as `optional` (CycloneDX scope is overloaded by cdxgen),
+so the filter dropped at least one verified-reachable runtime CVE
+(`requirejs` at `ModuleLoader.js:30`). The flag was renamed and the
+default flipped to `true` (include all `optional`-scope components),
+making the filter inert by default. The UI's "DEV" badge and "Hide DEV"
+toggle were removed because labeling `optional` as "DEV" is the same
+misrepresentation in another shape.
+
+The whole feature may be ripped entirely. It only adds value with a
+*real* dev-vs-runtime classifier — e.g. parsing `package-lock.json`'s
+`"dev": true` flags to determine genuine devDependency-only paths.
+Without that, the per-repo flag, the UI badges, and the related filter
+button all encode a wrong understanding of cdxgen output. Decide:
+
+- **Keep** the rename + default flip + opt-in flag, with the
+  understanding that operators must verify their `optional`-scoped
+  components are build-only before flipping it off.
+- **Remove** the flag entirely; build a real lockfile-driven classifier
+  later if the noise becomes a real cost problem on large repos.
+
+The deprecated `hide_dev` query param on the SCA list endpoint is now
+a no-op; remove it once we're confident no external API consumers rely
+on it.
+
 ## Future improvements (post-cutover)
 
 These are not part of the M6 critical path. File once core LLM-mode
