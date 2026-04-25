@@ -124,8 +124,6 @@ export interface NewCredentialInput {
 export type RepoProtocol = "ssh" | "https";
 export type AnalysisType = "sca" | "sast";
 
-export type SastEngine = "opengrep" | "llm";
-
 export interface Repo {
   id: string;
   name: string;
@@ -137,7 +135,6 @@ export interface Repo {
   analysis_types: AnalysisType[];
   credential_id: string | null;
   retain_clone: boolean;
-  sast_engine: SastEngine;
   reachability_enabled: boolean;
   source_url_template: string | null;
   last_cloned_at: string | null;
@@ -154,7 +151,6 @@ export interface RepoUpsertInput {
   ignore_paths?: string[];
   analysis_types: AnalysisType[];
   retain_clone?: boolean;
-  sast_engine?: SastEngine;
   reachability_enabled?: boolean;
   source_url_template?: string | null;
   /** Existing credential to link. Ignored if `credential` (inline) is supplied. */

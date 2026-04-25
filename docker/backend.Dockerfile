@@ -19,36 +19,21 @@ ENV NODE_ENV=development \
 # Enable pnpm via corepack.
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-ARG OPENGREP_VERSION=1.20.0
-
 # System tools:
 #   openssl, ca-certificates — TLS + Prisma
 #   git, openssh-client — the scan worker shells out to `git clone` and
 #     drives SSH authentication via GIT_SSH_COMMAND
-#   ripgrep — scope-confined grep for reachability analysis
-#   curl — used below to fetch the Opengrep binary
+#   ripgrep — used by the LLM agent for fast scope-confined grep
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-        openssl ca-certificates git openssh-client ripgrep curl \
+        openssl ca-certificates git openssh-client ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
-# Opengrep SAST binary — manylinux (glibc-compatible), arch-aware.
-# uname -m: "x86_64" → manylinux_x86, "aarch64" → manylinux_aarch64.
-# Wrapped in || echo so a bad version/network glitch doesn't fail the image build;
-# the worker detects a missing binary at runtime and writes a scan warning.
-RUN MACHINE=$(uname -m) \
- && OPENGREP_ARCH=$([ "$MACHINE" = "aarch64" ] && echo "manylinux_aarch64" || echo "manylinux_x86") \
- && curl -fsSL \
-      "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_${OPENGREP_ARCH}" \
-      -o /usr/local/bin/opengrep \
- && chmod +x /usr/local/bin/opengrep \
- || echo "WARN: opengrep install failed — SAST will be unavailable"
-
-# Claude Code CLI — used by the LLM-mode SAST pass (M6). Auth via env vars
-# (ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL) injected by the worker per-scan
-# from AppSettings.
+# Claude Code CLI — drives the SAST + reachability + vendored-lib pass.
+# Auth via env vars (ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL) injected by the
+# worker per-scan from AppSettings.
 RUN npm install -g @anthropic-ai/claude-code \
- || echo "WARN: claude-code install failed — LLM-mode SAST will be unavailable"
+ || echo "WARN: claude-code install failed — SAST will be unavailable"
 
 # claude-p refuses --dangerously-skip-permissions (its mapping for our chosen
 # permission-mode) when the calling process is root. Add a dedicated unprivileged

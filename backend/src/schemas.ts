@@ -195,11 +195,9 @@ export const RepoCreateSchema = z.object({
   /** When true, worker keeps the clone between scans and updates via
    *  `git fetch`; when false, each scan starts from a fresh tmpdir. */
   retain_clone: z.boolean().default(false),
-  /** SAST engine selection (M6). "opengrep" runs the legacy Opengrep +
-   *  LLM triage path; "llm" runs a single Claude Code CLI agentic pass. */
-  sast_engine: z.enum(["opengrep", "llm"]).default("opengrep"),
-  /** Engine-agnostic toggle: when false, both LLM-mode SCA hint injection
-   *  and opengrep-mode standalone reachability are skipped. */
+  /** When false, the LLM SAST pass skips reachability analysis on
+   *  high+critical SCA issues, saving output-token cost on repos where
+   *  the reachability signal hasn't proven worth it. */
   reachability_enabled: z.boolean().default(true),
   credential_id: UuidSchema.nullable().optional(),
   // NOTE: the contract names the inline field `credential`, NOT `new_credential`.
@@ -219,7 +217,6 @@ export const RepoUpdateSchema = z.object({
   source_url_template: z.string().max(2048).nullable().optional(),
   is_active: z.boolean().optional(),
   retain_clone: z.boolean().optional(),
-  sast_engine: z.enum(["opengrep", "llm"]).optional(),
   reachability_enabled: z.boolean().optional(),
   credential_id: UuidSchema.nullable().optional(),
   credential: CredentialCreateSchema.nullable().optional(),
@@ -241,7 +238,6 @@ export const RepoOutSchema = z.object({
   source_url_template: z.string().nullable(),
   is_active: z.boolean(),
   retain_clone: z.boolean(),
-  sast_engine: z.enum(["opengrep", "llm"]),
   reachability_enabled: z.boolean(),
   /** Set whenever the worker finishes a clone/fetch for this repo. Null
    *  means no local cache exists — "Purge cache" should be disabled. */

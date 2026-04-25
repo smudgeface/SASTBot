@@ -119,14 +119,15 @@ model Repo {
   scheduleCron        String?   @map("schedule_cron")
   sourceUrlTemplate   String?   @map("source_url_template")
   isActive            Boolean   @default(true) @map("is_active")
-  // M6: which engine performs SAST. "opengrep" = legacy Opengrep + LLM triage,
-  // "llm" = single Claude Code CLI pass for SAST + reachability + vendored libs.
-  sastEngine            String  @default("opengrep") @map("sast_engine")
+  // M6: SAST is performed by a single Claude Code CLI agentic pass which
+  // also covers reachability + vendored-library detection. The two budgets
+  // bound the detection pass and the per-scan recheck pass respectively.
   llmSastTokenBudget    Int     @default(300000)    @map("llm_sast_token_budget")
   llmRecheckTokenBudget Int     @default(50000)     @map("llm_recheck_token_budget")
-  // Engine-agnostic toggle: when false, both LLM-mode SCA hint injection
-  // AND opengrep-mode standalone reachability service are skipped. Useful
-  // for repos where the reachability signal hasn't proven worth the cost.
+  // When false, the LLM SAST pass receives an empty SCA-hint input file
+  // (skipping the reachability portion of Goal 2 in sast_detection.md).
+  // Use for repos where the reachability signal hasn't proven worth the
+  // additional output-token cost.
   reachabilityEnabled   Boolean @default(true) @map("reachability_enabled")
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
