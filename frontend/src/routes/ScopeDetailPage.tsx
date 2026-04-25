@@ -785,13 +785,18 @@ function SastIssueRow({
             </div>
           </div>
         </TableCell>
+        <TableCell className="text-xs text-muted-foreground tabular-nums">
+          {issue.triage_confidence != null
+            ? `${Math.round(issue.triage_confidence * 100)}%`
+            : "—"}
+        </TableCell>
         <TableCell className="text-xs text-muted-foreground">
           {formatRelative(issue.last_seen_at)}
         </TableCell>
       </TableRow>
       {expanded && (
         <TableRow>
-          <TableCell colSpan={6} className="bg-muted/30 p-4">
+          <TableCell colSpan={7} className="bg-muted/30 p-4">
             {issue.latest_llm_summary && (
               <p className="mb-3 text-sm">{issue.latest_llm_summary}</p>
             )}
@@ -1009,6 +1014,7 @@ function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scope
                   <TableHead>Summary</TableHead>
                   <TableHead className="w-64">Location</TableHead>
                   <TableHead className="w-28">Status</TableHead>
+                  <TableHead className="w-20" title="Detection or triage confidence">Conf.</TableHead>
                   <TableHead className="w-24">Last seen</TableHead>
                 </TableRow>
               </TableHeader>

@@ -8,7 +8,7 @@ import { loadConfig } from "./config.js";
 import { prisma } from "./db.js";
 import { closeRedis, getRedis } from "./queue/connection.js";
 import { SCAN_QUEUE_NAME, type ScanJobData } from "./queue/scanQueue.js";
-import { cloneOrRefresh } from "./services/repoCache.js";
+import { cloneOrRefresh, RemoteUnreachableError } from "./services/repoCache.js";
 import { persistComponents, runCdxgen } from "./services/sbomService.js";
 import { queryAndPersistFindings, backfillCvssScores, backfillManifestOrigin } from "./services/osvService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
@@ -16,6 +16,15 @@ import { runOpengrep, parseSarif, persistSastFindings, backfillSastContextSnippe
 import { triageFindings } from "./services/llmTriageService.js";
 import { assessReachability, backfillReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
+import {
+  applyRecheckVerdicts,
+  cleanupTmp as cleanupLlmTmp,
+  persistDetection,
+  type RecheckIssueInput,
+  runDetection,
+  runRecheck,
+  type ScaHintInput,
+} from "./services/llmSastService.js";
 import type { ScanWarning } from "./schemas.js";
 import type { Prisma } from "@prisma/client";
 
@@ -38,6 +47,198 @@ async function appendWarning(scanRunId: string, warning: ScanWarning): Promise<v
     where: { id: scanRunId },
     data: { warnings: [...current, warning] as unknown as Prisma.InputJsonValue },
   });
+}
+
+// ---------------------------------------------------------------------------
+// LLM-mode SAST pipeline (M6 — runs when repo.sastEngine === "llm")
+// ---------------------------------------------------------------------------
+
+interface LlmSastPipelineInput {
+  scanRunId: string;
+  repo: {
+    name: string;
+    defaultBranch: string;
+    ignorePaths: unknown;
+    llmSastTokenBudget: number;
+    llmRecheckTokenBudget: number;
+    reachabilityEnabled: boolean;
+  };
+  run: { scopeId: string; orgId: string | null };
+  scanDir: string;
+  log: pino.Logger;
+}
+
+const LLM_SCA_HINT_CAP = 200;
+const TERMINAL_TRIAGE_STATUSES = ["fixed", "suppressed", "false_positive"];
+
+async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
+  const { scanRunId, repo, run, scanDir, log } = input;
+
+  try {
+    // 1. Build the SCA hint list (top-N by severity then CVSS) from rows the
+    //    cdxgen + OSV pipeline already wrote in steps 4–5. When reachability
+    //    is disabled on the repo we skip this entirely — the model gets an
+    //    empty hint file, Goal 2 of the prompt iterates zero times, and we
+    //    save the output tokens that would have gone into 100+ verdicts.
+    let scaHints: ScaHintInput[] = [];
+    if (repo.reachabilityEnabled) {
+      const scaIssues = await prisma.scaIssue.findMany({
+        where: {
+          scopeId: run.scopeId,
+          lastSeenScanRunId: scanRunId,
+          latestFindingType: "cve",
+          latestSeverity: { in: ["critical", "high"] },
+        },
+        orderBy: [
+          { latestSeverity: "asc" },
+          { latestCvssScore: "desc" },
+        ],
+        take: LLM_SCA_HINT_CAP,
+      });
+      scaHints = scaIssues.map((i) => ({
+        id: i.id,
+        package: i.packageName,
+        version: i.latestPackageVersion,
+        cve_id: i.latestCveId,
+        osv_id: i.osvId,
+        cvss_score: i.latestCvssScore,
+        summary: i.latestSummary,
+      }));
+    } else {
+      log.info("[worker] reachability disabled on this repo — skipping SCA hint injection");
+    }
+
+    // 2. Detection pass.
+    log.info({ scaHintCount: scaHints.length, budget: repo.llmSastTokenBudget }, "[worker] LLM detection start");
+    const detection = await runDetection({
+      scanRunId,
+      scopeId: run.scopeId,
+      scopeDir: scanDir,
+      repoName: repo.name,
+      repoBranch: repo.defaultBranch,
+      ignorePaths: Array.isArray(repo.ignorePaths) ? (repo.ignorePaths as string[]) : [],
+      scaHints,
+      tokenBudget: repo.llmSastTokenBudget,
+      orgId: run.orgId,
+    });
+    log.info(
+      { records: detection.records.length, parseErrors: detection.parseErrors.length, durationMs: detection.durationMs, usage: detection.usage },
+      "[worker] LLM detection finished",
+    );
+
+    if (detection.parseErrors.length > 0) {
+      await appendWarning(scanRunId, {
+        code: "llm_sast_parse_errors",
+        message: `LLM SAST detection emitted ${detection.parseErrors.length} unparseable record(s); some findings may be missing.`,
+      });
+    }
+
+    // 3. Persist detection records.
+    const persistResult = await persistDetection(prisma, {
+      scanRunId,
+      scopeId: run.scopeId,
+      scopeDir: scanDir,
+      orgId: run.orgId,
+      records: detection.records,
+      modelName: "claude-code-cli",
+    });
+    log.info(persistResult, "[worker] LLM detection persisted");
+
+    // 4. Stamp llm summary on every SastIssue from the detection records so
+    //    the scope page shows the LLM's one-liner instead of just rule_id.
+    for (const r of detection.records) {
+      if (r.kind === "sast" || r.kind === "sast_absence") {
+        await prisma.sastIssue.updateMany({
+          where: {
+            scopeId: run.scopeId,
+            lastSeenScanRunId: scanRunId,
+            latestFilePath: r.kind === "sast" ? r.file_path : r.evidence_file,
+            latestStartLine: r.kind === "sast" ? r.start_line : r.evidence_line,
+          },
+          data: { latestLlmSummary: r.summary, triageConfidence: r.confidence },
+        });
+      }
+    }
+
+    // 5. Recheck pass for any non-terminal SastIssue this detection didn't
+    //    re-emit. Includes "error" rows so they self-heal once the file is
+    //    actually gone (per locked decision #7).
+    const candidates = await prisma.sastIssue.findMany({
+      where: {
+        scopeId: run.scopeId,
+        lastSeenScanRunId: { not: scanRunId },
+        triageStatus: { notIn: TERMINAL_TRIAGE_STATUSES },
+      },
+    });
+
+    if (candidates.length > 0) {
+      const recheckIssues: RecheckIssueInput[] = candidates.map((i) => ({
+        id: i.id,
+        file: i.latestFilePath,
+        line: i.latestStartLine,
+        summary: i.latestRuleMessage ?? i.latestRuleId,
+        snippet: i.latestSnippet ?? "",
+        cwe: i.latestCweIds[0] ?? "CWE-UNKNOWN",
+      }));
+      log.info({ count: recheckIssues.length, budget: repo.llmRecheckTokenBudget }, "[worker] LLM recheck start");
+      const recheck = await runRecheck({
+        scanRunId,
+        scopeDir: scanDir,
+        issues: recheckIssues,
+        tokenBudget: repo.llmRecheckTokenBudget,
+        orgId: run.orgId,
+      });
+      log.info(
+        { verdicts: recheck.verdicts.length, parseErrors: recheck.parseErrors.length, durationMs: recheck.durationMs, usage: recheck.usage },
+        "[worker] LLM recheck finished",
+      );
+      const apply = await applyRecheckVerdicts(prisma, {
+        scanRunId,
+        scopeId: run.scopeId,
+        inputIssues: recheckIssues,
+        verdicts: recheck.verdicts,
+      });
+      log.info(apply, "[worker] LLM recheck applied");
+
+      if (recheck.parseErrors.length > 0) {
+        await appendWarning(scanRunId, {
+          code: "llm_recheck_parse_errors",
+          message: `LLM recheck emitted ${recheck.parseErrors.length} unparseable record(s).`,
+        });
+      }
+
+      // Add recheck token usage on top of detection's.
+      await prisma.scanRun.update({
+        where: { id: scanRunId },
+        data: {
+          llmInputTokens: { increment: recheck.usage.inputTokens },
+          llmOutputTokens: { increment: recheck.usage.outputTokens },
+          llmRequestCount: { increment: recheck.usage.requestCount },
+        },
+      });
+    }
+
+    // 6. Stamp detection token usage onto the scan run.
+    await prisma.scanRun.update({
+      where: { id: scanRunId },
+      data: {
+        llmInputTokens: { increment: detection.usage.inputTokens },
+        llmOutputTokens: { increment: detection.usage.outputTokens },
+        llmRequestCount: { increment: detection.usage.requestCount },
+      },
+    });
+
+    // 7. Update sastFindingCount denorm.
+    const sastCount = await prisma.sastIssue.count({
+      where: { scopeId: run.scopeId, lastSeenScanRunId: scanRunId },
+    });
+    await prisma.scanRun.update({
+      where: { id: scanRunId },
+      data: { sastFindingCount: sastCount },
+    });
+  } finally {
+    await cleanupLlmTmp(scanRunId);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,11 +457,26 @@ const worker = new Worker<ScanJobData>(
 
       const findings = [...cveFindings, ...eolFindings];
 
-      // ── Step 6: SAST via Opengrep ─────────────────────────────────────────
+      // ── Step 6: SAST ─────────────────────────────────────────────────────
+      // Dispatch on repo.sastEngine. "opengrep" preserves the legacy pipeline
+      // (Opengrep + LLM triage). "llm" runs a single Claude Code CLI pass for
+      // SAST + reachability + vendored-library identification.
       const analysisTypes = Array.isArray(repo.analysisTypes)
         ? (repo.analysisTypes as string[])
         : [];
-      if (analysisTypes.includes("sast")) {
+      const sastEngine = repo.sastEngine ?? "opengrep";
+      let llmSastRan = false;
+
+      if (analysisTypes.includes("sast") && sastEngine === "llm") {
+        await runLlmSastPipeline({
+          scanRunId,
+          repo,
+          run,
+          scanDir,
+          log,
+        });
+        llmSastRan = true;
+      } else if (analysisTypes.includes("sast")) {
         log.info({ scanDir, excludes }, "[worker] running opengrep SAST");
         const sarif = await runOpengrep(scanDir, excludes);
         if (sarif === null) {
@@ -344,21 +560,37 @@ const worker = new Worker<ScanJobData>(
       }
 
       // ── Step 7: SCA reachability analysis ────────────────────────────────
-      log.info("[worker] assessing SCA reachability");
-      await assessReachability(scanRunId, run.scopeId, scanDir, run.orgId, prisma);
-      log.info("[worker] reachability assessment complete");
+      // In LLM mode, the detection pass already emitted reachability verdicts;
+      // running the standalone service would duplicate the work and
+      // potentially overwrite higher-quality LLM-reasoned verdicts.
+      // When the repo has reachabilityEnabled=false we skip both code paths.
+      if (!repo.reachabilityEnabled) {
+        log.info("[worker] reachability disabled on this repo — skipping");
+      } else if (!llmSastRan) {
+        log.info("[worker] assessing SCA reachability");
+        await assessReachability(scanRunId, run.scopeId, scanDir, run.orgId, prisma);
+        log.info("[worker] reachability assessment complete");
+      } else {
+        log.info("[worker] skipping standalone reachability — handled by LLM SAST pass");
+      }
 
       // ── Step 8: auto-fix SAST and SCA issues no longer detected in this scan ─
       // Any non-terminal issue that wasn't seen in this scan is now "fixed".
+      // Exception: in LLM mode, the recheck pass already produced explicit
+      // verdicts (still_present / fixed / file_deleted) for missing SAST issues.
+      // Skipping the SAST sweep avoids closing issues that the recheck judged
+      // still-present (e.g., relocated to a new file).
       const TERMINAL_STATUSES = ["fixed", "suppressed", "false_positive"];
-      await prisma.sastIssue.updateMany({
-        where: {
-          scopeId: run.scopeId,
-          lastSeenScanRunId: { not: scanRunId },
-          triageStatus: { notIn: TERMINAL_STATUSES },
-        },
-        data: { triageStatus: "fixed" },
-      });
+      if (!llmSastRan) {
+        await prisma.sastIssue.updateMany({
+          where: {
+            scopeId: run.scopeId,
+            lastSeenScanRunId: { not: scanRunId },
+            triageStatus: { notIn: TERMINAL_STATUSES },
+          },
+          data: { triageStatus: "fixed" },
+        });
+      }
       await prisma.scaIssue.updateMany({
         where: {
           scopeId: run.scopeId,
@@ -399,7 +631,11 @@ const worker = new Worker<ScanJobData>(
 
       log.info(counts, "[worker] scan complete");
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // Network failures get a plain-English error; everything else carries
+      // the underlying error message through.
+      const message = err instanceof RemoteUnreachableError
+        ? `Git remote unreachable — cache preserved. Reconnect VPN/network and retry. (${err.message})`
+        : err instanceof Error ? err.message : String(err);
       log.error({ err }, "[worker] scan failed");
       await prisma.scanRun
         .update({

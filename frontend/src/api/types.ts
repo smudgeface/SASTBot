@@ -124,6 +124,8 @@ export interface NewCredentialInput {
 export type RepoProtocol = "ssh" | "https";
 export type AnalysisType = "sca" | "sast";
 
+export type SastEngine = "opengrep" | "llm";
+
 export interface Repo {
   id: string;
   name: string;
@@ -135,6 +137,8 @@ export interface Repo {
   analysis_types: AnalysisType[];
   credential_id: string | null;
   retain_clone: boolean;
+  sast_engine: SastEngine;
+  reachability_enabled: boolean;
   source_url_template: string | null;
   last_cloned_at: string | null;
   created_at?: string;
@@ -150,6 +154,8 @@ export interface RepoUpsertInput {
   ignore_paths?: string[];
   analysis_types: AnalysisType[];
   retain_clone?: boolean;
+  sast_engine?: SastEngine;
+  reachability_enabled?: boolean;
   source_url_template?: string | null;
   /** Existing credential to link. Ignored if `credential` (inline) is supplied. */
   credential_id?: string | null;
@@ -249,6 +255,8 @@ export interface SbomComponent {
   ecosystem: string | null;
   licenses: string[];
   component_type: string;
+  scope?: string | null;
+  manifest_file?: string | null;
 }
 
 export interface ScanFinding {
@@ -325,6 +333,7 @@ export interface SastIssue {
   latest_rule_id: string;
   latest_rule_name: string | null;
   latest_rule_message: string | null;
+  latest_llm_summary: string | null;
   latest_severity: SastSeverity;
   latest_cwe_ids: string[];
   latest_file_path: string;
@@ -357,6 +366,7 @@ export interface ScaIssue {
   latest_cvss_score: number | null;
   latest_cvss_vector: string | null;
   latest_summary: string | null;
+  latest_llm_summary: string | null;
   latest_aliases: string[];
   latest_actively_exploited: boolean;
   latest_eol_date: string | null;

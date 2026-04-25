@@ -20,7 +20,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "bootstrap-admin": "tsx src/cli/bootstrap-admin.ts"
+    "bootstrap-admin": "tsx src/cli/bootstrap-admin.ts",
+    "dry-run-llm-sast": "tsx src/cli/dry-run-llm-sast.ts"
   },
   "dependencies": {
     "@cyclonedx/cdxgen": "^10.10.7",

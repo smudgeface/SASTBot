@@ -152,6 +152,8 @@ export function repoToOut(repo: Repo): RepoOut {
     source_url_template: repo.sourceUrlTemplate,
     is_active: repo.isActive,
     retain_clone: repo.retainClone,
+    sast_engine: (repo.sastEngine === "llm" ? "llm" : "opengrep"),
+    reachability_enabled: repo.reachabilityEnabled,
     last_cloned_at: repo.lastClonedAt ? repo.lastClonedAt.toISOString() : null,
     created_at: repo.createdAt.toISOString(),
   };

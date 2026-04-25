@@ -119,6 +119,15 @@ model Repo {
   scheduleCron        String?   @map("schedule_cron")
   sourceUrlTemplate   String?   @map("source_url_template")
   isActive            Boolean   @default(true) @map("is_active")
+  // M6: which engine performs SAST. "opengrep" = legacy Opengrep + LLM triage,
+  // "llm" = single Claude Code CLI pass for SAST + reachability + vendored libs.
+  sastEngine            String  @default("opengrep") @map("sast_engine")
+  llmSastTokenBudget    Int     @default(300000)    @map("llm_sast_token_budget")
+  llmRecheckTokenBudget Int     @default(50000)     @map("llm_recheck_token_budget")
+  // Engine-agnostic toggle: when false, both LLM-mode SCA hint injection
+  // AND opengrep-mode standalone reachability service are skipped. Useful
+  // for repos where the reachability signal hasn't proven worth the cost.
+  reachabilityEnabled   Boolean @default(true) @map("reachability_enabled")
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
@@ -200,6 +209,11 @@ model SbomComponent {
   componentType String   @default("library") @map("component_type")
   scope         String?
   manifestFile  String?  @map("manifest_file")  // e.g. "package-lock.json"
+  // M6: how the component was discovered. "manifest" = cdxgen reading a
+  // package.json / lockfile / similar; "vendored_inspection" = the LLM SAST
+  // pass identified a checked-in vendored library by directory + content.
+  discoveryMethod String? @default("manifest") @map("discovery_method")
+  evidenceLine    Int?    @map("evidence_line")
 
   scanRun  ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
   findings ScanFinding[]
