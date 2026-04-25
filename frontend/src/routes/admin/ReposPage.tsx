@@ -213,7 +213,7 @@ export default function ReposPage() {
                 <TableHead>Name</TableHead>
                 <TableHead>URL</TableHead>
                 <TableHead>Protocol</TableHead>
-                <TableHead>Default branch</TableHead>
+                <TableHead>Branch</TableHead>
                 <TableHead>Analysis</TableHead>
                 <TableHead>Cache</TableHead>
                 <TableHead className="w-10" />
@@ -512,20 +512,26 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 onChange={(e) => setName(e.target.value)}
                 required
               />
+              <p className="text-xs text-muted-foreground">
+                Display name shown in scopes, dashboards, and Jira tickets.
+              </p>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="repo-branch">Default branch</Label>
+              <Label htmlFor="repo-branch">Branch</Label>
               <Input
                 id="repo-branch"
                 value={defaultBranch}
                 onChange={(e) => setDefaultBranch(e.target.value)}
                 placeholder="main"
               />
+              <p className="text-xs text-muted-foreground">
+                The branch SASTBot scans on every run.
+              </p>
             </div>
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="repo-url">URL</Label>
+            <Label htmlFor="repo-url">Clone URL</Label>
             <Input
               id="repo-url"
               value={url}
@@ -533,6 +539,9 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
               placeholder="git@github.com:org/repo.git"
               required
             />
+            <p className="text-xs text-muted-foreground">
+              The HTTPS or SSH URL used to clone the repo. Match the protocol selected below.
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -559,6 +568,9 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 SSH
               </label>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Matches the URL above. HTTPS uses a token credential; SSH uses a private-key credential.
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -567,10 +579,13 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
               id="repo-paths"
               value={scanPathsText}
               onChange={(e) => setScanPathsText(e.target.value)}
-              placeholder="src, services/api"
+              placeholder="/, services/api"
             />
             <p className="text-xs text-muted-foreground">
-              Comma-separated paths, relative to the repo root. Leave blank to scan everything.
+              Comma-separated paths, relative to the repo root. Each path becomes its own scope —
+              issues are tracked, triaged, and reported per scope. Use <code className="font-mono">/</code> to scan
+              the entire repo. When paths overlap (e.g. <code className="font-mono">/</code> and <code className="font-mono">/services/api</code>),
+              the deeper path owns its tree and is skipped by the broader scope.
             </p>
           </div>
 
@@ -583,8 +598,8 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
               placeholder="scripts/internal, tools/dev"
             />
             <p className="text-xs text-muted-foreground">
-              Comma-separated paths to skip across all scopes. Useful for internal-only scripts,
-              vendored code, or generated output. Applied at scan time.
+              Comma-separated paths to skip from every scan. Useful for internal-only scripts,
+              vendored code, or generated output that doesn't ship to production.
             </p>
           </div>
 
@@ -604,6 +619,11 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 SAST (source code)
               </label>
             </div>
+            <p className="text-xs text-muted-foreground">
+              SCA queries OSV for known vulnerabilities in your dependencies. SAST runs Opengrep
+              against the source for dangerous patterns (XXE, command injection, hardcoded
+              secrets, etc.). Pick at least one.
+            </p>
           </div>
 
           <div className="space-y-1.5">
