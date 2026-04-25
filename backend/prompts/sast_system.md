@@ -58,10 +58,21 @@ otherwise omit it.
 
 # Snippet rule
 
-When a record needs a `snippet`, include 7 lines centered on the finding —
-the match line plus 3 lines above and 3 below. If the finding spans multiple
-lines, center on the start line and let `start_line` / `end_line` carry the
-span. Use `\n` for newlines inside JSON strings. Do not trim leading whitespace.
+`snippet` is always:
+
+  3 lines above `start_line`
+  + the [start_line .. end_line] span itself (the lines that contain the
+    vulnerability — one line for most findings, more for multi-line ones)
+  + 3 lines below `end_line`
+
+For a typical single-line finding (start_line == end_line) that's 7 lines
+total. For a finding that genuinely spans N lines (e.g., two adjacent
+`#define` macros that share the same root cause, or a multi-line function
+call) it's N + 6 lines. The window must always include the 3 lines of
+before-context and 3 lines of after-context, regardless of how many lines
+the vulnerability itself covers.
+
+Use `\n` for newlines inside JSON strings. Do not trim leading whitespace.
 
 # Output discipline
 
