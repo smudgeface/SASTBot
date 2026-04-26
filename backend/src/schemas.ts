@@ -335,6 +335,17 @@ export const ScanRunOutSchema = z.object({
   llm_request_count: z.number().int().nonnegative(),
   sast_finding_count: z.number().int().nonnegative(),
   confirmed_reachable_count: z.number().int().nonnegative(),
+  /** Live progress fields, populated by the worker while status==="running",
+   *  cleared on terminal status. */
+  current_phase: z.enum([
+    "cloning", "cdxgen", "osv", "eol",
+    "llm_detection", "llm_recheck", "sca_summaries", "finalizing",
+  ]).nullable(),
+  phase_progress: z.object({
+    done: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+    label: z.string().optional(),
+  }).nullable(),
   created_at: IsoDateTimeSchema,
 });
 export type ScanRunOut = z.infer<typeof ScanRunOutSchema>;

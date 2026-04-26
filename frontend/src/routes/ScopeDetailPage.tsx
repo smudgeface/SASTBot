@@ -40,7 +40,8 @@ import type { JiraTicket } from "@/api/types";
 import { useTriggerScan, useCancelScan } from "@/api/queries/scans";
 import { useSettings } from "@/api/queries/settings";
 import { useMe } from "@/api/queries/auth";
-import type { SastIssue, ScaIssue } from "@/api/types";
+import type { SastIssue, ScaIssue, ScanRunSummary } from "@/api/types";
+import { SCAN_PHASE_LABELS } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -87,6 +88,39 @@ const SEVERITY_BAR_COLOR: Record<"critical" | "high" | "medium" | "low", string>
   medium:   "bg-yellow-500",
   low:      "bg-blue-500",
 };
+
+function ScanProgressBanner({ scan }: { scan: ScanRunSummary }) {
+  const phase = scan.current_phase;
+  const phaseLabel = phase
+    ? (scan.phase_progress?.label ?? SCAN_PHASE_LABELS[phase])
+    : "Starting…";
+  const progress = scan.phase_progress;
+  const pct = progress && progress.total > 0
+    ? Math.min(100, (progress.done / progress.total) * 100)
+    : null;
+  return (
+    <div className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 px-4 py-3 space-y-2">
+      <div className="flex items-center justify-between text-sm">
+        <span className="font-medium text-amber-700 dark:text-amber-300">
+          {phaseLabel}
+        </span>
+        {progress && progress.total > 0 && (
+          <span className="text-xs text-muted-foreground">
+            {progress.done} of {progress.total} · {Math.round(pct ?? 0)}%
+          </span>
+        )}
+      </div>
+      {pct !== null && (
+        <div className="h-1.5 rounded bg-muted overflow-hidden">
+          <div
+            className="h-full bg-amber-500 transition-all"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SeveritySummary({
   critical, high, medium, low, sca, sast, pending,
@@ -1720,6 +1754,11 @@ export default function ScopeDetailPage() {
           )}
         </Button>
       </div>
+
+      {/* Live progress banner — only while a scan is running */}
+      {isScanning && scans?.[0] && (
+        <ScanProgressBanner scan={scans[0]} />
+      )}
 
       {/* Summary: stacked severity bar + totals */}
       <SeveritySummary

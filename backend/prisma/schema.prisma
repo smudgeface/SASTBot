@@ -193,6 +193,15 @@ model ScanRun {
   llmRequestCount         Int       @default(0) @map("llm_request_count")
   sastFindingCount        Int       @default(0) @map("sast_finding_count")
   confirmedReachableCount Int       @default(0) @map("confirmed_reachable_count")
+  // M6i: live-progress fields, updated by the worker as the scan moves
+  // through phases. `currentPhase` is one of the canonical labels
+  // (cloning / cdxgen / osv / eol / llm_detection / llm_recheck /
+  // sca_summaries / finalizing). `phaseProgress` carries within-phase
+  // counts when applicable: `{done: number, total: number, label?: string}`.
+  // Both are null on terminal scans — the frontend reads them only while
+  // status is "running".
+  currentPhase            String?   @map("current_phase")
+  phaseProgress           Json?     @map("phase_progress")
   createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   org          Org?           @relation(fields: [orgId], references: [id], onDelete: SetNull)

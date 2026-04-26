@@ -550,6 +550,12 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
             critical_count: z.number().int(),
             high_count: z.number().int(),
             sast_finding_count: z.number().int(),
+            current_phase: z.string().nullable(),
+            phase_progress: z.object({
+              done: z.number().int().nonnegative(),
+              total: z.number().int().nonnegative(),
+              label: z.string().optional(),
+            }).nullable(),
             created_at: z.string(),
           })),
           401: ErrorSchema,
@@ -574,6 +580,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           startedAt: true, finishedAt: true, error: true,
           componentCount: true, criticalCount: true, highCount: true,
           sastFindingCount: true, createdAt: true,
+          currentPhase: true, phaseProgress: true,
         },
       });
 
@@ -588,6 +595,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         critical_count: r.criticalCount,
         high_count: r.highCount,
         sast_finding_count: r.sastFindingCount,
+        current_phase: r.currentPhase,
+        phase_progress: r.phaseProgress as { done: number; total: number; label?: string } | null,
         created_at: r.createdAt.toISOString(),
       }));
     },
