@@ -61,7 +61,7 @@ interface LlmSastPipelineInput {
     llmSastTokenBudget: number;
     llmRecheckTokenBudget: number;
     reachabilityEnabled: boolean;
-    reachabilityIncludeOptionalDeps: boolean;
+    reachabilityIncludeDevDeps: boolean;
   };
   run: { scopeId: string; orgId: string | null };
   scanDir: string;
@@ -86,22 +86,21 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
     //    save the output tokens that would have gone into 100+ verdicts.
     let scaHints: ScaHintInput[] = [];
     if (repo.reachabilityEnabled) {
-      // Optionally exclude cdxgen `scope: "optional"` components from the
-      // hint set. CAVEAT: cdxgen marks first-level direct deps as
-      // `required` and lumps BOTH devDependencies AND transitive runtime
-      // deps into `optional`. So filtering by this scope drops real
-      // reachable runtime CVEs (verified case: requirejs on /GoWeb).
-      // Default leaves the filter off (include everything). The whole
-      // optional-scope-as-classifier feature is under review — see the
-      // M6 future-improvements note.
+      // Optionally exclude npm dev-only deps (cdxgen 12.2+ emits the
+      // `cdx:npm:package:development=true` property when the lockfile entry
+      // has `dev: true`; we mirror it onto SbomComponent.isDevOnly /
+      // ScaIssue.latestIsDevOnly). Default true = include everything.
+      // npm-only signal: non-npm components have isDevOnly=false and are
+      // unaffected. Caveat: cdxgen issue #3927 — `devOptional: true` entries
+      // miss the marker, so a small fraction of dev-only deps still slip in.
       const where: Prisma.ScaIssueWhereInput = {
         scopeId: run.scopeId,
         lastSeenScanRunId: scanRunId,
         latestFindingType: "cve",
         latestSeverity: { in: ["critical", "high"] },
       };
-      if (!repo.reachabilityIncludeOptionalDeps) {
-        where.latestComponentScope = { not: "optional" };
+      if (!repo.reachabilityIncludeDevDeps) {
+        where.latestIsDevOnly = false;
       }
       const scaIssues = await prisma.scaIssue.findMany({
         where,
@@ -121,7 +120,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         summary: i.latestSummary,
       }));
       log.info(
-        { count: scaHints.length, includeOptional: repo.reachabilityIncludeOptionalDeps },
+        { count: scaHints.length, includeDevDeps: repo.reachabilityIncludeDevDeps },
         "[worker] built SCA hint set",
       );
     } else {

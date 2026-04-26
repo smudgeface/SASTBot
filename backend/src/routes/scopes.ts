@@ -486,6 +486,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
             licenses: z.array(z.string()),
             component_type: z.string(),
             scope: z.string().nullable(),
+            is_dev_only: z.boolean(),
           })),
           401: ErrorSchema,
           404: ErrorSchema,

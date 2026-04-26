@@ -129,14 +129,14 @@ model Repo {
   // Use for repos where the reachability signal hasn't proven worth the
   // additional output-token cost.
   reachabilityEnabled             Boolean @default(true) @map("reachability_enabled")
-  // When reachability is enabled, controls whether components cdxgen tags
-  // with CycloneDX `scope: "optional"` are included in the LLM hint set.
-  // Default true — cdxgen lumps devDependencies AND transitive runtime
-  // deps into `optional`, so excluding them drops real reachable runtime
-  // CVEs (e.g. requirejs on the /GoWeb experiment). Flip off only on
-  // repos where you've verified that `optional`-scoped components are
-  // genuinely build-only.
-  reachabilityIncludeOptionalDeps Boolean @default(true) @map("reachability_include_optional_deps")
+  // When reachability is enabled, controls whether components cdxgen 12.2+
+  // flagged as dev-only (npm lockfile `dev: true`) are included in the LLM
+  // hint set. Default true (include everything). Flip off on repos that
+  // import a lot of npm dev tooling and you don't want reachability tokens
+  // spent on them. npm-only signal — non-npm ecosystems are unaffected.
+  // Caveat: cdxgen issue #3927 — `devOptional: true` lockfile entries miss
+  // the dev marker, so a small fraction of dev-only deps still slip through.
+  reachabilityIncludeDevDeps Boolean @default(true) @map("reachability_include_dev_deps")
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
@@ -217,6 +217,12 @@ model SbomComponent {
   licenses      String[]
   componentType String   @default("library") @map("component_type")
   scope         String?
+  // cdxgen 12.2+ emits `cdx:npm:package:development=true` as a property when
+  // the npm lockfile entry has `dev: true`. npm-only signal today; other
+  // ecosystems leave this false until cdxgen grows equivalent markers.
+  // Caveat: cdxgen issue #3927 — `devOptional: true` lockfile entries miss
+  // the marker, so a small fraction of dev-only packages will read as false.
+  isDevOnly     Boolean  @default(false) @map("is_dev_only")
   manifestFile  String?  @map("manifest_file")  // e.g. "package-lock.json"
   // M6: how the component was discovered. "manifest" = cdxgen reading a
   // package.json / lockfile / similar; "vendored_inspection" = the LLM SAST
@@ -353,6 +359,7 @@ model ScaIssue {
   latestPackageVersion        String?   @map("latest_package_version")
   latestEcosystem             String?   @map("latest_ecosystem")
   latestComponentScope        String?   @map("latest_component_scope") // "required" | "optional"
+  latestIsDevOnly             Boolean   @default(false) @map("latest_is_dev_only") // mirrors SbomComponent.isDevOnly from latest detection
   latestFindingType           String    @default("cve") @map("latest_finding_type")
   latestCveId                 String?   @map("latest_cve_id")
   latestSeverity              String    @default("unknown") @map("latest_severity")

@@ -181,7 +181,7 @@ If it is NOT reachable, return call_sites=[] and explain why in the reasoning (e
     reachable: parsed.reachable,
     confidence: parsed.confidence,
     reasoning: parsed.reasoning,
-    callSites: parsed.call_sites,
+    callSites: parsed.call_sites ?? [],
     model: result.model,
   };
 }

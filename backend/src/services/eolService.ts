@@ -182,7 +182,7 @@ export async function checkAndPersistEolFindings(
       scanRunId,
       scopeId,
       orgId,
-      { name: component.name, version: component.version, ecosystem: component.ecosystem, scope: component.scope },
+      { name: component.name, version: component.version, ecosystem: component.ecosystem, scope: component.scope, isDevOnly: component.isDevOnly },
       {
         osvId: row.osvId,
         cveId: row.cveId ?? null,

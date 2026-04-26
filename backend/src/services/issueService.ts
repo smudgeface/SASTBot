@@ -98,6 +98,7 @@ export interface ScaComponentInfo {
   version: string | null;
   ecosystem: string | null;
   scope: string | null;
+  isDevOnly: boolean;
 }
 
 export interface ScaDetectionInput {
@@ -126,7 +127,7 @@ export async function upsertScaIssueFromDetection(
   detection: ScaDetectionInput,
 ): Promise<{ issue: ScaIssue; isNew: boolean }> {
   const db = client as Db;
-  const { name: packageName, version, ecosystem, scope: componentScope } = component;
+  const { name: packageName, version, ecosystem, scope: componentScope, isDevOnly } = component;
   const { osvId } = detection;
   const hasFix = computeHasFix(detection.detailJson);
 
@@ -139,6 +140,7 @@ export async function upsertScaIssueFromDetection(
     latestPackageVersion: version,
     latestEcosystem: ecosystem,
     latestComponentScope: componentScope,
+    latestIsDevOnly: isDevOnly,
     latestFindingType: detection.findingType,
     latestCveId: detection.cveId,
     latestSeverity: detection.severity,

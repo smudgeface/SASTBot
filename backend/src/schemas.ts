@@ -199,13 +199,11 @@ export const RepoCreateSchema = z.object({
    *  high+critical SCA issues, saving output-token cost on repos where
    *  the reachability signal hasn't proven worth it. */
   reachability_enabled: z.boolean().default(true),
-  /** Whether to include cdxgen `scope: "optional"` components in the LLM
-   *  reachability hint set. Default true — cdxgen's `optional` scope
-   *  conflates devDependencies with transitive runtime deps, so excluding
-   *  it would drop real reachable runtime CVEs. Operators who have
-   *  separately verified that their `optional`-scoped components are
-   *  build-only can flip this off to save output tokens. */
-  reachability_include_optional_deps: z.boolean().default(true),
+  /** Whether to include npm dev-only deps (cdxgen 12.2+ `dev: true` marker)
+   *  in the LLM reachability hint set. Default true — flip off only when you
+   *  want to skip reachability analysis on dev tooling. npm-only signal:
+   *  non-npm components are unaffected. */
+  reachability_include_dev_deps: z.boolean().default(true),
   credential_id: UuidSchema.nullable().optional(),
   // NOTE: the contract names the inline field `credential`, NOT `new_credential`.
   credential: CredentialCreateSchema.nullable().optional(),
@@ -225,7 +223,7 @@ export const RepoUpdateSchema = z.object({
   is_active: z.boolean().optional(),
   retain_clone: z.boolean().optional(),
   reachability_enabled: z.boolean().optional(),
-  reachability_include_optional_deps: z.boolean().optional(),
+  reachability_include_dev_deps: z.boolean().optional(),
   credential_id: UuidSchema.nullable().optional(),
   credential: CredentialCreateSchema.nullable().optional(),
 });
@@ -247,7 +245,7 @@ export const RepoOutSchema = z.object({
   is_active: z.boolean(),
   retain_clone: z.boolean(),
   reachability_enabled: z.boolean(),
-  reachability_include_optional_deps: z.boolean(),
+  reachability_include_dev_deps: z.boolean(),
   /** Set whenever the worker finishes a clone/fetch for this repo. Null
    *  means no local cache exists — "Purge cache" should be disabled. */
   last_cloned_at: IsoDateTimeSchema.nullable(),
@@ -374,6 +372,8 @@ export const SbomComponentOutSchema = z.object({
   licenses: z.array(z.string()),
   component_type: z.string(),
   scope: z.string().nullable(),
+  /** True iff cdxgen 12.2+ found `dev: true` in the npm lockfile entry. */
+  is_dev_only: z.boolean(),
 });
 export type SbomComponentOut = z.infer<typeof SbomComponentOutSchema>;
 
@@ -387,8 +387,12 @@ export const ScanFindingOutSchema = z.object({
   issue_id: UuidSchema,
   component_name: z.string(),
   component_version: z.string().nullable(),
-  /** CycloneDX scope: "required" (runtime dep), "optional" (dev/test), "excluded", or null */
+  /** CycloneDX scope: "required" (runtime dep), "optional" (dev/test), "excluded", or null.
+   *  Note: cdxgen lumps devDeps + transitive runtime deps both into "optional"; use
+   *  is_dev_only for the honest dev classifier. */
   component_scope: z.string().nullable(),
+  /** True iff cdxgen 12.2+ flagged this component as dev-only (npm lockfile dev: true). */
+  is_dev_only: z.boolean(),
   finding_type: FindingTypeSchema,
   osv_id: z.string(),
   cve_id: z.string().nullable(),
@@ -526,6 +530,8 @@ export const ScaIssueOutSchema = z.object({
   latest_package_version: z.string().nullable(),
   latest_ecosystem: z.string().nullable(),
   latest_component_scope: z.string().nullable(),
+  /** Mirrors SbomComponent.isDevOnly from latest detection (npm-only signal today). */
+  latest_is_dev_only: z.boolean(),
   latest_finding_type: FindingTypeSchema,
   latest_cve_id: z.string().nullable(),
   latest_severity: SeveritySchema,

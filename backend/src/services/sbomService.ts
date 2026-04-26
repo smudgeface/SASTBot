@@ -79,6 +79,22 @@ function extractLicenses(entries: CdxLicenseEntry[] | undefined): string[] {
 }
 
 /**
+ * Read cdxgen's npm dev-only marker. cdxgen 12.2+ emits
+ * `cdx:npm:package:development=true` as a property on components whose npm
+ * lockfile entry has `dev: true`. npm-only signal today; absent ⇒ treat as
+ * not-known-dev (conservative — keeps the component in scans).
+ *
+ * Caveat: cdxgen issue #3927 — `devOptional: true` lockfile entries miss the
+ * marker. A small fraction of dev-only packages will read as false. v1
+ * accepts this; revisit if it bites.
+ */
+function extractIsDevOnly(c: CdxComponent): boolean {
+  return c.properties?.some(
+    (p) => p.name === "cdx:npm:package:development" && p.value === "true",
+  ) ?? false;
+}
+
+/**
  * Extract the manifest file path that cdxgen attributed this component to,
  * relative to the scope's working directory. cdxgen exposes it twice:
  *   1. `properties[].name === "SrcFile"` (universal across project types)
@@ -212,8 +228,11 @@ export async function persistComponents(
       licenses: extractLicenses(c.licenses),
       componentType: c.type ?? "library",
       // CycloneDX scope: "required" | "optional" | "excluded"
-      // npm devDependencies → scope="optional"
+      // cdxgen lumps both devDependencies AND transitive runtime deps into
+      // "optional" — not a clean dev classifier. Use isDevOnly (cdxgen 12.2+
+      // npm dev marker) for the honest dev signal.
       scope: c.scope ?? null,
+      isDevOnly: extractIsDevOnly(c),
       manifestFile: (() => {
         const sr = extractManifestFile(c, scopeDir);
         return sr ? toRepoRelative(scopePath, sr) : null;

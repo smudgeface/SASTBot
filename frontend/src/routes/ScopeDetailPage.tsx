@@ -43,7 +43,7 @@ import { useMe } from "@/api/queries/auth";
 import type { SastIssue, ScaIssue } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -197,14 +197,6 @@ const SCA_STATUS_LABELS = TRIAGE_LABELS;
  *  what transitions an issue into/out of "planned"; beyond that the Jira
  *  ticket is metadata, not status. */
 function StatusBadge({ status }: { status: string }) {
-  return (
-    <Badge variant="outline" className={`text-[10px] ${TRIAGE_COLORS[status] ?? ""}`}>
-      {TRIAGE_LABELS[status] ?? status.replace(/_/g, " ")}
-    </Badge>
-  );
-}
-
-function TriageBadge({ status }: { status: string }) {
   return (
     <Badge variant="outline" className={`text-[10px] ${TRIAGE_COLORS[status] ?? ""}`}>
       {TRIAGE_LABELS[status] ?? status.replace(/_/g, " ")}
@@ -1077,12 +1069,10 @@ function ScaIssueRow({
     dismiss.mutate({ issueId: issue.id, status });
   };
 
-  // NOTE: `latest_component_scope === "optional"` is NOT a reliable
-  // dev-only signal. cdxgen marks both devDependencies AND transitive
-  // runtime deps as "optional" — see PROGRESS.md M6 retrospective. We
-  // surface the raw scope value in the expanded view but do not badge
-  // it on the row, since "DEV" would misrepresent transitive runtime
-  // deps as dev-only.
+  // The honest dev/runtime classifier is `latest_is_dev_only` (cdxgen 12.2+
+  // npm `dev: true` marker). The raw `latest_component_scope` (CycloneDX
+  // required/optional) lumps devDeps with transitive runtime deps and is
+  // shown only in the expanded metadata for completeness.
   const componentScopeLabel =
     issue.latest_component_scope === "required"
       ? "runtime"
@@ -1154,6 +1144,15 @@ function ScaIssueRow({
             {issue.confirmed_reachable && (
               <Badge variant="outline" className="text-[9px] px-1 py-0 text-amber-600 border-amber-400 gap-0.5">
                 <Zap className="h-2.5 w-2.5" /> Reachable
+              </Badge>
+            )}
+            {issue.latest_is_dev_only && (
+              <Badge
+                variant="outline"
+                className="text-[9px] px-1 py-0 text-muted-foreground"
+                title="cdxgen 12.2+ flagged this npm package as dev-only (lockfile dev: true)"
+              >
+                Dev
               </Badge>
             )}
           </div>
@@ -1533,7 +1532,20 @@ function ComponentsTab({ scopeId }: { scopeId: string }) {
               <TableBody>
                 {data.items.map((c) => (
                   <TableRow key={c.id}>
-                    <TableCell className="font-mono text-sm">{c.name}</TableCell>
+                    <TableCell className="font-mono text-sm">
+                      <span className="inline-flex items-center gap-1.5">
+                        {c.name}
+                        {c.is_dev_only && (
+                          <Badge
+                            variant="outline"
+                            className="text-[9px] px-1 py-0 text-muted-foreground"
+                            title="cdxgen flagged this npm package as dev-only (lockfile dev: true)"
+                          >
+                            Dev
+                          </Badge>
+                        )}
+                      </span>
+                    </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{c.version ?? "—"}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{c.ecosystem ?? "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{c.component_type}</TableCell>

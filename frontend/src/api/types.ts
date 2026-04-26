@@ -136,7 +136,7 @@ export interface Repo {
   credential_id: string | null;
   retain_clone: boolean;
   reachability_enabled: boolean;
-  reachability_include_optional_deps: boolean;
+  reachability_include_dev_deps: boolean;
   source_url_template: string | null;
   last_cloned_at: string | null;
   created_at?: string;
@@ -153,7 +153,7 @@ export interface RepoUpsertInput {
   analysis_types: AnalysisType[];
   retain_clone?: boolean;
   reachability_enabled?: boolean;
-  reachability_include_optional_deps?: boolean;
+  reachability_include_dev_deps?: boolean;
   source_url_template?: string | null;
   /** Existing credential to link. Ignored if `credential` (inline) is supplied. */
   credential_id?: string | null;
@@ -254,6 +254,8 @@ export interface SbomComponent {
   licenses: string[];
   component_type: string;
   scope?: string | null;
+  /** True iff cdxgen 12.2+ flagged this npm package as dev-only (lockfile dev: true). */
+  is_dev_only: boolean;
   manifest_file?: string | null;
 }
 
@@ -358,6 +360,8 @@ export interface ScaIssue {
   latest_package_version: string | null;
   latest_ecosystem: string | null;
   latest_component_scope: string | null;
+  /** Mirrors SbomComponent.is_dev_only from latest detection. */
+  latest_is_dev_only: boolean;
   latest_finding_type: FindingType;
   latest_cve_id: string | null;
   latest_severity: FindingSeverity;
