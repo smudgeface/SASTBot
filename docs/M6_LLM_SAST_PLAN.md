@@ -387,59 +387,27 @@ be re-added with a default of `'llm'`.
    falls back to opengrep if `sast_engine = "llm"`. Or scan just
    fails. TBD; lean toward fail-clear so we notice outages.
 
-## Under review
+## Shipped: cdxgen 12.2 dev marker (M6h, 2026-04-25)
 
-**Optional-scope filtering of SCA hints (`reachability_include_optional_deps`).**
-The first cut filtered cdxgen `scope: "optional"` components from the
-reachability hint set, on the assumption that `optional == dev`. Real
-data on /GoWeb showed cdxgen v10.x marks BOTH devDependencies AND
-transitive runtime deps as `optional` (CycloneDX scope is overloaded
-by cdxgen), so the filter dropped at least one verified-reachable
-runtime CVE (`requirejs` at `ModuleLoader.js:30`). The flag was
-renamed and the default flipped to `true` (include all `optional`-scope
-components), making the filter inert by default. The UI's "DEV" badge
-and "Hide DEV" toggle were removed because labeling `optional` as "DEV"
-is the same misrepresentation in another shape.
+The first cut at filtering optional-scope SCA hints was based on a borrowed proxy (CycloneDX `scope: "optional"`) that cdxgen v10.x overloaded — `optional` lumped npm devDependencies in with transitive runtime deps. With cdxgen 12.2.1's real npm dev marker (`cdx:npm:package:development=true`, sourced from `package-lock.json`'s `dev: true` entries) we now have a truthful classifier. See PROGRESS.md M6h entry for the full retrospective.
 
-**Path forward — upgrade cdxgen to 12.2+ for a real dev marker.** PR
-[cdxgen#3925](https://github.com/cdxgen/cdxgen/pull/3925) (merged
-2026-04-24, released in v12.2.1 the same day) added a per-component
-property `cdx:npm:package:development=true` for npm packages whose
-lockfile entry has `dev: true`. Issue
-[#3927](https://github.com/cdxgen/cdxgen/issues/3927) is an open
-follow-up — `devOptional: true` entries miss the marker. Acceptable
-gap for v1; most dev deps tag correctly.
+**What landed:**
 
-Migration plan when we pick this up:
+- `@cyclonedx/cdxgen` bumped to `^12.2.1`. SBOM shape compatible — no extraction code changes needed.
+- `SbomComponent.isDevOnly` and `ScaIssue.latestIsDevOnly` columns persist the marker. `sbomService.extractIsDevOnly` reads the cdxgen property; `issueService` denormalizes it onto the issue.
+- Repo flag renamed `reachability_include_optional_deps` → `reachability_include_dev_deps` (manual SQL rename to preserve existing values). Worker filter switched from `latestComponentScope` to `latestIsDevOnly`.
+- "Dev" badge restored on SCA issue rows and Components tab, keyed on the truthful column.
+- Repo edit form copy rewritten to explain the npm-only signal and the cdxgen #3927 caveat.
 
-1. Bump `@cyclonedx/cdxgen` from `^10.10.7` → `^12.2`. Verify SBOM
-   shape compat for the rest of the pipeline (the PURL / scope /
-   evidence shapes have stayed steady across this range, but the
-   major bump warrants smoke-testing on test-vuln-repo and Gocator
-   `/`).
-2. New `SbomComponent.isDevOnly Boolean @default(false)` column.
-   Migration `m6h_sbom_component_dev_marker`.
-3. `sbomService.persistComponents` reads
-   `properties[name === "cdx:npm:package:development"].value === "true"`
-   and writes `isDevOnly`.
-4. Worker `runLlmSastPipeline` uses `isDevOnly` instead of the
-   `latestComponentScope === "optional"` filter for the
-   `reachability_include_optional_deps` gate. The flag's semantics
-   become honest: "include dev-only components in the reachability
-   hint set."
-5. UI: re-introduce a "DEV" badge sourced from `isDevOnly`. Same
-   placement as before but truthful this time.
-6. Limitation note in the form help text + OPERATIONS.md: npm-only
-   today; Python/Java/Go components stay "is_dev_only=false" until
-   we add per-ecosystem support.
+**Carried-forward limitations:**
 
-Other ecosystems can land later (Python via `poetry.lock`, Java via
-maven `scope: test/provided`, etc.) — same column, different
-detection logic per ecosystem.
+- cdxgen issue [#3927](https://github.com/cdxgen/cdxgen/issues/3927) — `devOptional: true` lockfile entries don't get the marker yet. A small fraction of dev-only npm packages will read as `false`. Revisit if it bites.
+- npm-only signal. Python (poetry/pip), Java (maven/gradle), Go, etc. stay `is_dev_only=false` for everything. Per-ecosystem extractor work would be required to expand:
+  - Python: `poetry.lock` `category = "dev"` or `pip-tools` separate compile passes
+  - Java: maven `scope: test|provided`, gradle `testImplementation` configurations
+  - Go: standard go.mod has no dev/test concept; would need `_test.go` import-graph reachability instead
 
-The deprecated `hide_dev` query param on the SCA list endpoint is now
-a no-op; remove it after the cdxgen-12 upgrade lands and we've
-re-introduced a truthful filter.
+The deprecated `hide_dev` query param on the SCA list endpoint is still a no-op, kept for back-compat. Safe to remove if/when we audit unused query params.
 
 ## Future improvements (post-cutover)
 
