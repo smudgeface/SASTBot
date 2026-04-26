@@ -545,4 +545,61 @@ Fix: combine `group + name` into a canonical name in `persistComponents`, with p
 
 **Dead-code cleanup (same commit).** `ScopeDetailPage.tsx`'s `TriageBadge` was a stale duplicate of `StatusBadge` left over when SAST + SCA unified to a single status vocabulary in M5. Plus a handful of unused lucide imports and unused shadcn Card subcomponents.
 
-**Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, `docs/M6_LLM_SAST_PLAN.md` has a "Future improvements" section (deep-reasoning model option, streaming UI, lockfile-based dev classifier for non-npm ecosystems, etc.).
+---
+
+## M6i — live scan progress + worker trust gates + UI polish (2026-04-26)
+
+### Why we did this
+
+Three things compounded in one session:
+1. The "Scan in progress…" placeholder was the same regardless of phase or how long the scan had been running, leading to "is it stuck?" panic on a 6-hour /GoWeb run.
+2. A degraded scan (cdxgen crashed silently over airplane wifi → 0 components) silently auto-marked all 41 real findings as "fixed" via the SCA auto-fix sweep.
+3. A bunch of small SAST detail-panel issues had accumulated as the M5/M6 transition left Opengrep-era display logic visible on LLM-mode findings.
+
+### What shipped
+
+**Live scan progress (v1).** New `scan_runs.current_phase TEXT` + `phase_progress JSONB` columns. Worker emits phase markers at every boundary (cloning / cdxgen / osv / eol / llm_detection / llm_recheck / sca_summaries / finalizing) and within-phase counts where applicable (per N OSV components, per 5 SCA summaries). Surfaced in two UI places:
+- Scope detail page: amber `ScanProgressBanner` between header and severity summary while a scan is running. Phase label + progress bar.
+- Scopes list page: "Last Scan" column shows phase + n/total during an active scan (replaces the misleading "2m ago" timestamp from the previous good scan). One batched query across all scope IDs avoids N+1.
+- Scan detail page: "Scan in progress…" placeholder upgraded to the same phase + progress card.
+- `useScopes()` polls every 3s while any scope has an active scan; stops polling once everything is idle.
+
+v2 (overall % + time-remaining estimate from per-scope baseline) deliberately deferred — needs historical phase-duration data v1 produces.
+
+**Worker trust gates.** A degraded scan no longer destroys data:
+- `ScanWarning` schema gains `severity: "info" | "error"`. Existing parse-error warnings classified as info; new ones for actual failure modes emit error.
+- `runCdxgen` now returns `{ doc, ok, failureReason? }` so the caller can tell a hard failure (no output written) from a legitimate empty SBOM.
+- Worker emits error-severity warnings at three sites: `cdxgen_failed` (runCdxgen reports !ok), `llm_sast_detection_failed` (claude-p `exitCode !== 0`), and an info-level `cdxgen_zero_components` notice (0 components when previous scan had >0; *doesn't* block auto-fix because legitimate manifest removal should still propagate).
+- New `hasErrorWarnings(scanRunId)` helper. **SCA auto-fix sweep skips entirely** when any error-severity warning exists. The audit trail still records the failed scan; existing findings stay put.
+- **Scope `lastScanRunId` advancement also gated** on trustworthiness. `lastScanCompletedAt` always advances (operational truth: "operator just tried"). `lastScanRunId` only advances on trustworthy scans (SCA/SAST default filters pivot off it). Without this gate, the "no issues match" filter result hides real findings on the next page load.
+- Restored 41 wrongly-fixed test-vuln-repo SCA issues + reset its scope pointer back to the morning's good scan.
+
+**SAST detail-panel cleanup.** Six fixes targeting Opengrep-era display logic:
+1. Drop the `llm:CWE-XXX` sub-line under the filename in the location column for LLM-mode findings (CWE is shown elsewhere; the rule_id is just a placeholder).
+2. Skip the duplicate "Rule description: ..." block when the message is the same as the LLM summary, OR when rule_id is an `llm:` placeholder.
+3. Drop the redundant "Rule: llm:CWE-798" entry in the bottom metadata when rule_id is an LLM placeholder; only "CWE: ..." remains.
+4. SCA chip strip uses styled lozenge badges: CVE (red), EOL (gray, replacing "DEPRECATED"), Has fix (green), Dev (blue), Reachable (amber). All consistent shape.
+5. Token usage on scan detail header: `{N} LLM calls · {input}k in / {output}k out` alongside duration. Tooltip notes cache tokens aren't included.
+6. Scan detail header restructured by visual hierarchy — status biggest and color-coded, LLM info, duration, then date+audit-view-disclaimer in muted italic.
+
+**SAST snippet rendering — match-line locator.** The LLM is inconsistent about following the prompt's "3 lines above start_line + span + 3 lines below" rule. Sometimes the snippet has only 1 line of context above (GsAccount.cpp:27), sometimes 18+ (GsHostProtocol.h:68 with 25-line snippet). The renderer can't trust a fixed offset.
+
+Fix: `findAllKeywordMatchIndices` searches the snippet for distinctive identifiers (UPPER_SNAKE_CASE) or keywords (≥5 chars after stopword filter, naive trailing-s stem) from the issue summary. Returns every line tied at the highest score. The renderer treats those as the match span, displays 3 lines above the first match + the contiguous span + 3 lines below. Falls back to offset-from-top only when no keywords match. Verified on:
+- GsHostProtocol.h:68 — snippet has 25 lines, offset-from-top would highlight `GS_DEFAULT_IP`. Keyword search finds both `GS_SUPER_USER_PASSWORD` (line 68) and `GS_SUPER_USER_HDI_PASSWORD` (line 69), highlights both, shows lines 65–72.
+- GsAccount.cpp:27 — short 6-line snippet, but offset-from-top would highlight `loginState = GS_USER_NONE` (line 29). Keyword search finds `obj->adminPassword[0] = 0` (line 27 = match line), highlights only line 27.
+
+### Schema changes
+
+1. `20260426151053_m6i_scan_progress` — `scan_runs.current_phase` + `phase_progress`.
+
+(No migration for trust gates — purely a worker-logic change. ScanWarning's new `severity` field defaults to `"info"`, so existing rows render correctly.)
+
+### What we learned
+
+- **A scan that finds nothing is NOT the same as a scan that worked and confirmed nothing exists.** The auto-fix sweep was conflating these. Always think about whether a piece of remediation logic is gated on the *quality* of the input data, not just the *quantity*.
+- **Scope-level pivot pointers are easy to forget about.** `lastScanRunId` is used by default filters across multiple list endpoints. Updating it on a degraded scan made all previously-found issues invisible by default — even though the data was intact. Pivot pointers should only advance on trustworthy data; "operational truth" timestamps can be separate.
+- **Inconsistent LLM output requires inference, not assumption.** The "3 lines above start_line" rule from the snippet prompt holds maybe 30% of the time. Real solution: search the snippet content for the actual issue using the summary as a clue, instead of assuming a fixed offset.
+- **Vite HMR is unreliable through the Docker bind mount on this setup.** Most file edits require a full `docker compose restart frontend` to pick up. Live with it; restart unconditionally after a meaningful change.
+- **The 6-hour /GoWeb hang was a free production simulation** of what happens when claude-p stalls over a flaky network. Now the worker treats `exitCode !== 0` as untrust signal and the operator's data survives. Same gate would catch a real Dokploy outage.
+
+**Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, `docs/M6_LLM_SAST_PLAN.md` has a "Future improvements" section (deep-reasoning model option, streaming UI, lockfile-based dev classifier for non-npm ecosystems, etc.). The pending-features memory has the full queue including notifications, scan resilience (wall-clock cap + heartbeat + retry), dashboard merge, scan progress v2 (overall % + ETA), and remaining SAST UI polish (the user flagged "still issues in the SAST issues page" — needs a fresh look).
