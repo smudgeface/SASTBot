@@ -1076,6 +1076,11 @@ export interface paths {
                             warnings: {
                                 code: string;
                                 message: string;
+                                /**
+                                 * @default info
+                                 * @enum {string}
+                                 */
+                                severity: "info" | "error";
                                 context?: {
                                     [key: string]: unknown;
                                 };
@@ -2135,6 +2140,11 @@ export interface paths {
                             warnings: {
                                 code: string;
                                 message: string;
+                                /**
+                                 * @default info
+                                 * @enum {string}
+                                 */
+                                severity: "info" | "error";
                                 context?: {
                                     [key: string]: unknown;
                                 };
@@ -2228,6 +2238,11 @@ export interface paths {
                             warnings: {
                                 code: string;
                                 message: string;
+                                /**
+                                 * @default info
+                                 * @enum {string}
+                                 */
+                                severity: "info" | "error";
                                 context?: {
                                     [key: string]: unknown;
                                 };
@@ -2334,6 +2349,11 @@ export interface paths {
                             warnings: {
                                 code: string;
                                 message: string;
+                                /**
+                                 * @default info
+                                 * @enum {string}
+                                 */
+                                severity: "info" | "error";
                                 context?: {
                                     [key: string]: unknown;
                                 };

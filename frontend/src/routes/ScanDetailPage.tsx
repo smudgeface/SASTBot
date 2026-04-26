@@ -472,17 +472,28 @@ export default function ScanDetailPage() {
             </CardContent>
           </Card>
         )}
-        {s.warnings && s.warnings.length > 0 && (
-          <Card className="border-amber-200 dark:border-amber-900">
-            <CardContent className="p-4 space-y-1">
-              {s.warnings.map((w, i) => (
-                <div key={i} className="flex gap-2 text-sm text-amber-700 dark:text-amber-300">
-                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" /><span>{w.message}</span>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        )}
+        {s.warnings && s.warnings.length > 0 && (() => {
+          const hasError = s.warnings.some((w) => w.severity === "error");
+          return (
+            <Card className={hasError ? "border-destructive/50" : "border-amber-200 dark:border-amber-900"}>
+              <CardContent className="p-4 space-y-1">
+                {s.warnings.map((w, i) => (
+                  <div
+                    key={i}
+                    className={cn(
+                      "flex gap-2 text-sm",
+                      w.severity === "error"
+                        ? "text-destructive"
+                        : "text-amber-700 dark:text-amber-300",
+                    )}
+                  >
+                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" /><span>{w.message}</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* Summary cards */}
         {isTerminal && s.status === "success" && (

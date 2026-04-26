@@ -307,6 +307,11 @@ export const ScanTriggeredBySchema = z.enum(["user", "api", "schedule"]);
 export const ScanWarningSchema = z.object({
   code: z.string(),
   message: z.string(),
+  /** "error" warnings flag the scan as untrustworthy enough to skip the
+   *  SCA auto-fix sweep — gates protect against a degraded scan silently
+   *  marking real findings as "fixed". "info" is the default and informs
+   *  without blocking remediation logic. */
+  severity: z.enum(["info", "error"]).default("info"),
   context: z.record(z.unknown()).optional(),
 });
 export type ScanWarning = z.infer<typeof ScanWarningSchema>;

@@ -150,11 +150,26 @@ function extractManifestFile(c: CdxComponent, scopeDir: string): string | null {
 // cdxgen invocation
 // ---------------------------------------------------------------------------
 
+export interface CdxgenResult {
+  doc: CycloneDxDocument;
+  /** True if cdxgen wrote a parseable output file. False if cdxgen exited
+   *  non-zero AND failed to write any output — in that case `doc` is an
+   *  empty SBOM placeholder and callers should NOT treat the scan as a
+   *  successful zero-component result. */
+  ok: boolean;
+  /** When `ok` is false, a short reason string for warnings/logs. */
+  failureReason?: string;
+}
+
 /**
- * Run cdxgen against `workingDir` and return the parsed CycloneDX JSON.
+ * Run cdxgen against `workingDir` and return the parsed CycloneDX JSON,
+ * along with an explicit success flag so callers can distinguish a
+ * legitimate zero-component scan (no manifest in the repo) from a hard
+ * failure (timeout, cdxgen crash, missing output).
+ *
  * cdxgen is installed as a package dep; its binary is in node_modules/.bin.
  */
-export async function runCdxgen(workingDir: string, excludes: string[] = []): Promise<CycloneDxDocument> {
+export async function runCdxgen(workingDir: string, excludes: string[] = []): Promise<CdxgenResult> {
   // Write the SBOM to a temp file so we don't have to parse stdout noise.
   const tmpDir = await mkdtemp(join(tmpdir(), "cdxgen-"));
   const outputPath = join(tmpDir, "sbom.json");
@@ -168,6 +183,7 @@ export async function runCdxgen(workingDir: string, excludes: string[] = []): Pr
     const excludeArgs = excludes.flatMap((p) => ["--exclude", `${p}/**`]);
     logger.info({ workingDir, outputPath, excludes }, "[sbomService] running cdxgen");
 
+    let execError: unknown = null;
     try {
       await execFileAsync(
         cdxgenBin,
@@ -184,19 +200,33 @@ export async function runCdxgen(workingDir: string, excludes: string[] = []): Pr
     } catch (err) {
       // cdxgen exits non-zero for some project types even when it succeeds.
       // Check whether the output file was written before giving up.
+      execError = err;
       logger.warn({ err }, "[sbomService] cdxgen exited non-zero — checking for output");
     }
 
-    // If cdxgen didn't write the file (unrecognised project type), return an
-    // empty SBOM so the scan succeeds with 0 components rather than failing.
     const fileExists = await access(outputPath).then(() => true).catch(() => false);
+    const empty: CycloneDxDocument = { bomFormat: "CycloneDX", specVersion: "1.7", components: [] };
+
     if (!fileExists) {
-      logger.warn({ workingDir }, "[sbomService] cdxgen produced no output — returning empty SBOM");
-      return { bomFormat: "CycloneDX", specVersion: "1.7", components: [] };
+      // No output AND cdxgen errored → treat as a hard failure so the
+      // worker knows not to trust the result for auto-fix purposes.
+      // (No output but cdxgen exited 0 is theoretically possible — also
+      // treat as failure, since cdxgen normally writes the file.)
+      const reason = execError instanceof Error
+        ? execError.message.slice(0, 200)
+        : "cdxgen produced no output file";
+      logger.warn({ workingDir, reason }, "[sbomService] cdxgen failed");
+      return { doc: empty, ok: false, failureReason: reason };
     }
 
-    const raw = await readFile(outputPath, "utf8");
-    return JSON.parse(raw) as CycloneDxDocument;
+    try {
+      const raw = await readFile(outputPath, "utf8");
+      return { doc: JSON.parse(raw) as CycloneDxDocument, ok: true };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message.slice(0, 200) : "could not parse cdxgen output";
+      logger.warn({ err }, "[sbomService] cdxgen output unparseable");
+      return { doc: empty, ok: false, failureReason: reason };
+    }
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   }
