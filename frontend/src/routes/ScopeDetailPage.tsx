@@ -1133,10 +1133,15 @@ function ScaIssueRow({
             </div>
           )}
           <div className="flex flex-wrap gap-1 mt-0.5">
-            {issue.latest_finding_type !== "cve" && (
-              <span className="text-[10px] text-muted-foreground uppercase font-medium">
-                {issue.latest_finding_type === "deprecated" ? "Deprecated" : issue.latest_finding_type.toUpperCase()}
-              </span>
+            {issue.latest_finding_type === "cve" && (
+              <Badge variant="outline" className="text-[9px] px-1 py-0 text-red-600 border-red-400">
+                CVE
+              </Badge>
+            )}
+            {(issue.latest_finding_type === "eol" || issue.latest_finding_type === "deprecated") && (
+              <Badge variant="outline" className="text-[9px] px-1 py-0 text-gray-500 border-gray-400">
+                EOL
+              </Badge>
             )}
             {issue.latest_has_fix && (
               <Badge variant="outline" className="text-[9px] px-1 py-0 text-green-600 border-green-400">
@@ -1151,7 +1156,7 @@ function ScaIssueRow({
             {issue.latest_is_dev_only && (
               <Badge
                 variant="outline"
-                className="text-[9px] px-1 py-0 text-muted-foreground"
+                className="text-[9px] px-1 py-0 text-blue-600 border-blue-400"
                 title="cdxgen 12.2+ flagged this npm package as dev-only (lockfile dev: true)"
               >
                 Dev
@@ -1540,7 +1545,7 @@ function ComponentsTab({ scopeId }: { scopeId: string }) {
                         {c.is_dev_only && (
                           <Badge
                             variant="outline"
-                            className="text-[9px] px-1 py-0 text-muted-foreground"
+                            className="text-[9px] px-1 py-0 text-blue-600 border-blue-400"
                             title="cdxgen flagged this npm package as dev-only (lockfile dev: true)"
                           >
                             Dev
