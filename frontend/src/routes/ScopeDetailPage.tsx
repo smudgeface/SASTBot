@@ -330,42 +330,46 @@ function shortRuleSummary(msg: string | null | undefined): string | null {
 // What the backend SHOULD have stored per the SAST detection prompt
 // (3 lines above match + the match span + 3 lines below). The LLM is
 // inconsistent about following this rule — sometimes it emits 20+
-// lines around the match. We treat 7 (3 + 1 + 3) as the canonical
-// short-snippet length and fall back to a keyword-search heuristic
-// when the snippet is longer.
+// lines around the match. We treat 8 (3 + 2-line span + 3) as the
+// canonical short-snippet length and fall back to a keyword-search
+// heuristic when the snippet is longer.
 const STORED_CONTEXT_LINES = 3;
-// What we render once we know which line is the match. 1 above + match
-// + 1 below keeps the panel scannable; operators can click the file
-// link for full context.
-const DISPLAYED_CONTEXT_LINES = 1;
+// Lines of context shown above the first highlighted line and below
+// the last. 3 each gives "before / span / after" visual orientation.
+const DISPLAYED_CONTEXT_LINES = 3;
 
 /**
- * Best-effort: locate the snippet line that corresponds to the issue.
- * Used when the LLM emitted more context than the prompt asked for, so
- * the simple "match line is at index STORED_CONTEXT_LINES" assumption
- * doesn't hold. We search for distinctive identifiers and content
- * keywords from the issue's summary; first hit wins. Returns -1 if
- * nothing scores above the threshold.
+ * Best-effort: locate ALL snippet lines that look like part of the issue's
+ * span. Used when the LLM emitted more context than the prompt asked for,
+ * so the simple "match line is at index STORED_CONTEXT_LINES" assumption
+ * doesn't hold. We search for distinctive identifiers and content keywords
+ * from the issue's summary. Returns the indices of every line that scores
+ * at least one keyword hit, in document order. Empty array means nothing
+ * matched and the caller should fall back to offset-from-top.
  */
-function findMatchIndexByKeywords(
+function findAllKeywordMatchIndices(
   lines: string[],
   summary: string | null,
   ruleMessage: string | null,
-): number {
+): number[] {
   const summaryRaw = (summary ?? ruleMessage ?? "").trim();
-  if (!summaryRaw) return -1;
+  if (!summaryRaw) return [];
 
   // First pass: distinctive UPPER_SNAKE_CASE identifiers in the summary.
-  // For a finding like "GS_SUPER_USER_PASSWORD ..." this nails the line.
+  // For a finding like "GS_SUPER_USER_PASSWORD ..." this nails every line
+  // that mentions one. Strong signal — return all such hits, in order.
   const idents = summaryRaw.match(/[A-Z][A-Z0-9_]{3,}/g) ?? [];
-  for (let i = 0; i < lines.length; i++) {
-    for (const id of idents) {
-      if (lines[i].includes(id)) return i;
+  if (idents.length > 0) {
+    const hits: number[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (idents.some((id) => lines[i].includes(id))) hits.push(i);
     }
+    if (hits.length > 0) return hits;
   }
 
   // Second pass: content keywords. Pick distinctive content words ≥5 chars,
-  // skip common verbs/connectors. Score = number of keyword matches per line.
+  // skip common verbs/connectors. Naive trailing-s stemming so "passwords"
+  // matches identifiers like GS_SUPER_USER_PASSWORD.
   const STOPWORDS = new Set([
     "allows", "enables", "exposes", "exploits", "grants", "leaves", "stores",
     "device", "system", "access", "remote", "attack", "attacker", "attackers",
@@ -375,8 +379,6 @@ function findMatchIndexByKeywords(
     // Stems that fall out after singularizing
     "attacker", "exploit", "grant", "store",
   ]);
-  // Naive stemming: drop trailing 's' for plurals so "passwords" matches
-  // identifiers like GS_SUPER_USER_PASSWORD. Skips "ss"-ending words.
   const stem = (w: string): string =>
     w.length > 4 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w;
 
@@ -385,32 +387,33 @@ function findMatchIndexByKeywords(
     .filter((w) => !STOPWORDS.has(w))
     .slice(0, 6);
 
-  let bestIdx = -1;
-  let bestScore = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const lower = lines[i].toLowerCase();
-    let score = 0;
-    for (const kw of keywords) if (lower.includes(kw)) score++;
-    if (score > bestScore) {
-      bestScore = score;
-      bestIdx = i;
-    }
-  }
-  // Require at least one strong match to use this — otherwise fall back to
-  // the offset-from-top assumption.
-  return bestScore >= 1 ? bestIdx : -1;
+  if (keywords.length === 0) return [];
+
+  // Find the best score, then return every line tied at that score.
+  // For multi-line findings (e.g. two adjacent password #defines) this
+  // returns all of them so the renderer can highlight the full span.
+  const scores: number[] = lines.map((line) => {
+    const lower = line.toLowerCase();
+    let s = 0;
+    for (const kw of keywords) if (lower.includes(kw)) s++;
+    return s;
+  });
+  const bestScore = Math.max(...scores);
+  if (bestScore < 1) return [];
+  return scores.flatMap((s, i) => (s === bestScore ? [i] : []));
 }
 
 /**
- * Renders a multi-line code snippet with the matching line highlighted.
- * `matchLine` is the 1-indexed line number in the original file.
+ * Renders a multi-line code snippet with the matching span highlighted.
+ * `matchLine` is the 1-indexed file line number where the issue starts.
  *
  * Two modes:
  * - Short snippet (≤ 2*STORED_CONTEXT_LINES + 2 lines): assume the LLM
- *   followed the spec — match line at index STORED_CONTEXT_LINES.
+ *   followed the spec — match span at index [STORED_CONTEXT_LINES].
+ *   Single line is highlighted unless the snippet itself is one line.
  * - Long snippet: keyword-search the summary against the snippet to
- *   find the actually-relevant line. Falls back to offset-from-top
- *   when no keyword matches.
+ *   find every relevant line. Highlights the contiguous block of
+ *   highest-scoring lines (so a "two passwords" finding highlights both).
  */
 function ContextSnippet({
   snippet,
@@ -427,34 +430,57 @@ function ContextSnippet({
 }) {
   const allLines = snippet.split("\n");
 
-  let fullHighlightIdx: number;
+  // Determine the full match span as [spanStart, spanEnd] indices into
+  // allLines (inclusive on both ends, single line = start === end).
+  let spanStart: number;
+  let spanEnd: number;
   if (allLines.length === 1) {
-    fullHighlightIdx = 0;
-  } else if (allLines.length > STORED_CONTEXT_LINES * 2 + 2) {
-    // Long snippet — try keyword search first; fall back to offset-from-top.
-    const keywordIdx = findMatchIndexByKeywords(allLines, summary ?? null, ruleMessage ?? null);
-    fullHighlightIdx = keywordIdx >= 0
-      ? keywordIdx
-      : Math.min(STORED_CONTEXT_LINES, matchLine - 1);
+    spanStart = 0;
+    spanEnd = 0;
+  } else if (allLines.length <= STORED_CONTEXT_LINES * 2 + 2) {
+    // Short snippet — trust the LLM's offset (3 lines above match).
+    spanStart = Math.min(STORED_CONTEXT_LINES, matchLine - 1);
+    spanEnd = spanStart;
   } else {
-    fullHighlightIdx = Math.min(STORED_CONTEXT_LINES, matchLine - 1);
+    // Long snippet — keyword-search.
+    const hits = findAllKeywordMatchIndices(allLines, summary ?? null, ruleMessage ?? null);
+    if (hits.length === 0) {
+      spanStart = Math.min(STORED_CONTEXT_LINES, matchLine - 1);
+      spanEnd = spanStart;
+    } else {
+      // Anchor at the first hit; extend forward through contiguous matches
+      // (allow at most one non-hit line in between, e.g. a blank line).
+      spanStart = hits[0];
+      spanEnd = spanStart;
+      for (let i = 1; i < hits.length; i++) {
+        if (hits[i] - spanEnd <= 2) {
+          spanEnd = hits[i];
+        } else {
+          break;
+        }
+      }
+    }
   }
 
-  // Trim the rendered window to ±DISPLAYED_CONTEXT_LINES around the match.
-  const startIdx = Math.max(0, fullHighlightIdx - DISPLAYED_CONTEXT_LINES);
-  const endIdx = Math.min(allLines.length, fullHighlightIdx + DISPLAYED_CONTEXT_LINES + 1);
+  // Display window: 3 lines above span + span + 3 lines below.
+  const startIdx = Math.max(0, spanStart - DISPLAYED_CONTEXT_LINES);
+  const endIdx = Math.min(allLines.length, spanEnd + DISPLAYED_CONTEXT_LINES + 1);
   const lines = allLines.slice(startIdx, endIdx);
-  const highlightIdx = fullHighlightIdx - startIdx;
-  // File line of lines[0]: match line minus the count of context lines
-  // preceding the highlighted line in the trimmed window.
-  const firstLineNumber = matchLine - highlightIdx;
+  // File line of lines[0]: matchLine corresponds to spanStart, so lines[0]
+  // is matchLine - (spanStart - startIdx).
+  const firstLineNumber = matchLine - (spanStart - startIdx);
+  // Range of indices within the displayed slice that should be highlighted.
+  const hlStart = spanStart - startIdx;
+  const hlEnd = spanEnd - startIdx;
 
   return (
     <div className={`overflow-x-auto rounded border bg-background text-xs font-mono ${className ?? ""}`}>
       <table className="w-full border-collapse">
         <tbody>
           {lines.map((line, i) => {
-            const isMatch = i === highlightIdx;
+            const isMatch = i >= hlStart && i <= hlEnd;
+            // Show the arrow only on the first highlighted line.
+            const isFirstMatch = i === hlStart;
             const lineNumber = firstLineNumber + i;
             return (
               <tr key={i} className={isMatch ? "bg-yellow-50 dark:bg-yellow-950/40" : ""}>
@@ -462,7 +488,7 @@ function ContextSnippet({
                   {lineNumber}
                 </td>
                 <td className="select-none px-1 py-0.5 text-center text-muted-foreground/60 w-4">
-                  {isMatch ? "→" : " "}
+                  {isFirstMatch ? "→" : " "}
                 </td>
                 <td className={`px-3 py-0.5 whitespace-pre ${isMatch ? "font-semibold" : ""}`}>
                   {line || " "}
