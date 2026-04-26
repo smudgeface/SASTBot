@@ -144,7 +144,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
 
       const findings = await prisma.scanFinding.findMany({
         where,
-        include: { component: { select: { name: true, version: true, scope: true } } },
+        include: { component: { select: { name: true, version: true, scope: true, isDevOnly: true } } },
         orderBy: [
           { severity: "asc" }, // critical → high → low alphabetically; re-sort UI-side
           { cvssScore: "desc" },
@@ -206,6 +206,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
               licenses: z.array(z.string()),
               component_type: z.string(),
               scope: z.string().nullable(),
+              is_dev_only: z.boolean(),
               manifest_file: z.string().nullable(),
             }),
           ),
@@ -235,6 +236,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         licenses: c.licenses,
         component_type: c.componentType,
         scope: c.scope,
+        is_dev_only: c.isDevOnly,
         manifest_file: c.manifestFile,
       }));
     },

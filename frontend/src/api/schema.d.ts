@@ -275,7 +275,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_optional_deps: boolean;
+                            reachability_include_dev_deps: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         }[];
@@ -346,7 +346,7 @@ export interface paths {
                         /** @default true */
                         reachability_enabled?: boolean;
                         /** @default true */
-                        reachability_include_optional_deps?: boolean;
+                        reachability_include_dev_deps?: boolean;
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -418,7 +418,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_optional_deps: boolean;
+                            reachability_include_dev_deps: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -510,7 +510,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_optional_deps: boolean;
+                            reachability_include_dev_deps: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -577,7 +577,7 @@ export interface paths {
                         is_active?: boolean;
                         retain_clone?: boolean;
                         reachability_enabled?: boolean;
-                        reachability_include_optional_deps?: boolean;
+                        reachability_include_dev_deps?: boolean;
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -649,7 +649,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_optional_deps: boolean;
+                            reachability_include_dev_deps: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -813,7 +813,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_optional_deps: boolean;
+                            reachability_include_dev_deps: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -2407,6 +2407,7 @@ export interface paths {
                             component_name: string;
                             component_version: string | null;
                             component_scope: string | null;
+                            is_dev_only: boolean;
                             /** @enum {string} */
                             finding_type: "cve" | "eol" | "deprecated";
                             osv_id: string;
@@ -2525,6 +2526,7 @@ export interface paths {
                             licenses: string[];
                             component_type: string;
                             scope: string | null;
+                            is_dev_only: boolean;
                             manifest_file: string | null;
                         }[];
                     };
@@ -3074,6 +3076,7 @@ export interface paths {
                                 latest_package_version: string | null;
                                 latest_ecosystem: string | null;
                                 latest_component_scope: string | null;
+                                latest_is_dev_only: boolean;
                                 /** @enum {string} */
                                 latest_finding_type: "cve" | "eol" | "deprecated";
                                 latest_cve_id: string | null;
@@ -3184,6 +3187,7 @@ export interface paths {
                                 licenses: string[];
                                 component_type: string;
                                 scope: string | null;
+                                is_dev_only: boolean;
                             }[];
                             total: number;
                             page: number;
@@ -3469,6 +3473,7 @@ export interface paths {
                             latest_package_version: string | null;
                             latest_ecosystem: string | null;
                             latest_component_scope: string | null;
+                            latest_is_dev_only: boolean;
                             /** @enum {string} */
                             latest_finding_type: "cve" | "eol" | "deprecated";
                             latest_cve_id: string | null;
@@ -3699,6 +3704,7 @@ export interface paths {
                             latest_package_version: string | null;
                             latest_ecosystem: string | null;
                             latest_component_scope: string | null;
+                            latest_is_dev_only: boolean;
                             /** @enum {string} */
                             latest_finding_type: "cve" | "eol" | "deprecated";
                             latest_cve_id: string | null;

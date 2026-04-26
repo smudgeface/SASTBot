@@ -336,7 +336,7 @@ export async function queryAndPersistFindings(
         scanRunId,
         scopeId,
         orgId,
-        { name: component.name, version: component.version, ecosystem: component.ecosystem, scope: component.scope },
+        { name: component.name, version: component.version, ecosystem: component.ecosystem, scope: component.scope, isDevOnly: component.isDevOnly },
         {
           osvId: vuln.id,
           cveId: extractCveId(vuln),

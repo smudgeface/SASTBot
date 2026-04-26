@@ -86,16 +86,13 @@ ${text.slice(0, 3000)}
 Extract the vulnerable function names. Return only function/method names (not class names, not module names). If no specific function can be determined, return an empty array.`;
 
   const useToolUse = true; // always anthropic-messages in this project
-  const result = await callLlm(
-    {
-      orgId,
-      prompt,
-      maxTokens: 256,
-      toolName: useToolUse ? "submit_extraction" : undefined,
-      toolSchema: useToolUse ? EXTRACTION_TOOL_SCHEMA : undefined,
-    },
-    { skipEnabledCheck: true }, // extraction runs regardless of triage toggle
-  );
+  const result = await callLlm({
+    orgId,
+    prompt,
+    maxTokens: 256,
+    toolName: useToolUse ? "submit_extraction" : undefined,
+    toolSchema: useToolUse ? EXTRACTION_TOOL_SCHEMA : undefined,
+  });
 
   if (!result) return null;
 

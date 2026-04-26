@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, CheckCircle2, Clock, Layers } from "lucide-react";
+import { CheckCircle2, Clock, Layers } from "lucide-react";
 
 import { useScopes } from "@/api/queries/scopes";
 import { Badge } from "@/components/ui/badge";

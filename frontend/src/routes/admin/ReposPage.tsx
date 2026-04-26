@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  CheckCircle2,
   Eraser,
   Loader2,
   MoreHorizontal,
@@ -9,7 +8,6 @@ import {
   Plus,
   Trash2,
   Wifi,
-  XCircle,
 } from "lucide-react";
 
 import { useCredentials } from "@/api/queries/credentials";
@@ -391,7 +389,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   const [sast, setSast] = useState<boolean>(repo?.analysis_types.includes("sast") ?? true);
   const [retainClone, setRetainClone] = useState<boolean>(repo?.retain_clone ?? false);
   const [reachabilityEnabled, setReachabilityEnabled] = useState<boolean>(repo?.reachability_enabled ?? true);
-  const [reachabilityIncludeOptionalDeps, setReachabilityIncludeOptionalDeps] = useState<boolean>(repo?.reachability_include_optional_deps ?? true);
+  const [reachabilityIncludeDevDeps, setReachabilityIncludeDevDeps] = useState<boolean>(repo?.reachability_include_dev_deps ?? true);
   const [sourceUrlTemplate, setSourceUrlTemplate] = useState<string>(repo?.source_url_template ?? "");
 
   const [credentialChoice, setCredentialChoice] = useState<CredentialChoice>(
@@ -438,7 +436,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       analysis_types,
       retain_clone: retainClone,
       reachability_enabled: reachabilityEnabled,
-      reachability_include_optional_deps: reachabilityIncludeOptionalDeps,
+      reachability_include_dev_deps: reachabilityIncludeDevDeps,
       source_url_template: sourceUrlTemplate.trim() || null,
     };
 
@@ -672,17 +670,17 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 <input
                   type="checkbox"
                   className="mt-0.5"
-                  checked={reachabilityIncludeOptionalDeps}
-                  onChange={(e) => setReachabilityIncludeOptionalDeps(e.target.checked)}
+                  checked={reachabilityIncludeDevDeps}
+                  onChange={(e) => setReachabilityIncludeDevDeps(e.target.checked)}
                 />
                 <div>
-                  Include cdxgen <code className="text-xs">scope:&nbsp;optional</code> components in the hint set
+                  Include npm dev-only deps in the reachability hint set
                   <p className="text-xs text-muted-foreground">
-                    On by default — cdxgen lumps devDependencies AND transitive runtime
-                    deps into <code>optional</code>, so excluding them risks dropping real
-                    reachable runtime CVEs. Only flip off if you've separately verified
-                    that this repo's <code>optional</code>-scoped components are
-                    build-only.
+                    On by default. Driven by cdxgen 12.2+'s <code>dev: true</code>{" "}
+                    npm-lockfile marker — non-npm components are unaffected. Flip off
+                    on repos with a lot of npm dev tooling to skip reachability cost
+                    on it. (Caveat: cdxgen issue #3927 — <code>devOptional</code>{" "}
+                    lockfile entries miss the marker and still slip through.)
                   </p>
                 </div>
               </label>

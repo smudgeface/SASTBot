@@ -37,7 +37,7 @@ import type {
 
 type AnalysisType = "sca" | "sast";
 type RepoProtocol = "ssh" | "https";
-type ScanStatus = "pending" | "running" | "success" | "failed";
+type ScanStatus = "pending" | "running" | "success" | "failed" | "cancelled";
 type ScanTriggeredBy = "user" | "api" | "schedule";
 
 const ALLOWED_PROTOCOLS: ReadonlyArray<RepoProtocol> = ["ssh", "https"];
@@ -153,7 +153,7 @@ export function repoToOut(repo: Repo): RepoOut {
     is_active: repo.isActive,
     retain_clone: repo.retainClone,
     reachability_enabled: repo.reachabilityEnabled,
-    reachability_include_optional_deps: repo.reachabilityIncludeOptionalDeps,
+    reachability_include_dev_deps: repo.reachabilityIncludeDevDeps,
     last_cloned_at: repo.lastClonedAt ? repo.lastClonedAt.toISOString() : null,
     created_at: repo.createdAt.toISOString(),
   };
@@ -242,6 +242,7 @@ export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
     licenses: c.licenses,
     component_type: c.componentType,
     scope: c.scope,
+    is_dev_only: c.isDevOnly,
   };
 }
 
@@ -272,7 +273,7 @@ function toFindingType(value: string): FindingType {
 }
 
 export function scanFindingToOut(
-  f: ScanFinding & { component: Pick<SbomComponent, "name" | "version" | "scope"> },
+  f: ScanFinding & { component: Pick<SbomComponent, "name" | "version" | "scope" | "isDevOnly"> },
 ): ScanFindingOut {
   return {
     id: f.id,
@@ -282,6 +283,7 @@ export function scanFindingToOut(
     component_name: f.component.name,
     component_version: f.component.version,
     component_scope: f.component.scope,
+    is_dev_only: f.component.isDevOnly,
     finding_type: toFindingType(f.findingType),
     osv_id: f.osvId,
     cve_id: f.cveId,
@@ -403,6 +405,7 @@ export function scaIssueToOut(i: ScaIssue): ScaIssueOut {
     latest_package_version: i.latestPackageVersion,
     latest_ecosystem: i.latestEcosystem,
     latest_component_scope: i.latestComponentScope,
+    latest_is_dev_only: i.latestIsDevOnly,
     latest_finding_type: toFindingType(i.latestFindingType),
     latest_cve_id: i.latestCveId,
     latest_severity: toSeverity(i.latestSeverity),
