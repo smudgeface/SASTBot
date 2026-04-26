@@ -1085,6 +1085,13 @@ export interface paths {
                             llm_request_count: number;
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
+                            /** @enum {string|null} */
+                            current_phase: "cloning" | "cdxgen" | "osv" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                            phase_progress: {
+                                done: number;
+                                total: number;
+                                label?: string;
+                            } | null;
                             created_at: string;
                         }[];
                     };
@@ -2137,6 +2144,13 @@ export interface paths {
                             llm_request_count: number;
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
+                            /** @enum {string|null} */
+                            current_phase: "cloning" | "cdxgen" | "osv" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                            phase_progress: {
+                                done: number;
+                                total: number;
+                                label?: string;
+                            } | null;
                             created_at: string;
                         }[];
                     };
@@ -2223,6 +2237,13 @@ export interface paths {
                             llm_request_count: number;
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
+                            /** @enum {string|null} */
+                            current_phase: "cloning" | "cdxgen" | "osv" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                            phase_progress: {
+                                done: number;
+                                total: number;
+                                label?: string;
+                            } | null;
                             created_at: string;
                         };
                     };
@@ -2322,6 +2343,13 @@ export interface paths {
                             llm_request_count: number;
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
+                            /** @enum {string|null} */
+                            current_phase: "cloning" | "cdxgen" | "osv" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                            phase_progress: {
+                                done: number;
+                                total: number;
+                                label?: string;
+                            } | null;
                             created_at: string;
                         };
                     };
@@ -3266,6 +3294,12 @@ export interface paths {
                             critical_count: number;
                             high_count: number;
                             sast_finding_count: number;
+                            current_phase: string | null;
+                            phase_progress: {
+                                done: number;
+                                total: number;
+                                label?: string;
+                            } | null;
                             created_at: string;
                         }[];
                     };

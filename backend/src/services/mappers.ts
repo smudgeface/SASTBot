@@ -39,6 +39,19 @@ type AnalysisType = "sca" | "sast";
 type RepoProtocol = "ssh" | "https";
 type ScanStatus = "pending" | "running" | "success" | "failed" | "cancelled";
 type ScanTriggeredBy = "user" | "api" | "schedule";
+type ScanPhase = NonNullable<ScanRunOut["current_phase"]>;
+
+const ALLOWED_PHASES: ReadonlyArray<ScanPhase> = [
+  "cloning", "cdxgen", "osv", "eol",
+  "llm_detection", "llm_recheck", "sca_summaries", "finalizing",
+];
+
+function toPhase(value: string | null): ScanPhase | null {
+  if (value === null) return null;
+  return (ALLOWED_PHASES as ReadonlyArray<string>).includes(value)
+    ? (value as ScanPhase)
+    : null;
+}
 
 const ALLOWED_PROTOCOLS: ReadonlyArray<RepoProtocol> = ["ssh", "https"];
 const ALLOWED_ANALYSIS: ReadonlyArray<AnalysisType> = ["sca", "sast"];
@@ -216,6 +229,8 @@ export function scanRunToOut(
     llm_request_count: s.llmRequestCount,
     sast_finding_count: s.sastFindingCount,
     confirmed_reachable_count: s.confirmedReachableCount,
+    current_phase: toPhase(s.currentPhase),
+    phase_progress: s.phaseProgress as ScanRunOut["phase_progress"],
     created_at: s.createdAt.toISOString(),
   };
 }

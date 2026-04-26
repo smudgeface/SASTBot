@@ -234,8 +234,32 @@ export interface Scan {
   llm_request_count: number;
   sast_finding_count: number;
   confirmed_reachable_count: number;
+  /** Live progress fields, populated only while status==="running". */
+  current_phase: ScanPhase | null;
+  phase_progress: { done: number; total: number; label?: string } | null;
   created_at: string;
 }
+
+export type ScanPhase =
+  | "cloning"
+  | "cdxgen"
+  | "osv"
+  | "eol"
+  | "llm_detection"
+  | "llm_recheck"
+  | "sca_summaries"
+  | "finalizing";
+
+export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
+  cloning: "Cloning repo",
+  cdxgen: "Building SBOM",
+  osv: "Querying OSV.dev",
+  eol: "Checking EOL / deprecation",
+  llm_detection: "LLM SAST detection",
+  llm_recheck: "LLM SAST recheck",
+  sca_summaries: "Generating summaries",
+  finalizing: "Finalizing",
+};
 
 // ---------------------------------------------------------------------------
 // SCA — SBOM components and findings (M3)
@@ -470,5 +494,7 @@ export interface ScanRunSummary {
   critical_count: number;
   high_count: number;
   sast_finding_count: number;
+  current_phase: ScanPhase | null;
+  phase_progress: { done: number; total: number; label?: string } | null;
   created_at: string;
 }

@@ -26,6 +26,7 @@ import {
 } from "@/api/queries/scans";
 import { useRepos } from "@/api/queries/repos";
 import type { FindingSeverity, SastFinding, SbomComponent, ScanFinding } from "@/api/types";
+import { SCAN_PHASE_LABELS } from "@/api/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -628,8 +629,30 @@ export default function ScanDetailPage() {
 
         {!isTerminal && (
           <Card>
-            <CardHeader><CardTitle className="text-base">Scan in progress…</CardTitle></CardHeader>
-            <CardContent className="text-sm text-muted-foreground">This page auto-refreshes. Results will appear once the scan completes.</CardContent>
+            <CardHeader>
+              <CardTitle className="text-base">
+                {s.current_phase
+                  ? (s.phase_progress?.label ?? SCAN_PHASE_LABELS[s.current_phase])
+                  : "Scan in progress…"}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {s.phase_progress && s.phase_progress.total > 0 && (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{s.phase_progress.done} of {s.phase_progress.total}</span>
+                    <span>{Math.round((s.phase_progress.done / s.phase_progress.total) * 100)}%</span>
+                  </div>
+                  <div className="h-1.5 rounded bg-muted overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-all"
+                      style={{ width: `${Math.min(100, (s.phase_progress.done / s.phase_progress.total) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+              <p className="text-sm text-muted-foreground">This page auto-refreshes. Results will appear once the scan completes.</p>
+            </CardContent>
           </Card>
         )}
       </div>

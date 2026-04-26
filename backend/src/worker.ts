@@ -25,7 +25,7 @@ import {
   type ScaHintInput,
 } from "./services/llmSastService.js";
 import type { ScanWarning } from "./schemas.js";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 const config = loadConfig();
 const logger = pino({ level: config.logLevel, name: "sastbot-worker" });
@@ -46,6 +46,49 @@ async function appendWarning(scanRunId: string, warning: ScanWarning): Promise<v
     where: { id: scanRunId },
     data: { warnings: [...current, warning] as unknown as Prisma.InputJsonValue },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Phase tracking — surfaces live progress to the scope/scan detail pages.
+// `phase` is one of the canonical labels; `progress` is the optional
+// {done, total, label?} payload for within-phase counts. Both columns are
+// null on terminal scans; the frontend only reads them while status is
+// "running". Best-effort write — failure to update progress should never
+// abort the scan.
+// ---------------------------------------------------------------------------
+
+type ScanPhase =
+  | "cloning"
+  | "cdxgen"
+  | "osv"
+  | "eol"
+  | "llm_detection"
+  | "llm_recheck"
+  | "sca_summaries"
+  | "finalizing";
+
+interface PhaseProgress {
+  done: number;
+  total: number;
+  label?: string;
+}
+
+async function setPhase(
+  scanRunId: string,
+  phase: ScanPhase,
+  progress: PhaseProgress | null = null,
+): Promise<void> {
+  await prisma.scanRun
+    .update({
+      where: { id: scanRunId },
+      data: {
+        currentPhase: phase,
+        phaseProgress: progress
+          ? (progress as unknown as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
+      },
+    })
+    .catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +172,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
 
     // 2. Detection pass.
     log.info({ scaHintCount: scaHints.length, budget: repo.llmSastTokenBudget }, "[worker] LLM detection start");
+    await setPhase(scanRunId, "llm_detection", { done: 0, total: repo.llmSastTokenBudget, label: "LLM SAST detection" });
     const detection = await runDetection({
       scanRunId,
       scopeId: run.scopeId,
@@ -204,6 +248,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         cwe: i.latestCweIds[0] ?? "CWE-UNKNOWN",
       }));
       log.info({ count: recheckIssues.length, budget: repo.llmRecheckTokenBudget }, "[worker] LLM recheck start");
+      await setPhase(scanRunId, "llm_recheck", { done: 0, total: recheckIssues.length, label: "LLM SAST recheck" });
       const recheck = await runRecheck({
         scanRunId,
         scopeDir: scanDir,
@@ -515,6 +560,7 @@ const worker = new Worker<ScanJobData>(
     try {
       // ── Step 1: clone / refresh ─────────────────────────────────────────
       log.info({ url: repo.url, retainClone: repo.retainClone }, "[worker] cloning repo");
+      await setPhase(scanRunId, "cloning");
       clone = await cloneOrRefresh({
         repoId: repo.id,
         url: repo.url,
@@ -547,6 +593,7 @@ const worker = new Worker<ScanJobData>(
       const excludes = computeScopeExclusions(scopePath, [...allScanPaths, ...ignorePaths]);
 
       log.info({ scanDir, scopePath, excludes }, "[worker] running cdxgen");
+      await setPhase(scanRunId, "cdxgen");
       const sbomDoc = await runCdxgen(scanDir, excludes);
       const componentCount = sbomDoc.components?.length ?? 0;
       log.info({ componentCount }, "[worker] cdxgen done");
@@ -568,11 +615,13 @@ const worker = new Worker<ScanJobData>(
 
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");
+      await setPhase(scanRunId, "osv", { done: 0, total: components.length, label: "Querying OSV.dev" });
       const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir, scopePath);
       log.info({ findings: cveFindings.length }, "[worker] CVE findings persisted");
 
       // ── Step 5: EOL / deprecation check ─────────────────────────────────
       log.info("[worker] checking EOL / deprecation");
+      await setPhase(scanRunId, "eol", { done: 0, total: components.length, label: "Checking EOL / deprecation" });
       const eolFindings = await checkAndPersistEolFindings(scanRunId, run.scopeId, run.orgId, components, prisma);
       log.info({ eolFindings: eolFindings.length }, "[worker] EOL findings persisted");
 
@@ -604,6 +653,12 @@ const worker = new Worker<ScanJobData>(
       });
       if (scaNeedingSummary.length > 0) {
         log.info({ count: scaNeedingSummary.length }, "[worker] generating SCA summaries");
+        await setPhase(scanRunId, "sca_summaries", {
+          done: 0,
+          total: scaNeedingSummary.length,
+          label: "Generating SCA summaries",
+        });
+        let done = 0;
         for (const issue of scaNeedingSummary) {
           const summary = await generateIssueSummary("sca", {
             packageName: issue.packageName,
@@ -618,6 +673,15 @@ const worker = new Worker<ScanJobData>(
           if (summary) {
             await prisma.scaIssue.update({ where: { id: issue.id }, data: { latestLlmSummary: summary } });
           }
+          done++;
+          // Update progress every 5 summaries to keep the DB write rate sane.
+          if (done % 5 === 0 || done === scaNeedingSummary.length) {
+            await setPhase(scanRunId, "sca_summaries", {
+              done,
+              total: scaNeedingSummary.length,
+              label: "Generating SCA summaries",
+            });
+          }
         }
       }
 
@@ -626,6 +690,7 @@ const worker = new Worker<ScanJobData>(
       // SCA findings still need the simple "wasn't detected this run → mark
       // resolved" sweep since cdxgen + OSV don't have an analogous recheck
       // mechanism (a manifest entry that disappears IS the resolution).
+      await setPhase(scanRunId, "finalizing");
       const TERMINAL_STATUSES = ["fixed", "suppressed", "false_positive"];
       await prisma.scaIssue.updateMany({
         where: {
@@ -656,6 +721,8 @@ const worker = new Worker<ScanJobData>(
           highCount: counts.high,
           mediumCount: counts.medium,
           lowCount: counts.low,
+          currentPhase: null,
+          phaseProgress: Prisma.JsonNull,
         },
       });
 
@@ -680,6 +747,8 @@ const worker = new Worker<ScanJobData>(
             status: "failed",
             finishedAt: new Date(),
             error: message,
+            currentPhase: null,
+            phaseProgress: Prisma.JsonNull,
           },
         })
         .catch(() => undefined);
