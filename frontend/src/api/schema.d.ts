@@ -2817,6 +2817,19 @@ export interface paths {
                             /** Format: uuid */
                             last_scan_run_id: string | null;
                             last_scan_completed_at: string | null;
+                            active_scan: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "pending" | "running";
+                                started_at: string | null;
+                                current_phase: string | null;
+                                phase_progress: {
+                                    done: number;
+                                    total: number;
+                                    label?: string;
+                                } | null;
+                            } | null;
                             active_sast_issue_count: number;
                             active_sca_issue_count: number;
                             critical_count: number;
@@ -2889,6 +2902,19 @@ export interface paths {
                             /** Format: uuid */
                             last_scan_run_id: string | null;
                             last_scan_completed_at: string | null;
+                            active_scan: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "pending" | "running";
+                                started_at: string | null;
+                                current_phase: string | null;
+                                phase_progress: {
+                                    done: number;
+                                    total: number;
+                                    label?: string;
+                                } | null;
+                            } | null;
                             active_sast_issue_count: number;
                             active_sca_issue_count: number;
                             critical_count: number;

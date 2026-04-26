@@ -23,6 +23,12 @@ export function useScopes(options?: { repo_id?: string; include_inactive?: boole
       const qs = params.toString();
       return apiFetch<ScopeListItem[]>(`/api/scopes${qs ? `?${qs}` : ""}`);
     },
+    // Poll every 3s while any scope has an active scan, so the live progress
+    // cell stays current. Returning false stops the polling once everything is idle.
+    refetchInterval: (q) => {
+      const data = q.state.data as ScopeListItem[] | undefined;
+      return data?.some((s) => s.active_scan) ? 3000 : false;
+    },
   });
 }
 

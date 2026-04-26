@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { CheckCircle2, Clock, Layers } from "lucide-react";
+import { CheckCircle2, Clock, Layers, Loader2 } from "lucide-react";
 
 import { useScopes } from "@/api/queries/scopes";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +13,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatRelative } from "@/lib/format";
+import type { ActiveScan } from "@/api/types";
+import { SCAN_PHASE_LABELS } from "@/api/types";
 
 function SeverityChip({ n, label }: { n: number; label: string }) {
   if (n === 0) return null;
@@ -20,6 +22,26 @@ function SeverityChip({ n, label }: { n: number; label: string }) {
     <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs font-medium bg-destructive/15 text-destructive">
       {n} {label}
     </span>
+  );
+}
+
+function ActiveScanCell({ scan }: { scan: ActiveScan }) {
+  const phaseLabel = scan.current_phase
+    ? (scan.phase_progress?.label ?? SCAN_PHASE_LABELS[scan.current_phase])
+    : "Starting…";
+  const progress = scan.phase_progress;
+  return (
+    <div className="inline-flex flex-col items-end gap-0.5">
+      <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        {phaseLabel}
+      </span>
+      {progress && progress.total > 0 && (
+        <span className="text-[10px] text-muted-foreground">
+          {progress.done}/{progress.total} · {Math.round((progress.done / progress.total) * 100)}%
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -82,13 +104,15 @@ export default function ScopesPage() {
                         {scope.path !== "/" ? ` · ${scope.path}` : ""}
                       </div>
                     </TableCell>
-                    <TableCell className="text-right text-xs text-muted-foreground">
-                      {scope.last_scan_completed_at ? (
-                        <span title={scope.last_scan_completed_at}>
+                    <TableCell className="text-right text-xs">
+                      {scope.active_scan ? (
+                        <ActiveScanCell scan={scope.active_scan} />
+                      ) : scope.last_scan_completed_at ? (
+                        <span className="text-muted-foreground" title={scope.last_scan_completed_at}>
                           {formatRelative(scope.last_scan_completed_at)}
                         </span>
                       ) : (
-                        <span className="italic">never</span>
+                        <span className="italic text-muted-foreground">never</span>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
