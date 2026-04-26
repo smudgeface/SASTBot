@@ -456,6 +456,14 @@ export interface Paginated<T> {
 // Scopes (M5)
 // ---------------------------------------------------------------------------
 
+export interface ActiveScan {
+  id: string;
+  status: "pending" | "running";
+  started_at: string | null;
+  current_phase: ScanPhase | null;
+  phase_progress: { done: number; total: number; label?: string } | null;
+}
+
 export interface ScopeListItem {
   id: string;
   org_id: string | null;
@@ -467,6 +475,8 @@ export interface ScopeListItem {
   is_active: boolean;
   last_scan_run_id: string | null;
   last_scan_completed_at: string | null;
+  /** Most recent pending/running scan, null if none in flight. */
+  active_scan: ActiveScan | null;
   active_sast_issue_count: number;
   active_sca_issue_count: number;
   critical_count: number;

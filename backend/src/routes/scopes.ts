@@ -29,6 +29,18 @@ import { linkSastIssueToTicket, linkScaIssueToTicket, refreshTicket, unlinkSastI
 // Scope list / detail schemas
 // ---------------------------------------------------------------------------
 
+const ActiveScanSchema = z.object({
+  id: z.string().uuid(),
+  status: z.enum(["pending", "running"]),
+  started_at: z.string().nullable(),
+  current_phase: z.string().nullable(),
+  phase_progress: z.object({
+    done: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+    label: z.string().optional(),
+  }).nullable(),
+}).nullable();
+
 const ScopeListItemSchema = z.object({
   id: z.string().uuid(),
   org_id: z.string().uuid().nullable(),
@@ -40,6 +52,9 @@ const ScopeListItemSchema = z.object({
   is_active: z.boolean(),
   last_scan_run_id: z.string().uuid().nullable(),
   last_scan_completed_at: z.string().nullable(),
+  /** Most recent pending/running scan for this scope, or null if no scan
+   *  is in flight. Polled by the scopes list page to show live progress. */
+  active_scan: ActiveScanSchema,
   active_sast_issue_count: z.number().int().nonnegative(),
   active_sca_issue_count: z.number().int().nonnegative(),
   critical_count: z.number().int().nonnegative(),
@@ -143,6 +158,25 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         orderBy: [{ repo: { name: "asc" } }, { path: "asc" }],
       });
 
+      // Batch-fetch the most recent pending/running scan per scope, so the
+      // scopes list page can show live progress without N polls.
+      const activeRuns = await prisma.scanRun.findMany({
+        where: {
+          scopeId: { in: scopes.map((s) => s.id) },
+          status: { in: ["pending", "running"] },
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true, scopeId: true, status: true, startedAt: true,
+          currentPhase: true, phaseProgress: true, createdAt: true,
+        },
+      });
+      // First match wins (rows are sorted desc) — at most one active run per scope in practice.
+      const activeByScope = new Map<string, (typeof activeRuns)[number]>();
+      for (const r of activeRuns) {
+        if (!activeByScope.has(r.scopeId)) activeByScope.set(r.scopeId, r);
+      }
+
       return Promise.all(scopes.map(async (scope) => {
         const repo = scope.repo as { name: string; defaultBranch: string };
 
@@ -196,6 +230,17 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           is_active: scope.isActive,
           last_scan_run_id: scope.lastScanRunId,
           last_scan_completed_at: scope.lastScanCompletedAt?.toISOString() ?? null,
+          active_scan: (() => {
+            const a = activeByScope.get(scope.id);
+            if (!a) return null;
+            return {
+              id: a.id,
+              status: (a.status === "pending" ? "pending" : "running") as "pending" | "running",
+              started_at: a.startedAt?.toISOString() ?? null,
+              current_phase: a.currentPhase,
+              phase_progress: a.phaseProgress as { done: number; total: number; label?: string } | null,
+            };
+          })(),
           active_sast_issue_count: activeSastCount,
           active_sca_issue_count: activeSCACount,
           critical_count: criticalCount,
@@ -266,6 +311,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         scaPendingCountD,
         resolvedSastCount,
         resolvedScaCount,
+        activeRun,
       ] = await Promise.all([
         prisma.sastIssue.count({
           where: { scopeId: scope.id, triageStatus: { notIn: TERMINAL_D } },
@@ -283,6 +329,14 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         lastScanRunId
           ? prisma.scaIssue.count({ where: { scopeId: scope.id, lastSeenScanRunId: { not: lastScanRunId } } })
           : 0,
+        prisma.scanRun.findFirst({
+          where: { scopeId: scope.id, status: { in: ["pending", "running"] } },
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true, status: true, startedAt: true,
+            currentPhase: true, phaseProgress: true,
+          },
+        }),
       ]);
       const pendingTriageCount = sastPendingCountD + scaPendingCountD;
 
@@ -297,6 +351,15 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         is_active: scope.isActive,
         last_scan_run_id: scope.lastScanRunId,
         last_scan_completed_at: scope.lastScanCompletedAt?.toISOString() ?? null,
+        active_scan: activeRun
+          ? {
+              id: activeRun.id,
+              status: (activeRun.status === "pending" ? "pending" : "running") as "pending" | "running",
+              started_at: activeRun.startedAt?.toISOString() ?? null,
+              current_phase: activeRun.currentPhase,
+              phase_progress: activeRun.phaseProgress as { done: number; total: number; label?: string } | null,
+            }
+          : null,
         active_sast_issue_count: activeSastCount,
         active_sca_issue_count: activeSCACount,
         critical_count: criticalCount,
