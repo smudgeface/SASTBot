@@ -425,6 +425,14 @@ export default function ScanDetailPage() {
             <p className="text-sm text-muted-foreground">
               {formatDate(s.started_at ?? s.created_at)}
               {s.finished_at ? ` · ${formatDuration(s.started_at, s.finished_at)}` : ""}
+              {s.llm_request_count > 0 && (
+                <span title={`${s.llm_input_tokens.toLocaleString()} input + ${s.llm_output_tokens.toLocaleString()} output tokens. Counts the LLM SAST detection + recheck passes only — cache reads, SCA summaries, and knowledge extractions aren't included.`}>
+                  {" · "}
+                  {s.llm_request_count} LLM {s.llm_request_count === 1 ? "call" : "calls"}
+                  {" · "}
+                  {formatTokens(s.llm_input_tokens)} in / {formatTokens(s.llm_output_tokens)} out
+                </span>
+              )}
               {" · "}
               <span className={cn("uppercase font-medium",
                 s.status === "failed" ? "text-destructive" : "",
@@ -628,4 +636,10 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
   const s = Math.max(0, Math.round((new Date(finishedAt ?? Date.now()).getTime() - new Date(startedAt).getTime()) / 1000));
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function formatTokens(n: number): string {
+  if (n < 1000) return n.toString();
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
 }
