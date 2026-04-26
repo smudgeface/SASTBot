@@ -45,6 +45,7 @@ interface CdxProperty {
 
 interface CdxComponent {
   type?: string;
+  group?: string;
   name?: string;
   version?: string;
   purl?: string;
@@ -69,6 +70,25 @@ function extractEcosystem(purl: string | undefined): string | null {
   if (!purl) return null;
   const m = purl.match(/^pkg:([^/]+)\//);
   return m ? m[1] : null;
+}
+
+/**
+ * Build the canonical package name from cdxgen's `group` + `name` fields.
+ * cdxgen splits scoped/namespaced packages: e.g. `@types/node` arrives as
+ * group=`@types`, name=`node`. The bare name alone collides with unrelated
+ * packages — most notably `@types/node` was matching the eolService slug
+ * map for the Node.js runtime, producing bogus EOL alerts.
+ *
+ * Per-ecosystem joiner:
+ *   - npm:    `@scope/name` (slash, matches OSV.dev's npm package format)
+ *   - maven:  `groupId:artifactId` (colon, matches OSV.dev's Maven format)
+ *   - other:  fall back to slash; revisit when those ecosystems land
+ */
+function canonicalPackageName(c: CdxComponent, ecosystem: string | null): string {
+  const name = c.name ?? "unknown";
+  if (!c.group) return name;
+  const sep = ecosystem === "maven" ? ":" : "/";
+  return `${c.group}${sep}${name}`;
 }
 
 function extractLicenses(entries: CdxLicenseEntry[] | undefined): string[] {
@@ -219,12 +239,14 @@ export async function persistComponents(
   // Batch-insert; skip duplicates silently (skipDuplicates=true relies on
   // the unique index; Prisma createMany doesn't return records so we refetch).
   await (client as PrismaClient).sbomComponent.createMany({
-    data: Array.from(unique.values()).map((c) => ({
+    data: Array.from(unique.values()).map((c) => {
+      const ecosystem = extractEcosystem(c.purl);
+      return {
       scanRunId,
-      name: c.name ?? "unknown",
+      name: canonicalPackageName(c, ecosystem),
       version: c.version ?? null,
       purl: c.purl!,
-      ecosystem: extractEcosystem(c.purl),
+      ecosystem,
       licenses: extractLicenses(c.licenses),
       componentType: c.type ?? "library",
       // CycloneDX scope: "required" | "optional" | "excluded"
@@ -237,7 +259,8 @@ export async function persistComponents(
         const sr = extractManifestFile(c, scopeDir);
         return sr ? toRepoRelative(scopePath, sr) : null;
       })(),
-    })),
+      };
+    }),
     skipDuplicates: true,
   });
 
