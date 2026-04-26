@@ -532,4 +532,17 @@ The repo edit form copy was rewritten to explain the new filter (npm-only, drive
 - **Manual rename migration > drop+add for renamed columns.** Prisma's `migrate dev` saw the schema change as a column drop + column add and warned about losing data. Hand-writing `ALTER TABLE … RENAME COLUMN` preserves the three existing repo settings without any backfill step.
 - **Verification before schema design saved a round-trip.** Running cdxgen 12.2 against the test-vuln-repo *before* writing the migration confirmed: marker is named `cdx:npm:package:development`, value is the string `"true"`, present on 362/413 components for a tiny project (jest+mocha closure), absent on transitive runtime (form-data via axios). One half-hour of verification meant zero schema iterations.
 
-**Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, `docs/M6_LLM_SAST_PLAN.md` has an "Under review" section and a "Future improvements" section (deep-reasoning model option, streaming UI, lockfile-based dev classifier for non-npm ecosystems, etc.).
+### Follow-ups (same day, after the feature commit)
+
+**Canonical package names with group prefix (`b4043e7`).** UI verification of the dev badges turned up a row showing "Upgrade Node.js 25.6.0..." — but that's the runtime EOL, and the actual SBOM component was `@types/node` (TypeScript types, dev-only). Root cause: cdxgen splits scoped/namespaced packages into `group` + `name` (e.g. `group="@types"`, `name="node"`), but `sbomService.persistComponents` was storing only the bare `name`. That collided with `eolService.ts`'s slug map (`node: "nodejs"`), producing the bogus alert.
+
+Fix: combine `group + name` into a canonical name in `persistComponents`, with per-ecosystem joiner — `/` for npm (matches OSV.dev's `@scope/name` format), `:` for maven (matches `groupId:artifactId`). Verified: 13 `@types/*`, all `@babel/*`, `@jest/*`, `@tootallnate/*` etc. now stored with full names. Issue count dropped 42→41, High dropped 12→11 (the one bogus EOL alert disappeared). Existing rows under bare names become orphans on next scan; for production repos the operator can rescan and let them age out, or `DELETE FROM sca_issues WHERE ...` manually.
+
+**Drive-by typecheck fixes (folded into the feature commit `977be60`).** Three pre-existing errors that were failing `tsc --noEmit` on `main` before this work:
+- `cveKnowledgeService.ts:97` — bogus 2nd argument to `callLlm` (no longer accepts options); dropped.
+- `mappers.ts:50` — `"cancelled"` was added to `ScanStatus` in the DB during the M5 cancel feature but never to this local TS type union; added.
+- `reachabilityService.ts:184` — Zod `.default([])` produces an output that's still optional in the type system; added `?? []` guard.
+
+**Dead-code cleanup (same commit).** `ScopeDetailPage.tsx`'s `TriageBadge` was a stale duplicate of `StatusBadge` left over when SAST + SCA unified to a single status vocabulary in M5. Plus a handful of unused lucide imports and unused shadcn Card subcomponents.
+
+**Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, `docs/M6_LLM_SAST_PLAN.md` has a "Future improvements" section (deep-reasoning model option, streaming UI, lockfile-based dev classifier for non-npm ecosystems, etc.).

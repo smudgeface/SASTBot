@@ -398,6 +398,7 @@ The first cut at filtering optional-scope SCA hints was based on a borrowed prox
 - Repo flag renamed `reachability_include_optional_deps` → `reachability_include_dev_deps` (manual SQL rename to preserve existing values). Worker filter switched from `latestComponentScope` to `latestIsDevOnly`.
 - "Dev" badge restored on SCA issue rows and Components tab, keyed on the truthful column.
 - Repo edit form copy rewritten to explain the npm-only signal and the cdxgen #3927 caveat.
+- Follow-up `b4043e7`: `sbomService.persistComponents` now stores canonical package names with the group prefix (`@types/node` not bare `node`) — fixes a collision in `eolService.ts`'s slug map that was mis-flagging `@types/node` as the Node.js runtime. Per-ecosystem joiner: `/` for npm, `:` for maven. Add new ecosystems' joiners in `canonicalPackageName` as they land.
 
 **Carried-forward limitations:**
 
