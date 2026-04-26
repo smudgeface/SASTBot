@@ -327,42 +327,126 @@ function shortRuleSummary(msg: string | null | undefined): string | null {
 // Code snippet with highlighted match line
 // ---------------------------------------------------------------------------
 
-// What the backend stores in `latest_snippet` (3 lines above + match span +
-// 3 lines below per the SAST detection prompt). Used to locate the match
-// line within the stored text.
+// What the backend SHOULD have stored per the SAST detection prompt
+// (3 lines above match + the match span + 3 lines below). The LLM is
+// inconsistent about following this rule — sometimes it emits 20+
+// lines around the match. We treat 7 (3 + 1 + 3) as the canonical
+// short-snippet length and fall back to a keyword-search heuristic
+// when the snippet is longer.
 const STORED_CONTEXT_LINES = 3;
-// What we render. The full stored window has a lot of noise around the
-// vulnerable line; 1 above + match + 1 below is enough orientation while
-// keeping the panel scannable. Operators can click the file link for full
-// context.
+// What we render once we know which line is the match. 1 above + match
+// + 1 below keeps the panel scannable; operators can click the file
+// link for full context.
 const DISPLAYED_CONTEXT_LINES = 1;
+
+/**
+ * Best-effort: locate the snippet line that corresponds to the issue.
+ * Used when the LLM emitted more context than the prompt asked for, so
+ * the simple "match line is at index STORED_CONTEXT_LINES" assumption
+ * doesn't hold. We search for distinctive identifiers and content
+ * keywords from the issue's summary; first hit wins. Returns -1 if
+ * nothing scores above the threshold.
+ */
+function findMatchIndexByKeywords(
+  lines: string[],
+  summary: string | null,
+  ruleMessage: string | null,
+): number {
+  const summaryRaw = (summary ?? ruleMessage ?? "").trim();
+  if (!summaryRaw) return -1;
+
+  // First pass: distinctive UPPER_SNAKE_CASE identifiers in the summary.
+  // For a finding like "GS_SUPER_USER_PASSWORD ..." this nails the line.
+  const idents = summaryRaw.match(/[A-Z][A-Z0-9_]{3,}/g) ?? [];
+  for (let i = 0; i < lines.length; i++) {
+    for (const id of idents) {
+      if (lines[i].includes(id)) return i;
+    }
+  }
+
+  // Second pass: content keywords. Pick distinctive content words ≥5 chars,
+  // skip common verbs/connectors. Score = number of keyword matches per line.
+  const STOPWORDS = new Set([
+    "allows", "enables", "exposes", "exploits", "grants", "leaves", "stores",
+    "device", "system", "access", "remote", "attack", "attacker", "attackers",
+    "unrestricted", "unauthenticated", "unauthorized",
+    "potentially", "improperly", "without", "before", "after",
+    "could", "would", "should", "their", "these", "those", "which",
+    // Stems that fall out after singularizing
+    "attacker", "exploit", "grant", "store",
+  ]);
+  // Naive stemming: drop trailing 's' for plurals so "passwords" matches
+  // identifiers like GS_SUPER_USER_PASSWORD. Skips "ss"-ending words.
+  const stem = (w: string): string =>
+    w.length > 4 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w;
+
+  const keywords = (summaryRaw.toLowerCase().match(/\b[a-z][a-z]{4,}\b/g) ?? [])
+    .map(stem)
+    .filter((w) => !STOPWORDS.has(w))
+    .slice(0, 6);
+
+  let bestIdx = -1;
+  let bestScore = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const lower = lines[i].toLowerCase();
+    let score = 0;
+    for (const kw of keywords) if (lower.includes(kw)) score++;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+  // Require at least one strong match to use this — otherwise fall back to
+  // the offset-from-top assumption.
+  return bestScore >= 1 ? bestIdx : -1;
+}
 
 /**
  * Renders a multi-line code snippet with the matching line highlighted.
  * `matchLine` is the 1-indexed line number in the original file.
- * The snippet starts at max(0, matchLine - 1 - STORED_CONTEXT_LINES) so the
- * highlight index within the snippet is min(STORED_CONTEXT_LINES, matchLine - 1).
+ *
+ * Two modes:
+ * - Short snippet (≤ 2*STORED_CONTEXT_LINES + 2 lines): assume the LLM
+ *   followed the spec — match line at index STORED_CONTEXT_LINES.
+ * - Long snippet: keyword-search the summary against the snippet to
+ *   find the actually-relevant line. Falls back to offset-from-top
+ *   when no keyword matches.
  */
 function ContextSnippet({
   snippet,
   matchLine,
   className,
+  summary,
+  ruleMessage,
 }: {
   snippet: string;
   matchLine: number;
   className?: string;
+  summary?: string | null;
+  ruleMessage?: string | null;
 }) {
   const allLines = snippet.split("\n");
-  // If the snippet only has one line (no context), highlight that line.
-  const fullHighlightIdx = allLines.length === 1 ? 0 : Math.min(STORED_CONTEXT_LINES, matchLine - 1);
-  // Trim the rendered window to ±DISPLAYED_CONTEXT_LINES around the match,
-  // so a 7-line stored snippet shows as 3 lines on screen.
+
+  let fullHighlightIdx: number;
+  if (allLines.length === 1) {
+    fullHighlightIdx = 0;
+  } else if (allLines.length > STORED_CONTEXT_LINES * 2 + 2) {
+    // Long snippet — try keyword search first; fall back to offset-from-top.
+    const keywordIdx = findMatchIndexByKeywords(allLines, summary ?? null, ruleMessage ?? null);
+    fullHighlightIdx = keywordIdx >= 0
+      ? keywordIdx
+      : Math.min(STORED_CONTEXT_LINES, matchLine - 1);
+  } else {
+    fullHighlightIdx = Math.min(STORED_CONTEXT_LINES, matchLine - 1);
+  }
+
+  // Trim the rendered window to ±DISPLAYED_CONTEXT_LINES around the match.
   const startIdx = Math.max(0, fullHighlightIdx - DISPLAYED_CONTEXT_LINES);
   const endIdx = Math.min(allLines.length, fullHighlightIdx + DISPLAYED_CONTEXT_LINES + 1);
   const lines = allLines.slice(startIdx, endIdx);
   const highlightIdx = fullHighlightIdx - startIdx;
-  // Absolute file line number of lines[0]: match line minus the count of
-  // context lines preceding it within the trimmed window.
+  // File line of lines[0]: match line minus the count of context lines
+  // preceding the highlighted line in the trimmed window.
   const firstLineNumber = matchLine - highlightIdx;
 
   return (
@@ -875,6 +959,8 @@ function SastIssueRow({
               <ContextSnippet
                 snippet={issue.latest_snippet}
                 matchLine={issue.latest_start_line}
+                summary={issue.latest_llm_summary}
+                ruleMessage={issue.latest_rule_message}
                 className="mb-3"
               />
             )}
