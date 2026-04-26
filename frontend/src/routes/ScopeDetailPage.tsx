@@ -407,13 +407,13 @@ function findAllKeywordMatchIndices(
  * Renders a multi-line code snippet with the matching span highlighted.
  * `matchLine` is the 1-indexed file line number where the issue starts.
  *
- * Two modes:
- * - Short snippet (≤ 2*STORED_CONTEXT_LINES + 2 lines): assume the LLM
- *   followed the spec — match span at index [STORED_CONTEXT_LINES].
- *   Single line is highlighted unless the snippet itself is one line.
- * - Long snippet: keyword-search the summary against the snippet to
- *   find every relevant line. Highlights the contiguous block of
- *   highest-scoring lines (so a "two passwords" finding highlights both).
+ * Locating the match line within the snippet is hard because the LLM
+ * is inconsistent about how much context it includes above the issue.
+ * The prompt asks for "3 lines above start_line" but actual snippets
+ * have anywhere from 0 to 20+ lines of preamble. Short snippets and
+ * long snippets are both affected — so we always try keyword-search
+ * first, falling back to "snippet[STORED_CONTEXT_LINES] is the match"
+ * only when the search yields no hits.
  */
 function ContextSnippet({
   snippet,
@@ -437,14 +437,10 @@ function ContextSnippet({
   if (allLines.length === 1) {
     spanStart = 0;
     spanEnd = 0;
-  } else if (allLines.length <= STORED_CONTEXT_LINES * 2 + 2) {
-    // Short snippet — trust the LLM's offset (3 lines above match).
-    spanStart = Math.min(STORED_CONTEXT_LINES, matchLine - 1);
-    spanEnd = spanStart;
   } else {
-    // Long snippet — keyword-search.
     const hits = findAllKeywordMatchIndices(allLines, summary ?? null, ruleMessage ?? null);
     if (hits.length === 0) {
+      // No keyword hits — fall back to the prompt-spec assumption.
       spanStart = Math.min(STORED_CONTEXT_LINES, matchLine - 1);
       spanEnd = spanStart;
     } else {
