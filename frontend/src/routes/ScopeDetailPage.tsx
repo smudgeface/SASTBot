@@ -327,13 +327,21 @@ function shortRuleSummary(msg: string | null | undefined): string | null {
 // Code snippet with highlighted match line
 // ---------------------------------------------------------------------------
 
-const CONTEXT_LINES = 3;
+// What the backend stores in `latest_snippet` (3 lines above + match span +
+// 3 lines below per the SAST detection prompt). Used to locate the match
+// line within the stored text.
+const STORED_CONTEXT_LINES = 3;
+// What we render. The full stored window has a lot of noise around the
+// vulnerable line; 1 above + match + 1 below is enough orientation while
+// keeping the panel scannable. Operators can click the file link for full
+// context.
+const DISPLAYED_CONTEXT_LINES = 1;
 
 /**
  * Renders a multi-line code snippet with the matching line highlighted.
  * `matchLine` is the 1-indexed line number in the original file.
- * The snippet starts at max(0, matchLine - 1 - CONTEXT_LINES) so the
- * highlight index within the snippet is min(CONTEXT_LINES, matchLine - 1).
+ * The snippet starts at max(0, matchLine - 1 - STORED_CONTEXT_LINES) so the
+ * highlight index within the snippet is min(STORED_CONTEXT_LINES, matchLine - 1).
  */
 function ContextSnippet({
   snippet,
@@ -344,11 +352,17 @@ function ContextSnippet({
   matchLine: number;
   className?: string;
 }) {
-  const lines = snippet.split("\n");
+  const allLines = snippet.split("\n");
   // If the snippet only has one line (no context), highlight that line.
-  const highlightIdx = lines.length === 1 ? 0 : Math.min(CONTEXT_LINES, matchLine - 1);
-  // Absolute file line number of snippet[0]: match line minus the count of
-  // context lines preceding it within the snippet.
+  const fullHighlightIdx = allLines.length === 1 ? 0 : Math.min(STORED_CONTEXT_LINES, matchLine - 1);
+  // Trim the rendered window to ±DISPLAYED_CONTEXT_LINES around the match,
+  // so a 7-line stored snippet shows as 3 lines on screen.
+  const startIdx = Math.max(0, fullHighlightIdx - DISPLAYED_CONTEXT_LINES);
+  const endIdx = Math.min(allLines.length, fullHighlightIdx + DISPLAYED_CONTEXT_LINES + 1);
+  const lines = allLines.slice(startIdx, endIdx);
+  const highlightIdx = fullHighlightIdx - startIdx;
+  // Absolute file line number of lines[0]: match line minus the count of
+  // context lines preceding it within the trimmed window.
   const firstLineNumber = matchLine - highlightIdx;
 
   return (
@@ -756,6 +770,17 @@ function SastIssueRow({
     triage.mutate({ issueId: issue.id, status });
   };
 
+  // LLM-mode SAST rule_ids are `llm:CWE-XXX` placeholders — the CWE field
+  // already conveys the same info, and the rule_message is essentially the
+  // same as the LLM summary. Suppress redundant rendering when this is the
+  // case so the panel reads like one coherent narrative instead of three
+  // copies of the same sentence.
+  const isLlmRule = issue.latest_rule_id.startsWith("llm:");
+  const ruleMessageDuplicatesSummary =
+    issue.latest_rule_message != null &&
+    issue.latest_llm_summary != null &&
+    issue.latest_rule_message.trim() === issue.latest_llm_summary.trim();
+
   return (
     <>
       <TableRow
@@ -792,12 +817,17 @@ function SastIssueRow({
           >
             {truncateFilePath(issue.latest_file_path)}:{issue.latest_start_line}
           </div>
-          <div
-            className="truncate text-[10px] text-muted-foreground font-mono mt-0.5"
-            title={issue.latest_rule_id}
-          >
-            {issue.latest_rule_id.split(".").pop()}
-          </div>
+          {/* Opengrep-era rules surface a meaningful rule slug here. LLM-mode
+              rule_ids are bare `llm:CWE-XXX` placeholders that just duplicate
+              the CWE info shown elsewhere in the panel — hide them. */}
+          {!isLlmRule && (
+            <div
+              className="truncate text-[10px] text-muted-foreground font-mono mt-0.5"
+              title={issue.latest_rule_id}
+            >
+              {issue.latest_rule_id.split(".").pop()}
+            </div>
+          )}
         </TableCell>
         <TableCell>
           <div className="flex flex-col gap-1 items-start">
@@ -826,7 +856,7 @@ function SastIssueRow({
             {issue.latest_llm_summary && (
               <p className="mb-3 text-sm">{issue.latest_llm_summary}</p>
             )}
-            {issue.latest_rule_message && (
+            {issue.latest_rule_message && !ruleMessageDuplicatesSummary && !isLlmRule && (
               <p className="mb-3 text-xs text-muted-foreground">
                 <span className="font-medium">Rule description: </span>
                 {issue.latest_rule_message}
@@ -854,8 +884,14 @@ function SastIssueRow({
                 {issue.triage_reasoning}
               </p>
             )}
+            {/* Rule ID is informative for Opengrep-era findings (e.g.
+                `eslint.detect-eval-with-expression`), but for LLM-mode the
+                rule_id is just `llm:CWE-XXX` which is redundant with the
+                CWE field. Hide the rule when it's an LLM placeholder. */}
             <div className="mb-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
-              <span><span className="font-medium">Rule: </span><span className="font-mono">{issue.latest_rule_id}</span></span>
+              {!isLlmRule && (
+                <span><span className="font-medium">Rule: </span><span className="font-mono">{issue.latest_rule_id}</span></span>
+              )}
               {issue.latest_cwe_ids?.length > 0 && (
                 <span><span className="font-medium">CWE: </span>{issue.latest_cwe_ids.join(", ")}</span>
               )}
