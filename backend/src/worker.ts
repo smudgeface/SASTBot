@@ -796,13 +796,20 @@ const worker = new Worker<ScanJobData>(
         },
       });
 
-      // Update scope denorm so the scope list page can show last-scan timestamps
+      // Update scope denorm. `lastScanCompletedAt` always advances (operators
+      // want to see "Last scan: just now" even when the scan was degraded —
+      // it's the operational truth). `lastScanRunId` is the pivot point for
+      // "which run defines current findings" used by the SCA/SAST default
+      // filters, so it ONLY advances when the scan is trustworthy. A degraded
+      // run doesn't earn the pointer; previous good run keeps it.
       await prisma.scanScope.update({
         where: { id: run.scopeId },
-        data: { lastScanRunId: scanRunId, lastScanCompletedAt: finishedAt },
+        data: untrustworthy
+          ? { lastScanCompletedAt: finishedAt }
+          : { lastScanRunId: scanRunId, lastScanCompletedAt: finishedAt },
       });
 
-      log.info(counts, "[worker] scan complete");
+      log.info({ ...counts, untrustworthy }, "[worker] scan complete");
     } catch (err) {
       // Network failures get a plain-English error; everything else carries
       // the underlying error message through.
