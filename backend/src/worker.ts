@@ -48,6 +48,18 @@ async function appendWarning(scanRunId: string, warning: ScanWarning): Promise<v
   });
 }
 
+/** Returns true iff any error-severity warning has been recorded on this
+ *  scan. Gates remediation actions (SCA auto-fix sweep, etc.) so a scan
+ *  with a degraded data path doesn't silently destroy real findings. */
+async function hasErrorWarnings(scanRunId: string): Promise<boolean> {
+  const run = await prisma.scanRun.findUnique({
+    where: { id: scanRunId },
+    select: { warnings: true },
+  });
+  const list = Array.isArray(run?.warnings) ? (run!.warnings as ScanWarning[]) : [];
+  return list.some((w) => w.severity === "error");
+}
+
 // ---------------------------------------------------------------------------
 // Phase tracking — surfaces live progress to the scope/scan detail pages.
 // `phase` is one of the canonical labels; `progress` is the optional
@@ -185,14 +197,27 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       orgId: run.orgId,
     });
     log.info(
-      { records: detection.records.length, parseErrors: detection.parseErrors.length, durationMs: detection.durationMs, usage: detection.usage },
+      { records: detection.records.length, parseErrors: detection.parseErrors.length, durationMs: detection.durationMs, usage: detection.usage, exitCode: detection.exitCode },
       "[worker] LLM detection finished",
     );
 
     if (detection.parseErrors.length > 0) {
       await appendWarning(scanRunId, {
         code: "llm_sast_parse_errors",
+        severity: "info",
         message: `LLM SAST detection emitted ${detection.parseErrors.length} unparseable record(s); some findings may be missing.`,
+      });
+    }
+
+    // Untrust signal: detection subprocess didn't exit cleanly. exitCode === 0
+    // with zero records is a legitimate "no findings" outcome (clean
+    // codebase). exitCode !== 0 means claude-p crashed mid-run, so any
+    // SAST/SCA remediation logic that gates on this scan should be skipped.
+    if (detection.exitCode !== 0) {
+      await appendWarning(scanRunId, {
+        code: "llm_sast_detection_failed",
+        severity: "error",
+        message: `LLM SAST detection exited with code ${detection.exitCode} after ${(detection.durationMs / 1000).toFixed(0)}s. Existing SAST/SCA findings were preserved — re-run the scan once the LLM endpoint is healthy.`,
       });
     }
 
@@ -272,6 +297,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       if (recheck.parseErrors.length > 0) {
         await appendWarning(scanRunId, {
           code: "llm_recheck_parse_errors",
+          severity: "info",
           message: `LLM recheck emitted ${recheck.parseErrors.length} unparseable record(s).`,
         });
       }
@@ -594,9 +620,41 @@ const worker = new Worker<ScanJobData>(
 
       log.info({ scanDir, scopePath, excludes }, "[worker] running cdxgen");
       await setPhase(scanRunId, "cdxgen");
-      const sbomDoc = await runCdxgen(scanDir, excludes);
+      const cdxgenResult = await runCdxgen(scanDir, excludes);
+      const sbomDoc = cdxgenResult.doc;
       const componentCount = sbomDoc.components?.length ?? 0;
-      log.info({ componentCount }, "[worker] cdxgen done");
+      log.info({ componentCount, ok: cdxgenResult.ok }, "[worker] cdxgen done");
+
+      // Untrust signal: cdxgen failed to produce a parseable SBOM. Worker
+      // continues so the scan record still completes (audit trail), but
+      // skips remediation logic that would otherwise mark stale findings
+      // as fixed.
+      if (!cdxgenResult.ok) {
+        await appendWarning(scanRunId, {
+          code: "cdxgen_failed",
+          severity: "error",
+          message: `cdxgen failed to produce a usable SBOM (${cdxgenResult.failureReason ?? "unknown"}). SCA auto-fix sweep was skipped to avoid marking real findings as resolved.`,
+        });
+      }
+
+      // Soft notice: 0 components from a scope that previously had >0.
+      // Could be legitimate (operator removed package.json) or a misconfig
+      // (manifest path moved). We do NOT block auto-fix on this — the
+      // operator's deliberate cleanup should propagate. Just surface it.
+      if (cdxgenResult.ok && componentCount === 0) {
+        const previousNonZero = await prisma.scanRun.findFirst({
+          where: { scopeId: run.scopeId, status: "success", componentCount: { gt: 0 } },
+          orderBy: { createdAt: "desc" },
+          select: { componentCount: true, finishedAt: true },
+        });
+        if (previousNonZero) {
+          await appendWarning(scanRunId, {
+            code: "cdxgen_zero_components",
+            severity: "info",
+            message: `cdxgen returned 0 components — previous scan had ${previousNonZero.componentCount}. If the manifest was removed intentionally, no action needed; otherwise verify the repo has package.json / pyproject.toml / etc. at the expected path.`,
+          });
+        }
+      }
 
       // ── Step 3: persist components + raw SBOM ───────────────────────────
       const components = await prisma.$transaction(async (tx) => {
@@ -690,17 +748,29 @@ const worker = new Worker<ScanJobData>(
       // SCA findings still need the simple "wasn't detected this run → mark
       // resolved" sweep since cdxgen + OSV don't have an analogous recheck
       // mechanism (a manifest entry that disappears IS the resolution).
+      //
+      // GATE: skip the sweep entirely when any error-severity warning was
+      // recorded during this scan — a degraded scan ("cdxgen produced 0
+      // components because the network died mid-fetch", "claude-p
+      // crashed after 6h") would otherwise silently mark every existing
+      // finding as fixed. The operator can manually trigger remediation
+      // after diagnosing the failure.
       await setPhase(scanRunId, "finalizing");
-      const TERMINAL_STATUSES = ["fixed", "suppressed", "false_positive"];
-      await prisma.scaIssue.updateMany({
-        where: {
-          scopeId: run.scopeId,
-          lastSeenScanRunId: { not: scanRunId },
-          dismissedStatus: { notIn: TERMINAL_STATUSES },
-        },
-        data: { dismissedStatus: "fixed" },
-      });
-      log.info("[worker] auto-fixed resolved SCA issues");
+      const untrustworthy = await hasErrorWarnings(scanRunId);
+      if (untrustworthy) {
+        log.warn("[worker] skipping SCA auto-fix sweep — scan has error-severity warnings");
+      } else {
+        const TERMINAL_STATUSES = ["fixed", "suppressed", "false_positive"];
+        await prisma.scaIssue.updateMany({
+          where: {
+            scopeId: run.scopeId,
+            lastSeenScanRunId: { not: scanRunId },
+            dismissedStatus: { notIn: TERMINAL_STATUSES },
+          },
+          data: { dismissedStatus: "fixed" },
+        });
+        log.info("[worker] auto-fixed resolved SCA issues");
+      }
 
       // ── Step 8: update SCA severity summary counters ─────────────────────
       const counts = { critical: 0, high: 0, medium: 0, low: 0 };

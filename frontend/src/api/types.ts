@@ -207,6 +207,10 @@ export type ScanTrigger = "user" | "api" | "schedule";
 export interface ScanWarning {
   code: string;
   message: string;
+  /** "error" warnings flag the scan as untrustworthy enough to skip the
+   *  SCA auto-fix sweep. "info" is the default and informs without
+   *  blocking remediation logic. */
+  severity: "info" | "error";
   context?: Record<string, unknown>;
 }
 
