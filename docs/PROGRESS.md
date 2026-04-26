@@ -490,4 +490,46 @@ Follow-up after the dev-deps correction. User research mentioned a possible `dev
 
 The plan doc's "Under review" item is updated with this path forward.
 
-**Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, `docs/M6_LLM_SAST_PLAN.md` has an "Under review" section (the optional-deps filter feature) and a "Future improvements" section (deep-reasoning model option, streaming UI, lockfile-based dev classifier, etc.).
+---
+
+## M6h — cdxgen 12.2 dev marker (2026-04-25)
+
+### Why we did this
+
+The dev-deps misadventure (`3876021` → `9a55d95`) ended with us removing the "DEV" badge entirely because cdxgen v10.x's only ecosystem hint, CycloneDX `scope: "optional"`, conflated devDependencies with transitive runtime deps. Verification on the test-vuln-repo confirmed it concretely: 1 `required` component (lodash, the first direct dep), 412 `optional` — including form-data and other transitive runtime deps that the LLM reachability hint set legitimately needs.
+
+cdxgen 12.2.1 ships a real npm dev classifier as the `cdx:npm:package:development=true` property, sourced from `package-lock.json`'s `dev: true` entries. With that we can distinguish dev from runtime honestly.
+
+### What shipped
+
+**`@cyclonedx/cdxgen` bumped from `^10.10.7` → `^12.2.1`.** No source changes needed in `sbomService.runCdxgen` — the SBOM shape stayed compatible (`specVersion: 1.7`, `bomFormat: CycloneDX`, `evidence.identity[]` always an array, `properties[name=SrcFile]` and `manifest-analysis` evidence still both present).
+
+**One new wart from cdxgen 12**: a "SECURE MODE" diagnostic block now prints to stderr when run as root with credential-pattern env vars (`MASTER_KEY`, `BOOTSTRAP_ADMIN_EMAIL`, `NODE_PATH`). Noisy but non-fatal — the SBOM is still written. Future cleanup: drop the cdxgen subprocess to a non-root user (it already runs in the worker container, which has the `claudeuser` user from M6).
+
+**`SbomComponent.isDevOnly` and `ScaIssue.latestIsDevOnly` columns** added (both `BOOLEAN NOT NULL DEFAULT false`). `sbomService.extractIsDevOnly` reads `properties[name=cdx:npm:package:development]==="true"` and `issueService.upsertScaIssueFromDetection` denormalizes it onto the issue. Existing rows default to `false` ("not declared dev"), which is the conservative choice — they stay in scans rather than being silently filtered.
+
+**Repo flag renamed**: `reachability_include_optional_deps` → `reachability_include_dev_deps`. The previous name referred to cdxgen's `scope: "optional"` (which we now don't filter on at all); the new name reflects the truthful semantics. Default still `true` (include everything; flip off to skip reachability cost on npm dev tooling). Worker filter changed from `latestComponentScope: { not: "optional" }` to `latestIsDevOnly: false` — npm-only signal: non-npm components have `isDevOnly=false` and stay in the hint set as before.
+
+**"Dev" badge restored** with truthful semantics:
+- SCA issue rows: chip alongside "Has fix" / "Reachable" badges, keyed on `latest_is_dev_only`.
+- Components tab: small badge next to the package name, keyed on `is_dev_only`.
+
+The repo edit form copy was rewritten to explain the new filter (npm-only, driven by lockfile `dev: true` marker, with the cdxgen #3927 caveat called out).
+
+### Schema changes
+
+1. `20260426040224_m6h_cdxgen_dev_marker` — adds `sbom_components.is_dev_only` and `sca_issues.latest_is_dev_only` (both `BOOLEAN NOT NULL DEFAULT false`).
+2. `20260426040800_m6h_rename_optional_to_dev` — renames `repos.reachability_include_optional_deps` → `repos.reachability_include_dev_deps`. Manual SQL (Prisma's auto-migration would have dropped+added and lost the existing values on three rows).
+
+### Caveats (carried forward)
+
+- **cdxgen issue #3927** (still open) — `devOptional: true` lockfile entries miss the dev marker. A small fraction of dev-only npm packages will read as `false`. Acceptable for v1; revisit if it bites.
+- **npm-only.** Python (poetry/pip), Java (maven/gradle), Go, etc. still get `is_dev_only=false` for everything. Other ecosystems would need their own per-cdxgen-extractor markers.
+
+### What we learned
+
+- **Renames stick when the new name is truthful.** We churned the column name twice in two days (`reachability_include_dev_deps` → `_optional_deps` → `_dev_deps` again). The first rename was correct on the surface but wrong in semantics, because cdxgen v10's `optional` scope didn't actually mean dev. Once cdxgen could speak the real signal, the original name became correct again. Worth holding off on renames until the underlying source-of-truth is reliable — or, if you've shipped one based on a borrowed proxy, be willing to flip back when the real signal arrives.
+- **Manual rename migration > drop+add for renamed columns.** Prisma's `migrate dev` saw the schema change as a column drop + column add and warned about losing data. Hand-writing `ALTER TABLE … RENAME COLUMN` preserves the three existing repo settings without any backfill step.
+- **Verification before schema design saved a round-trip.** Running cdxgen 12.2 against the test-vuln-repo *before* writing the migration confirmed: marker is named `cdx:npm:package:development`, value is the string `"true"`, present on 362/413 components for a tiny project (jest+mocha closure), absent on transitive runtime (form-data via axios). One half-hour of verification meant zero schema iterations.
+
+**Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, `docs/M6_LLM_SAST_PLAN.md` has an "Under review" section and a "Future improvements" section (deep-reasoning model option, streaming UI, lockfile-based dev classifier for non-npm ecosystems, etc.).
