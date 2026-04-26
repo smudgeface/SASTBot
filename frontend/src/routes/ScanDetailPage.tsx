@@ -431,7 +431,7 @@ export default function ScanDetailPage() {
                 {s.status === "success" ? "Complete" : s.status}
               </p>
               {s.llm_request_count > 0 && (
-                <p className="text-sm text-muted-foreground" title={`${s.llm_input_tokens.toLocaleString()} input + ${s.llm_output_tokens.toLocaleString()} output tokens. Counts the LLM SAST detection + recheck passes plus SCA summary generation — cache read/creation tokens from claude-p aren't included.`}>
+                <p className="text-sm text-muted-foreground" title={`${s.llm_input_tokens.toLocaleString()} input + ${s.llm_output_tokens.toLocaleString()} output tokens. Cache read/creation tokens aren't included.`}>
                   {s.llm_request_count} LLM {s.llm_request_count === 1 ? "call" : "calls"}
                   {" · "}
                   {formatTokens(s.llm_input_tokens)} in / {formatTokens(s.llm_output_tokens)} out
