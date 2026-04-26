@@ -489,6 +489,48 @@ actually hurts.
    listed under Open Questions; tracked here too as a real follow-up
    that has UX value once the engine is stable).
 
+5. **Data export / backup.** SASTBot accumulates audit-grade evidence
+   (issue history, triage decisions, reachability verdicts, vendored-
+   library SBOM) that's painful to lose. Two complementary mechanisms:
+   - **Per-repo / per-scope export** — admin route
+     `GET /admin/repos/:id/export?format=json|markdown|cyclonedx&since=ISO`
+     returning latest-scan summary, all open issues with reasoning +
+     CVSS + reachability, vendored libs. Markdown variant suitable for
+     handing to a CRA auditor. JSON is the canonical machine-readable
+     form; CycloneDX 1.7 reuses the SBOM we already generate.
+   - **Full-database backup** — admin "Backup database" button shells
+     out to `pg_dump` and writes a tarball to `BACKUP_DIR` (configurable
+     env var) or returns it as a download. Sibling restore CLI documented
+     in OPERATIONS.md. Less polished than the export route but covers
+     "I'm about to do something risky and want a snapshot."
+
+6. **Delete scans / findings (maintenance).** Per-scan row action on
+   the Scans (audit) page: admin-only delete with a "this will remove
+   the SbomComponents + ScanFindings + SastFindings for this run; issue
+   history is preserved" confirmation. Cascades work today via the
+   existing FK chain (ScanRun → SbomComponent / ScanFinding /
+   SastFinding); SastIssue / ScaIssue.lastSeenScanRunId is an
+   unconstrained UUID, so dangling-pointer cleanup happens naturally
+   on the next scan.
+   - **Bulk maintenance** — `DELETE /admin/scans?older_than=ISO&keep_per_scope=N`
+     for retention policies (e.g. "keep 10 most recent per scope, drop
+     anything older than 90 days"). Useful once scan_runs accumulate.
+
+7. **Delete repo + scope + everything (rare).** Repo deletion is the
+   natural place to wipe scopes + issues + scan history because users
+   never want to delete a scope without also stopping that repo from
+   producing more issues. The FK chain already cascades correctly:
+   Repo → ScanScope (cascade) → SastIssue / ScaIssue (cascade), and
+   Repo → ScanRun (cascade) → SbomComponent / ScanFinding / SastFinding
+   (cascade). The work is UI:
+   - Repo admin page row action: "Delete repo" with a confirmation
+     listing the impact ("This will permanently remove N scans, M open
+     issues, K vendored-lib records. Cannot be undone.").
+   - Required: explicit textual confirmation (type the repo name) per
+     industry standard for destructive admin actions.
+   - Ideally combined with the export feature — surface a "Export
+     before deleting?" link in the confirmation dialog.
+
 ## Final deliverables
 
 - [ ] `backend/prompts/{sast_system,sast_detection,sast_recheck}.md`
