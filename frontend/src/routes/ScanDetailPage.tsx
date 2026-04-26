@@ -422,27 +422,33 @@ export default function ScanDetailPage() {
                 <span className="ml-2 text-base font-normal text-muted-foreground font-mono">{s.scope_path}</span>
               )}
             </h1>
-            <p className="text-sm text-muted-foreground">
-              {formatDate(s.started_at ?? s.created_at)}
-              {s.finished_at ? ` · ${formatDuration(s.started_at, s.finished_at)}` : ""}
+            <div className="space-y-0.5">
+              <p className={cn("text-base uppercase font-semibold tracking-wide",
+                s.status === "failed" ? "text-destructive" : "",
+                s.status === "success" ? "text-emerald-600 dark:text-emerald-400" : "",
+                s.status === "running" || s.status === "pending" ? "text-amber-600 dark:text-amber-400" : "",
+                s.status === "cancelled" ? "text-muted-foreground" : "")}>
+                {s.status === "success" ? "Complete" : s.status}
+              </p>
               {s.llm_request_count > 0 && (
-                <span title={`${s.llm_input_tokens.toLocaleString()} input + ${s.llm_output_tokens.toLocaleString()} output tokens. Counts the LLM SAST detection + recheck passes only — cache reads, SCA summaries, and knowledge extractions aren't included.`}>
-                  {" · "}
+                <p className="text-sm text-muted-foreground" title={`${s.llm_input_tokens.toLocaleString()} input + ${s.llm_output_tokens.toLocaleString()} output tokens. Counts the LLM SAST detection + recheck passes plus SCA summary generation — cache read/creation tokens from claude-p aren't included.`}>
                   {s.llm_request_count} LLM {s.llm_request_count === 1 ? "call" : "calls"}
                   {" · "}
                   {formatTokens(s.llm_input_tokens)} in / {formatTokens(s.llm_output_tokens)} out
-                </span>
+                </p>
               )}
-              {" · "}
-              <span className={cn("uppercase font-medium",
-                s.status === "failed" ? "text-destructive" : "",
-                s.status === "success" ? "text-emerald-600 dark:text-emerald-400" : "")}>
-                {s.status === "success" ? "complete" : s.status}
-              </span>
-              {" · "}
-              <span className="text-muted-foreground italic">Audit view — triage on the </span>
-              <Link to={`/scopes/${s.scope_id}`} className="underline text-muted-foreground hover:text-foreground italic">scope page</Link>
-            </p>
+              {s.started_at && (
+                <p className="text-sm text-muted-foreground">
+                  {formatDuration(s.started_at, s.finished_at)}
+                  {!s.finished_at && " elapsed"}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground/80 italic pt-1">
+                {formatDate(s.started_at ?? s.created_at)}
+                {" · Audit view — triage on the "}
+                <Link to={`/scopes/${s.scope_id}`} className="underline hover:text-foreground">scope page</Link>
+              </p>
+            </div>
           </div>
           {isTerminal && s.status === "success" && (
             <div className="flex gap-2">
