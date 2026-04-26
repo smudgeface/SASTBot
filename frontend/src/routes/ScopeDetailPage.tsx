@@ -1133,9 +1133,11 @@ function ScaIssueRow({
             </div>
           )}
           <div className="flex flex-wrap gap-1 mt-0.5">
-            <span className="text-[10px] text-muted-foreground uppercase font-medium">
-              {issue.latest_finding_type === "deprecated" ? "Deprecated" : issue.latest_finding_type.toUpperCase()}
-            </span>
+            {issue.latest_finding_type !== "cve" && (
+              <span className="text-[10px] text-muted-foreground uppercase font-medium">
+                {issue.latest_finding_type === "deprecated" ? "Deprecated" : issue.latest_finding_type.toUpperCase()}
+              </span>
+            )}
             {issue.latest_has_fix && (
               <Badge variant="outline" className="text-[9px] px-1 py-0 text-green-600 border-green-400">
                 Has fix
