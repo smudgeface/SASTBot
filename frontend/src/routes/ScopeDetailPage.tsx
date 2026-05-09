@@ -1224,8 +1224,9 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeI
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
   const [filters, setFilters] = useState<ScaIssueFilters>({ page: 1, page_size: 50 });
+  const [excludeDevOnly, setExcludeDevOnly] = useState(true);
 
-  const { data, isLoading } = useScopeScaIssues(scopeId, filters);
+  const { data, isLoading } = useScopeScaIssues(scopeId, { ...filters, exclude_dev_only: excludeDevOnly });
   const { data: jiraTickets } = useScopeJiraTickets(scopeId);
   const ticketById = new Map((jiraTickets ?? []).map((t) => [t.id, t]));
 
@@ -1300,6 +1301,25 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeI
             onToggle: () => setFilters((f) => ({ ...f, page: 1, include_resolved: !f.include_resolved })),
           }]}
         />
+        <Pipe />
+        <button
+          onClick={() => setExcludeDevOnly((v) => !v)}
+          className={`rounded px-2 py-0.5 text-xs border transition-colors ${
+            !excludeDevOnly
+              ? "bg-accent text-accent-foreground border-border"
+              : "border-transparent text-muted-foreground hover:border-border"
+          }`}
+        >
+          Show dev-tool CVEs
+        </button>
+        {(data?.total_runtime != null || data?.total_dev != null) && (
+          <span className="text-xs text-muted-foreground ml-1">
+            {(data?.total_runtime ?? 0).toLocaleString()} runtime
+            {(data?.total_dev ?? 0) > 0 && (
+              <> / <span className="text-blue-600">{(data?.total_dev ?? 0).toLocaleString()} dev</span></>
+            )}
+          </span>
+        )}
         {hasScaFilter && (
           <>
             <Pipe />
@@ -1369,11 +1389,15 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeI
 function ComponentsTab({ scopeId }: { scopeId: string }) {
   const [page, setPage] = useState(1);
   const [hasFindings, setHasFindings] = useState(false);
-  const { data, isLoading } = useScopeComponents(scopeId, { page, page_size: 50, has_findings: hasFindings || undefined });
+  const [excludeDevOnly, setExcludeDevOnly] = useState(true);
+  const { data, isLoading } = useScopeComponents(scopeId, { page, page_size: 50, has_findings: hasFindings || undefined, exclude_dev_only: excludeDevOnly });
+
+  const totalRuntime = data?.total_runtime ?? 0;
+  const totalDev = data?.total_dev ?? 0;
 
   return (
     <div className="space-y-3">
-      <div className="flex gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={() => { setHasFindings((v) => !v); setPage(1); }}
           className={`rounded px-2 py-0.5 text-xs border transition-colors ${
@@ -1384,11 +1408,31 @@ function ComponentsTab({ scopeId }: { scopeId: string }) {
         >
           Only with findings
         </button>
+        <button
+          onClick={() => { setExcludeDevOnly((v) => !v); setPage(1); }}
+          className={`rounded px-2 py-0.5 text-xs border transition-colors ${
+            !excludeDevOnly
+              ? "bg-accent text-accent-foreground border-border"
+              : "border-transparent text-muted-foreground hover:border-border"
+          }`}
+        >
+          Show dev-tool packages
+        </button>
+        {(totalRuntime > 0 || totalDev > 0) && (
+          <span className="text-xs text-muted-foreground ml-1">
+            {totalRuntime.toLocaleString()} runtime
+            {totalDev > 0 && <> / <span className="text-blue-600">{totalDev.toLocaleString()} dev</span></>}
+          </span>
+        )}
       </div>
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : !data || data.total === 0 ? (
-        <p className="text-sm text-muted-foreground py-6 text-center">No components in the most recent scan.</p>
+        <p className="text-sm text-muted-foreground py-6 text-center">
+          {excludeDevOnly && totalDev > 0
+            ? `No runtime components with findings. ${totalDev.toLocaleString()} dev-tool packages hidden.`
+            : "No components in the most recent scan."}
+        </p>
       ) : (
         <>
           <Card>

@@ -807,6 +807,40 @@ backfillManifestOrigin(prisma).catch((err) => {
   logger.warn({ err }, "[worker] manifest-origin backfill failed");
 });
 
+// M6n: suppress dev-only SCA issues for repos that have opted out of dev deps.
+// Idempotent — filters on dismissedStatus not already terminal. Safe to re-run.
+async function backfillDevOnlyScaIssues(): Promise<void> {
+  const repos = await prisma.repo.findMany({
+    where: { reachabilityIncludeDevDeps: false },
+    select: { id: true, scopes: { select: { id: true } } },
+  });
+  if (repos.length === 0) return;
+
+  const scopeIds = repos.flatMap((r) => r.scopes.map((s) => s.id));
+  if (scopeIds.length === 0) return;
+
+  const TERMINAL = ["fixed", "suppressed", "false_positive"];
+  const { count } = await prisma.scaIssue.updateMany({
+    where: {
+      scopeId: { in: scopeIds },
+      latestIsDevOnly: true,
+      dismissedStatus: { notIn: TERMINAL },
+    },
+    data: {
+      dismissedStatus: "suppressed",
+      dismissedReason: "dev_tree_policy",
+    },
+  });
+  logger.info(
+    { reposChecked: repos.length, scopesChecked: scopeIds.length, rowsUpdated: count },
+    "[worker] backfillDevOnlyScaIssues complete",
+  );
+}
+
+backfillDevOnlyScaIssues().catch((err) => {
+  logger.warn({ err }, "[worker] dev-only SCA backfill failed");
+});
+
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {
@@ -925,7 +959,7 @@ const worker = new Worker<ScanJobData>(
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");
       await setPhase(scanRunId, "osv", { done: 0, total: components.length, label: "Querying OSV.dev" });
-      const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir, scopePath);
+      const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir, scopePath, repo.reachabilityIncludeDevDeps);
       log.info({ findings: cveFindings.length }, "[worker] CVE findings persisted");
 
       // ── Step 5: EOL / deprecation check ─────────────────────────────────

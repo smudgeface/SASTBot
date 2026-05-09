@@ -306,8 +306,18 @@ export async function queryAndPersistFindings(
   client: Tx,
   scopeDir = "",
   scopePath = "/",
+  includeDevDeps = true,
 ): Promise<ScanFinding[]> {
-  const withPurl = components.filter((c) => c.purl);
+  let queried = components;
+  if (!includeDevDeps) {
+    const before = queried.length;
+    queried = queried.filter((c) => !c.isDevOnly);
+    const filtered = before - queried.length;
+    if (filtered > 0) {
+      logger.info({ filtered }, "[osvService] excluded dev-only components from OSV query");
+    }
+  }
+  const withPurl = queried.filter((c) => c.purl);
   if (withPurl.length === 0) return [];
 
   logger.info({ scanRunId, count: withPurl.length }, "[osvService] querying OSV.dev");

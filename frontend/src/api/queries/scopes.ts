@@ -81,6 +81,8 @@ export interface ScaIssueFilters {
   has_fix?: boolean;
   seen_since_last_scan?: "new" | "unchanged" | "resolved";
   include_resolved?: boolean;
+  /** When true (default), hides issues where latestIsDevOnly = true. */
+  exclude_dev_only?: boolean;
 }
 
 export function useScopeScaIssues(scopeId: string | undefined, filters: ScaIssueFilters = {}) {
@@ -99,6 +101,8 @@ export function useScopeScaIssues(scopeId: string | undefined, filters: ScaIssue
       if (filters.has_fix) params.set("has_fix", "true");
       if (filters.seen_since_last_scan) params.set("seen_since_last_scan", filters.seen_since_last_scan);
       if (filters.include_resolved) params.set("include_resolved", "true");
+      // Default: exclude dev-only (matches backend default of true). Pass false explicitly only when showing build-tool CVEs.
+      if (filters.exclude_dev_only === false) params.set("exclude_dev_only", "false");
       const qs = params.toString();
       return apiFetch<Paginated<ScaIssue>>(`/api/scopes/${scopeId}/sca-issues${qs ? `?${qs}` : ""}`);
     },
@@ -108,7 +112,7 @@ export function useScopeScaIssues(scopeId: string | undefined, filters: ScaIssue
 
 export function useScopeComponents(
   scopeId: string | undefined,
-  options?: { page?: number; page_size?: number; has_findings?: boolean },
+  options?: { page?: number; page_size?: number; has_findings?: boolean; exclude_dev_only?: boolean },
 ) {
   return useQuery<Paginated<SbomComponent>>({
     queryKey: [...scopesKey, scopeId, "components", options],
@@ -117,6 +121,8 @@ export function useScopeComponents(
       if (options?.page) params.set("page", String(options.page));
       if (options?.page_size) params.set("page_size", String(options.page_size));
       if (options?.has_findings) params.set("has_findings", "true");
+      // Default: exclude dev-only. Pass false explicitly only when showing build-tool packages.
+      if (options?.exclude_dev_only === false) params.set("exclude_dev_only", "false");
       const qs = params.toString();
       return apiFetch<Paginated<SbomComponent>>(`/api/scopes/${scopeId}/components${qs ? `?${qs}` : ""}`);
     },

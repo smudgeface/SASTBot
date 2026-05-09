@@ -349,7 +349,7 @@ export interface paths {
                         retain_clone?: boolean;
                         /** @default true */
                         reachability_enabled?: boolean;
-                        /** @default true */
+                        /** @default false */
                         reachability_include_dev_deps?: boolean;
                         /**
                          * @default xhigh
@@ -3104,6 +3104,7 @@ export interface paths {
                     has_jira_ticket?: "yes" | "no";
                     reachable?: boolean;
                     has_fix?: boolean;
+                    exclude_dev_only?: boolean;
                     hide_dev?: boolean;
                     seen_since_last_scan?: "new" | "unchanged" | "resolved";
                     include_resolved?: boolean;
@@ -3180,6 +3181,8 @@ export interface paths {
                             total: number;
                             page: number;
                             page_size: number;
+                            total_dev: number;
+                            total_runtime: number;
                         };
                     };
                 };
@@ -3229,6 +3232,7 @@ export interface paths {
                     page?: number;
                     page_size?: number;
                     has_findings?: boolean;
+                    exclude_dev_only?: boolean;
                 };
                 header?: never;
                 path: {
@@ -3260,6 +3264,8 @@ export interface paths {
                             total: number;
                             page: number;
                             page_size: number;
+                            total_dev: number;
+                            total_runtime: number;
                         };
                     };
                 };

@@ -144,7 +144,7 @@ model Repo {
   // spent on them. npm-only signal — non-npm ecosystems are unaffected.
   // Caveat: cdxgen issue #3927 — `devOptional: true` lockfile entries miss
   // the dev marker, so a small fraction of dev-only deps still slip through.
-  reachabilityIncludeDevDeps Boolean @default(true) @map("reachability_include_dev_deps")
+  reachabilityIncludeDevDeps Boolean @default(false) @map("reachability_include_dev_deps")
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)

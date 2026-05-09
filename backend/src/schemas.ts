@@ -207,7 +207,7 @@ export const RepoCreateSchema = z.object({
    *  in the LLM reachability hint set. Default true — flip off only when you
    *  want to skip reachability analysis on dev tooling. npm-only signal:
    *  non-npm components are unaffected. */
-  reachability_include_dev_deps: z.boolean().default(true),
+  reachability_include_dev_deps: z.boolean().default(false),
   /** `claude -p --effort` value for SAST detection / recheck. Detection
    *  defaults to xhigh (Opus 4.7 docs recommend xhigh for agentic coding);
    *  recheck defaults to medium (verification, not exploration). xhigh is

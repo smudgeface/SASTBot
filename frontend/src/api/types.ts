@@ -493,6 +493,9 @@ export interface Paginated<T> {
   total: number;
   page: number;
   page_size: number;
+  /** Present on endpoints that support dev-only filtering (components, sca-issues). */
+  total_dev?: number;
+  total_runtime?: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -102,11 +102,10 @@ const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
   has_jira_ticket: z.enum(["yes", "no"]).optional(),
   reachable: z.coerce.boolean().optional(),
   has_fix: z.coerce.boolean().optional(),
-  /** @deprecated cdxgen `scope: "optional"` is not a clean dev-only signal —
-   *  it includes transitive runtime deps too. The frontend stopped surfacing
-   *  this filter; the backend accepts but no longer honors it to avoid
-   *  silently filtering out runtime CVEs. Will be removed entirely once any
-   *  external API consumers have been notified. */
+  /** When true (default), hides SCA issues where latestIsDevOnly = true.
+   *  Pass false to show build-tool CVEs. Gates on cdxgen 12.2+ dev marker — npm-only signal. */
+  exclude_dev_only: z.coerce.boolean().default(true),
+  /** @deprecated Replaced by exclude_dev_only. Accepted but ignored. */
   hide_dev: z.coerce.boolean().optional(),
   seen_since_last_scan: z.enum(["new", "unchanged", "resolved"]).optional(),
   include_resolved: z.coerce.boolean().default(false),
@@ -459,7 +458,10 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         params: IdParamsSchema,
         querystring: ScaIssuesQuerySchema,
         response: {
-          200: PaginatedSchema(ScaIssueOutSchema),
+          200: PaginatedSchema(ScaIssueOutSchema).extend({
+            total_dev: z.number().int().nonnegative(),
+            total_runtime: z.number().int().nonnegative(),
+          }),
           401: ErrorSchema,
           404: ErrorSchema,
         },
@@ -475,7 +477,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
 
       const {
         page, page_size, severity, finding_type, dismissed_status, dismissed_statuses,
-        has_jira_ticket, reachable, has_fix, hide_dev,
+        has_jira_ticket, reachable, has_fix, exclude_dev_only,
         seen_since_last_scan, include_resolved,
       } = req.query;
       const lastScanRunId = scope.lastScanRunId;
@@ -489,8 +491,6 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       if (has_jira_ticket === "no") where.jiraTicketId = null;
       if (reachable === true) where.confirmedReachable = true;
       if (has_fix === true) where.latestHasFix = true;
-      // hide_dev is deprecated — see schema comment above. Intentionally a no-op.
-      void hide_dev;
 
       if (seen_since_last_scan && lastScanRunId) {
         if (seen_since_last_scan === "new") {
@@ -507,6 +507,17 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         where.lastSeenScanRunId = lastScanRunId;
       }
 
+      // Always compute dev/runtime split counts (unaffected by exclude_dev_only filter).
+      const baseWhere = { ...where };
+      const [total_dev, total_runtime] = await Promise.all([
+        prisma.scaIssue.count({ where: { ...baseWhere, latestIsDevOnly: true } }),
+        prisma.scaIssue.count({ where: { ...baseWhere, latestIsDevOnly: false } }),
+      ]);
+
+      if (exclude_dev_only) {
+        where.latestIsDevOnly = false;
+      }
+
       const skip = (page - 1) * page_size;
       const [all, total] = await Promise.all([
         prisma.scaIssue.findMany({ where }),
@@ -519,7 +530,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       );
       const items = all.slice(skip, skip + page_size);
 
-      return { items: items.map(scaIssueToOut), total, page, page_size };
+      return { items: items.map(scaIssueToOut), total, page, page_size, total_dev, total_runtime };
     },
   );
 
@@ -537,6 +548,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         params: IdParamsSchema,
         querystring: PaginationQuerySchema.extend({
           has_findings: z.coerce.boolean().optional(),
+          /** When true (default), hides components with isDevOnly = true. Pass false to show build-tool packages. */
+          exclude_dev_only: z.coerce.boolean().default(true),
         }),
         response: {
           200: PaginatedSchema(z.object({
@@ -550,7 +563,10 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
             component_type: z.string(),
             scope: z.string().nullable(),
             is_dev_only: z.boolean(),
-          })),
+          })).extend({
+            total_dev: z.number().int().nonnegative(),
+            total_runtime: z.number().int().nonnegative(),
+          }),
           401: ErrorSchema,
           404: ErrorSchema,
         },
@@ -563,12 +579,23 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         select: { id: true, lastScanRunId: true },
       });
       if (!scope) return reply.code(404).send({ detail: "Scope not found" });
-      if (!scope.lastScanRunId) return { items: [], total: 0, page: req.query.page, page_size: req.query.page_size };
+      if (!scope.lastScanRunId) return { items: [], total: 0, page: req.query.page, page_size: req.query.page_size, total_dev: 0, total_runtime: 0 };
 
-      const { page, page_size, has_findings } = req.query;
-      const where: Record<string, unknown> = { scanRunId: scope.lastScanRunId };
+      const { page, page_size, has_findings, exclude_dev_only } = req.query;
+      const baseWhere: Record<string, unknown> = { scanRunId: scope.lastScanRunId };
       if (has_findings === true) {
-        where.findings = { some: {} };
+        baseWhere.findings = { some: {} };
+      }
+
+      // Always compute dev/runtime split counts before applying the dev filter.
+      const [total_dev, total_runtime] = await Promise.all([
+        prisma.sbomComponent.count({ where: { ...baseWhere, isDevOnly: true } }),
+        prisma.sbomComponent.count({ where: { ...baseWhere, isDevOnly: false } }),
+      ]);
+
+      const where = { ...baseWhere };
+      if (exclude_dev_only) {
+        where.isDevOnly = false;
       }
 
       const skip = (page - 1) * page_size;
@@ -582,7 +609,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         prisma.sbomComponent.count({ where }),
       ]);
 
-      return { items: comps.map(sbomComponentToOut), total, page, page_size };
+      return { items: comps.map(sbomComponentToOut), total, page, page_size, total_dev, total_runtime };
     },
   );
 

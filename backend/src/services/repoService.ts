@@ -94,7 +94,7 @@ export async function createRepo(
           isActive: input.is_active ?? true,
           retainClone: input.retain_clone ?? false,
           reachabilityEnabled: input.reachability_enabled ?? true,
-          reachabilityIncludeDevDeps: input.reachability_include_dev_deps ?? true,
+          reachabilityIncludeDevDeps: input.reachability_include_dev_deps ?? false,
           llmSastEffort: input.llm_sast_effort ?? "xhigh",
           llmRecheckEffort: input.llm_recheck_effort ?? "medium",
         },

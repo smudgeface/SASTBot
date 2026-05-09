@@ -4,6 +4,53 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## M6n — SBOM/SCA dev-tool filtering (2026-05-09)
+
+### What shipped
+
+- **Schema default flipped.** `repos.reachability_include_dev_deps` now defaults
+  to `false` for new repos. Migration `20260509171959_m6n_default_exclude_dev_deps`
+  only touches the column default — existing rows keep their prior value.
+
+- **OSV query gate.** `queryAndPersistFindings` accepts `includeDevDeps: boolean`;
+  when false, dev-only components are filtered before the OSV batch call (saves
+  API calls outright, not just suppression at persist time).
+
+- **UI: Components tab.** Defaults to `exclude_dev_only=true`. Shows
+  "276 runtime / 2,174 dev" count badge. "Show dev-tool packages" toggle
+  reveals the full set. Backend route adds `exclude_dev_only` querystring and
+  `total_dev` / `total_runtime` to the response.
+
+- **UI: SCA Issues tab.** Same treatment — defaults to hiding dev-only CVEs,
+  "38 runtime / 283 dev" badge, "Show dev-tool CVEs" toggle.
+
+- **Worker backfill.** `backfillDevOnlyScaIssues` runs on every worker boot.
+  For repos with `reachabilityIncludeDevDeps=false`, finds active SCA issues
+  with `latestIsDevOnly=true` and sets `dismissedStatus='suppressed',
+  dismissedReason='dev_tree_policy'`. Confirmed idempotent: first boot updated
+  283 rows on Gocator Classic /GoWeb; second boot updated 0.
+
+### What we learned
+
+- **89% of cdxgen's npm output is dev tooling.** GoWeb had 2,436 components;
+  2,174 were dev-only (webpack/babel/jest trees and their transitive fanout).
+  The 262 remaining (antd, mobx, react, three, kendo-react, vendored
+  jQuery/RequireJS) are the CRA-relevant set — same order of magnitude as the
+  hand-curated reference SBOM (41 components across three repos).
+
+- **One flag, four consumers.** The same `reachabilityIncludeDevDeps` column
+  (originally LLM-hint-set only) now gates OSV queries, the Components tab,
+  the SCA tab, and the hint set. Column name kept to avoid a pointless
+  migration — its broader role is documented in CLAUDE.md.
+
+- **`dismissedStatus='suppressed'` with `dismissedReason='dev_tree_policy'`
+  is the right vehicle for policy-driven hiding**, not `status='fixed'`.
+  Using `fixed` would conflate "scan verified this is gone" with "operator
+  chose not to care" — polluting the auto-fix sweep's semantics and the
+  audit trail. A dedicated reason keeps the fixed lane honest.
+
+---
+
 ## M0 — Requirements & Plan (2026-04-22)
 
 **What shipped**
