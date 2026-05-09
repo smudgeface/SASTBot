@@ -603,3 +603,138 @@ Fix: `findAllKeywordMatchIndices` searches the snippet for distinctive identifie
 - **The 6-hour /GoWeb hang was a free production simulation** of what happens when claude-p stalls over a flaky network. Now the worker treats `exitCode !== 0` as untrust signal and the operator's data survives. Same gate would catch a real Dokploy outage.
 
 **Next** — M5d (Scheduler) and M5e (Hardening + rate limiting) are still on deck from M5; both are independent of M6. After that, `docs/M6_LLM_SAST_PLAN.md` has a "Future improvements" section (deep-reasoning model option, streaming UI, lockfile-based dev classifier for non-npm ecosystems, etc.). The pending-features memory has the full queue including notifications, scan resilience (wall-clock cap + heartbeat + retry), dashboard merge, scan progress v2 (overall % + ETA), and remaining SAST UI polish (the user flagged "still issues in the SAST issues page" — needs a fresh look).
+
+---
+
+## M6j/M6k — SARIF export + worker-built snippets (2026-05-08)
+
+### Why we did this
+
+Three threads converged in one batch:
+1. The LLM-mode SAST has been live since M6 but produced no portable
+   export. Operators wanted a SARIF file they could hand to dashboards,
+   CI gates, or compliance evidence — the same shape Opengrep used to
+   produce, just generated from our deduplicated `sast_issues`.
+2. M6i exposed a deeper problem with LLM-emitted snippets: the model is
+   wildly inconsistent about how many context lines it includes (0 to 20+
+   preamble lines), forcing the frontend to use a keyword-search heuristic
+   to locate the actual match line. M6i made the heuristic *work*; this
+   batch made it *unnecessary*.
+3. While building SARIF, scrutinizing it against the spec revealed several
+   places we were freestyling instead of using the standard idioms — most
+   visibly emitting `partialFingerprints` and `properties.cwe` on every
+   result.
+
+### What shipped
+
+**SARIF v2.1.0 export.** Every successful scan now stores a SARIF document
+in `scan_runs.sast_sarif` (JSONB), regenerated post-detection on each scan
+and backfilled on worker boot for runs that pre-date the column. New
+`GET /scans/:id/sast-sarif` returns the JSON with an attachment
+disposition; new `SastSarifViewerPage` route mirrors the SBOM viewer
+(Monaco-based, syntax-highlighted, downloadable). Two new buttons on the
+scan detail page header: *View SARIF* / *Download SARIF*.
+
+**Producer-shape only — no RMS metadata in the scan-level SARIF.** SARIF
+§3.27.23 + Appendix B explicitly assign `partialFingerprints` and
+lifecycle fields (first/last seen, triage status) to the result management
+system, not the direct producer. In SASTBot the *scan* is the producer
+(a single LLM run on one revision) and the *scope* is the RMS (cross-scan
+dedup, triage, lifecycle). So the scan-level SARIF emits only what the
+producer can know: `ruleId`, `level`, `message`, `locations`, plus
+`properties.severity` for the finer-grained 5-band scale that SARIF's
+4-level enum can't carry losslessly. A future scope-level SARIF (with
+fingerprints + lifecycle) is a natural follow-up.
+
+**CWE references via taxonomies + relationships, not property bags.** First
+pass put `properties.cwe` on each result. The user spotted that this was
+both non-idiomatic (SARIF has a first-class CWE pattern via §3.19
+taxonomies + §3.49 relationships) AND triple-encoded — the rule_id is
+already `llm:CWE-798`, the rule's `helpUri` already points at MITRE, and
+emitting per-result `taxa[]` repeats the same CWE on every finding under
+that rule.
+
+The cleanup: `runs[0].taxonomies[0]` declares a CWE taxonomy with the
+deduped set of cited CWEs (each with a `helpUri` to MITRE). Each rule
+descriptor carries
+`relationships: [{target: {toolComponent: {name: "CWE"}, id: "798"}, kinds: ["relevant"]}]`.
+Results dereference through `ruleId`. No per-result `taxa[]`, no
+`properties.cwe`. Single canonical place for the rule→weakness mapping.
+
+**`region` + `contextRegion` per SARIF §3.30.** Initially we put the whole
+snippet in `region.snippet`. The spec model is cleaner: `region` carries
+the problem location (just startLine + optional endLine, no snippet),
+`contextRegion` carries the surrounding lines + the snippet text. A SARIF
+reader recovers "which line is the problem within the snippet" via
+`region.startLine - contextRegion.startLine`.
+
+**Worker reads snippets from disk; LLM stops emitting them.** The
+detection prompt no longer asks for a `snippet` field; the system prompt
+makes the worker's responsibility explicit. New
+`backend/src/services/sourceSnippet.ts` exposes `readSourceSnippet` with
+a path-traversal guard. `persistDetection` replaces the LLM-supplied
+snippet with a file-read snippet for both SAST findings and reachability
+call sites. `applyRecheckVerdicts` does the same for `still_present`
+verdicts (the line itself didn't move, so we re-read at the existing
+`latestStartLine`). All three accept the LLM-supplied snippet as
+fallback only — used solely when the file isn't readable.
+
+`sast_issues.latest_end_line` (nullable INT) joined the schema so
+multi-line problems get all problem rows + canonical 3 lines of context
+on each side. SARIF emits `region.endLine` when set.
+
+**Frontend `ContextSnippet` simplified.** With canonical snippets, the
+keyword-search heuristic and parallel-prefix span extension are dead
+code. Replaced with a straight offset-based renderer that takes
+`matchLine` + optional `matchEndLine`. Removed `findAllKeywordMatchIndices`
+and the parallel-prefix logic — net deletion. Defensive comment in
+CLAUDE.md not to reintroduce them.
+
+**`backfillSastSnippets` worker startup hook** regenerates legacy
+`latestSnippet` values from disk for any retained-clone scope. Skips
+absence rows. Just ran on the 12 issues for Gocator Classic `/`: every
+snippet is now exactly 7 lines (3+1+3) regardless of what the LLM
+originally emitted (which had ranged from 6 to 25 lines). Old data with
+no retained clone is left as-is and will fix up on the next scan.
+
+**Token economy bonus.** Snippet text was the single biggest contributor
+to detection-pass output token count; cutting it saves real money on
+every scan, especially on repos with hundreds of findings.
+
+### Schema changes
+
+1. `20260509002905_m6j_scan_run_sarif_export` — `scan_runs.sast_sarif` JSONB nullable.
+2. `20260509010131_m6k_sast_end_line` — `sast_issues.latest_end_line` INT nullable.
+
+### What we learned
+
+- **Architectural distinctions in standards aren't ceremony — they map to
+  real system boundaries.** SARIF's "producer vs RMS" distinction is
+  essentially the difference between "what one tool said about one
+  revision" and "what we currently believe about this codebase." Once
+  named, that boundary clarified WHY first-seen / last-seen / triage
+  state don't belong on the scan-level export and pointed at a future
+  scope-level export naturally.
+- **If the data model already encodes information once, don't duplicate
+  it in the export.** Per-result `taxa[]` was redundant with
+  `ruleId="llm:CWE-798"`. The fix wasn't to drop both — the rule
+  descriptor IS the right place for the rule→weakness mapping (via
+  `relationships`). Find the canonical place once; let everything else
+  reference it.
+- **Stop fixing inconsistency in the consumer; fix it at the producer.**
+  M6i added a sophisticated keyword-search heuristic to the frontend to
+  cope with LLM snippet drift. M6k makes the heuristic unnecessary by
+  giving the data a stable shape at write-time. Net code: substantially
+  smaller. The system prompt got *simpler* — saying "don't emit a
+  snippet" beats explaining the 7-line rule across three places.
+- **The LLM is best at reasoning, not transcription.** Reading bytes from
+  a file is something machines do better and cheaper. Use the LLM for
+  identification (where + what kind), and use code for everything that
+  has a deterministic answer.
+
+**Next** — Same as M6i, plus several SARIF follow-ups now in the
+pending-features memory: scope-level SARIF export with RMS-augmented
+fields (fingerprints, triage state, lifecycle dates), SCA reachability
+rendered in SARIF too (currently only SAST findings appear), and
+surfacing unparseable-record contents on the warning so operators can
+see what the LLM emitted that didn't conform.

@@ -5,7 +5,8 @@ LLM-augmented SAST/SCA tool for EU Cyber Resilience Act (CRA) compliance.
 SASTBot scans git repositories for security issues using:
 
 - **SCA** (Software Composition Analysis) — CycloneDX 1.7 SBOM via cdxgen, CVE/EOL/deprecated checks via OSV.dev and endoflife.date, CVSS v3.1 + v4.0 base-score calculation from advisory vectors
-- **SAST** (Static Application Security Testing) — [Opengrep](https://opengrep.dev/) with LLM-augmented triage, ±3 lines of code context per finding
+- **SAST** (Static Application Security Testing) — LLM-driven detection (claude-p agentic pass) with `still_present` recheck verification across scans; worker-built ±3-line code-context snippets read directly from the source file
+- **SARIF export** — every scan emits a SARIF v2.1.0 document (CWE references via the spec-idiomatic taxonomies / relationships idiom) viewable in-app and downloadable for hand-off to dashboards, CI gates, or compliance evidence collection
 - **Issue identity** — stable Issue rows (not per-scan findings) so triage decisions, Jira links, and status survive repeated scans
 - **LLM-augmented summaries** — every issue has a one-line action-oriented summary generated from the rule/advisory text, populated on scan and via worker-startup backfill
 - **Reachability analysis** — for CVE issues at the configured severity threshold, ripgrep + LLM confirm whether the vulnerable function is actually called from your code; verdicts include confidence + call-site code blocks, with one-click "Mark Invalid" / "Won't fix" suggestions for high-confidence "not reachable" results
