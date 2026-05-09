@@ -139,6 +139,8 @@ export interface RunDetectionInput {
   scaHints: ScaHintInput[];
   tokenBudget: number;
   orgId: string | null;
+  /** Live token-usage callback for setPhase progress. See SpawnClaudeInput. */
+  onProgress?: (usage: TokenUsage) => void;
 }
 
 export interface RunDetectionResult {
@@ -236,6 +238,14 @@ interface SpawnClaudeInput {
   claudeHome: string;
   /** Called once per assistant-text line (already trimmed of the trailing newline). */
   onLine: (line: string) => void;
+  /**
+   * Called on each `assistant` stream event with the running session usage.
+   * Per-message token counts are accumulated; the terminal `result` event
+   * later overwrites with claude-p's authoritative session totals. Use this
+   * to surface live progress (e.g. setPhase) — the values are best-effort
+   * during the run and exact at the end.
+   */
+  onProgress?: (usage: TokenUsage) => void;
 }
 
 interface SpawnClaudeResult {
@@ -306,7 +316,22 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
       const t = (event as { type: string }).type;
 
       if (t === "assistant") {
-        const msg = (event as { message?: { content?: Array<{ type?: string; text?: string }> } }).message;
+        const msg = (event as {
+          message?: {
+            content?: Array<{ type?: string; text?: string }>;
+            usage?: {
+              input_tokens?: number;
+              output_tokens?: number;
+              cache_read_input_tokens?: number;
+              cache_creation_input_tokens?: number;
+            };
+          };
+        }).message;
+        const u = msg?.usage ?? {};
+        usage.inputTokens += u.input_tokens ?? 0;
+        usage.outputTokens += u.output_tokens ?? 0;
+        usage.cacheReadInputTokens += u.cache_read_input_tokens ?? 0;
+        usage.cacheCreationInputTokens += u.cache_creation_input_tokens ?? 0;
         const content = msg?.content ?? [];
         for (const block of content) {
           if (block.type === "text" && typeof block.text === "string") {
@@ -315,6 +340,7 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
         }
         usage.requestCount += 1;
         flushAssistantLines(false);
+        if (input.onProgress) input.onProgress(usage);
         return;
       }
 
@@ -430,6 +456,7 @@ export async function runDetection(input: RunDetectionInput): Promise<RunDetecti
     apiKey,
     baseUrl,
     claudeHome,
+    onProgress: input.onProgress,
     onLine: (line) => {
       if (!line.startsWith("{")) return;
       let parsed: unknown;

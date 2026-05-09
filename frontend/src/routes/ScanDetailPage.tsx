@@ -43,6 +43,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { severityChipClass, formatDate } from "@/lib/format";
+import { useNow } from "@/lib/useNow";
 import { FilterGroup, Pipe } from "@/components/filters";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
@@ -492,6 +493,14 @@ export default function ScanDetailPage() {
   const filteredSast = sastSeverities.size > 0
     ? sortedSast.filter((i) => sastSeverities.has(i.latest_severity))
     : sortedSast;
+
+  // Force a re-render every second while the scan is live so the elapsed
+  // timer ticks even when the underlying data is content-equal between
+  // refetches (TanStack Query's structural sharing keeps the data ref
+  // stable, suppressing renders).
+  const status = scan.data?.status;
+  const isLive = status === "pending" || status === "running";
+  useNow(1000, isLive);
 
   if (scan.isLoading) return <div className="p-8 text-sm text-muted-foreground">Loading scan…</div>;
   if (!scan.data) return <div className="p-8 text-sm text-destructive">Scan not found.</div>;

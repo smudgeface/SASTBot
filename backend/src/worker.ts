@@ -186,6 +186,10 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
     // 2. Detection pass.
     log.info({ scaHintCount: scaHints.length, budget: repo.llmSastTokenBudget }, "[worker] LLM detection start");
     await setPhase(scanRunId, "llm_detection", { done: 0, total: repo.llmSastTokenBudget, label: "LLM SAST detection" });
+    // Throttle live progress writes to once every 2s — matches the
+    // useScanDetail / useScopes refetch cadence so the UI sees an update on
+    // every poll without burying the DB in updates during a long claude-p run.
+    let lastProgressAt = 0;
     const detection = await runDetection({
       scanRunId,
       scopeId: run.scopeId,
@@ -196,6 +200,16 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       scaHints,
       tokenBudget: repo.llmSastTokenBudget,
       orgId: run.orgId,
+      onProgress: (usage) => {
+        const now = Date.now();
+        if (now - lastProgressAt < 2000) return;
+        lastProgressAt = now;
+        void setPhase(scanRunId, "llm_detection", {
+          done: usage.inputTokens + usage.outputTokens,
+          total: repo.llmSastTokenBudget,
+          label: "LLM SAST detection",
+        });
+      },
     });
     log.info(
       { records: detection.records.length, parseErrors: detection.parseErrors.length, durationMs: detection.durationMs, usage: detection.usage, exitCode: detection.exitCode },
