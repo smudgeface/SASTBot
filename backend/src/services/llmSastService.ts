@@ -544,6 +544,11 @@ export interface RunRecheckInput {
   issues: RecheckIssueInput[];
   tokenBudget: number;
   orgId: string | null;
+  /** Called on each assistant stream event with the running session usage.
+   *  Same semantics as RunDetectionInput.onProgress — used for live phase
+   *  progress (verdicts arrive batched at the end of the run, so they're a
+   *  poor unit of progress; tokens advance per LLM round-trip). */
+  onProgress?: (usage: TokenUsage) => void;
 }
 
 export interface RunRecheckResult {
@@ -622,6 +627,7 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
     apiKey,
     baseUrl,
     claudeHome,
+    onProgress: input.onProgress,
     onLine: (line) => {
       if (!line.startsWith("{")) return;
       let parsed: unknown;

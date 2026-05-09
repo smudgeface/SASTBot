@@ -7,6 +7,24 @@ import type { Scan, SastIssue, SbomComponent, ScanFinding } from "@/api/types";
 export const scansKey = ["scans"] as const;
 
 /**
+ * Returns true if the cached scan with `scanId` is in a non-terminal state
+ * (pending or running). Used by the per-scan data hooks below to keep their
+ * caches fresh during a scan: lastSeenScanRunId on SastIssues is updated by
+ * the recheck-apply step before status flips to success, so a one-shot fetch
+ * from before recheck-applied is stale by the time the page renders results.
+ * Polling at 2s matches useScanDetail and keeps every consumer in sync with
+ * the scan lifecycle without each component plumbing status manually.
+ */
+function liveRefetchInterval(qc: ReturnType<typeof useQueryClient>, scanId: string | undefined) {
+  return () => {
+    if (!scanId) return false as const;
+    const scan = qc.getQueryData<Scan>([...scansKey, scanId]);
+    const live = scan?.status === "pending" || scan?.status === "running";
+    return live ? 2000 : (false as const);
+  };
+}
+
+/**
  * Auto-refetch `/scans` every 2s whenever any row is still pending or
  * running, so the UI feels live without manual refresh. Once everything
  * is terminal (`success` | `failed`) the refetch stops.
@@ -79,6 +97,7 @@ export function useScanFindings(
   scanId: string | undefined,
   options?: { severity?: string; package?: string },
 ) {
+  const qc = useQueryClient();
   return useQuery<ScanFinding[]>({
     queryKey: [...scansKey, scanId, "findings", options],
     queryFn: () => {
@@ -89,6 +108,7 @@ export function useScanFindings(
       return apiFetch<ScanFinding[]>(`/scans/${scanId}/findings${qs ? `?${qs}` : ""}`);
     },
     enabled: !!scanId,
+    refetchInterval: liveRefetchInterval(qc, scanId),
   });
 }
 
@@ -153,9 +173,11 @@ export function useTriggerScan() {
 // by `lastSeenScanRunId` (post-M6g; the legacy per-scan `sast_findings`
 // table is no longer populated).
 export function useSastFindings(scanId: string | undefined) {
+  const qc = useQueryClient();
   return useQuery<SastIssue[]>({
     queryKey: [...scansKey, scanId, "sast-findings"],
     queryFn: () => apiFetch<SastIssue[]>(`/scans/${scanId}/sast-findings`),
     enabled: !!scanId,
+    refetchInterval: liveRefetchInterval(qc, scanId),
   });
 }

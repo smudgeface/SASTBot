@@ -272,7 +272,7 @@ export const SCAN_PHASE_UNITS: Partial<Record<ScanPhase, string>> = {
   osv: "components",
   eol: "components",
   llm_detection: "tokens",
-  llm_recheck: "issues",
+  llm_recheck: "tokens",
   sca_summaries: "summaries",
 };
 
@@ -280,7 +280,7 @@ export const SCAN_PHASE_UNITS: Partial<Record<ScanPhase, string>> = {
 // advances toward the cap as a "still moving" signal but isn't expected to
 // reach it. Render with `(max)` suffix and no percentage / bar so the UI
 // doesn't suggest filling to 100% is the objective.
-export const SCAN_PHASE_CAPS = new Set<ScanPhase>(["llm_detection"]);
+export const SCAN_PHASE_CAPS = new Set<ScanPhase>(["llm_detection", "llm_recheck"]);
 
 // ---------------------------------------------------------------------------
 // SCA — SBOM components and findings (M3)

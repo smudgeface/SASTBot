@@ -288,7 +288,12 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         cwe: i.latestCweIds[0] ?? "CWE-UNKNOWN",
       }));
       log.info({ count: recheckIssues.length, budget: repo.llmRecheckTokenBudget }, "[worker] LLM recheck start");
-      await setPhase(scanRunId, "llm_recheck", { done: 0, total: recheckIssues.length, label: "LLM SAST recheck" });
+      // Use tokens-against-budget for live progress: verdicts arrive batched
+      // at the end of the claude-p run, so done=verdictCount only flips from
+      // 0 to N right before the phase ends and the user sees no movement.
+      // Token usage advances per LLM round-trip (~20 over a recheck run).
+      await setPhase(scanRunId, "llm_recheck", { done: 0, total: repo.llmRecheckTokenBudget, label: "LLM SAST recheck" });
+      let lastRecheckProgressAt = 0;
       const recheck = await runRecheck({
         scanRunId,
         scopeDir: scanDir,
@@ -296,6 +301,16 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         issues: recheckIssues,
         tokenBudget: repo.llmRecheckTokenBudget,
         orgId: run.orgId,
+        onProgress: (usage) => {
+          const now = Date.now();
+          if (now - lastRecheckProgressAt < 2000) return;
+          lastRecheckProgressAt = now;
+          void setPhase(scanRunId, "llm_recheck", {
+            done: usage.inputTokens + usage.outputTokens,
+            total: repo.llmRecheckTokenBudget,
+            label: "LLM SAST recheck",
+          });
+        },
       });
       log.info(
         { verdicts: recheck.verdicts.length, parseErrors: recheck.parseErrors.length, durationMs: recheck.durationMs, usage: recheck.usage },
@@ -1107,3 +1122,17 @@ async function shutdown(signal: string): Promise<void> {
 
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+// Diagnostic catch-alls. Without these, an async error inside a stream-event
+// handler (claude-p stdout parsing, BullMQ callback) crashes the worker
+// silently — pnpm just prints `ELIFECYCLE Command failed` and we have no
+// signal what broke. Log with the full stack, then exit so BullMQ retries
+// the job rather than us limping along with corrupted state.
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "[worker] uncaughtException");
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  logger.fatal({ reason }, "[worker] unhandledRejection");
+  process.exit(1);
+});

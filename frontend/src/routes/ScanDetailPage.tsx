@@ -3,8 +3,9 @@
  * Shows raw detection rows (SCA findings, SAST detections, components)
  * for a specific scan run. Triage and dismiss actions are on /scopes/:id.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 
 import {
+  scansKey,
   useScanDetail,
   useScanComponents,
   useScanFindings,
@@ -494,19 +496,55 @@ export default function ScanDetailPage() {
     ? sortedSast.filter((i) => sastSeverities.has(i.latest_severity))
     : sortedSast;
 
-  // Force a re-render every second while the scan is live so the elapsed
-  // timer ticks even when the underlying data is content-equal between
-  // refetches (TanStack Query's structural sharing keeps the data ref
-  // stable, suppressing renders).
+  // Live wall-clock for the elapsed-timer display. The hook ticks every
+  // second while the scan is pending/running and freezes once terminal.
+  // Bound explicitly into formatDuration below so React sees the JSX
+  // dependency; reading-but-not-using the hook's return value isn't enough
+  // when TanStack Query's structural sharing keeps `scan.data` ref-equal
+  // between refetches.
   const status = scan.data?.status;
   const isLive = status === "pending" || status === "running";
-  useNow(1000, isLive);
+  const now = useNow(1000, isLive);
+
+  // When the scan transitions from running → terminal, force a refetch of
+  // every per-scan dataset. The polling refetchInterval stops once status
+  // is terminal, so without this push the SAST/SCA caches can race-lose
+  // against the scan poll: scan poll lands first (status=success →
+  // refetchInterval returns false → no more SAST polls), and the SAST
+  // cache stays at its last value from before recheck-apply.
+  const qc = useQueryClient();
+  const prevStatusRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (!id || !prev) return;
+    const becameTerminal =
+      prev !== status && (status === "success" || status === "failed" || status === "cancelled");
+    if (becameTerminal) {
+      qc.invalidateQueries({ queryKey: [...scansKey, id, "sast-findings"] });
+      qc.invalidateQueries({ queryKey: [...scansKey, id, "findings"] });
+      qc.invalidateQueries({ queryKey: [...scansKey, id, "components"] });
+    }
+  }, [status, id, qc]);
 
   if (scan.isLoading) return <div className="p-8 text-sm text-muted-foreground">Loading scan…</div>;
   if (!scan.data) return <div className="p-8 text-sm text-destructive">Scan not found.</div>;
 
   const s = scan.data;
-  const isTerminal = s.status === "success" || s.status === "failed";
+  const isTerminal = s.status === "success" || s.status === "failed" || s.status === "cancelled";
+  // "Fully ready" = scan is terminal-success AND every per-scan data query
+  // has fresh post-terminal data. Without the !isFetching gate we'd render
+  // the results view as soon as the scan_run flips to success — but the
+  // SAST/SCA queries may still be holding cached data from a poll that
+  // happened mid-recheck (when only the new detections were visible).
+  // Showing the in-progress UI for the extra ~2s until the next poll lands
+  // is far less confusing than briefly showing wrong counts.
+  const dataIsFetching = sast.isFetching || findings.isFetching || components.isFetching;
+  const showResults = isTerminal && s.status === "success" && !dataIsFetching;
+  // Render the "Scan in progress" card while the scan is still moving OR
+  // while we're waiting for the post-terminal refetch to land. Failed and
+  // cancelled scans show neither — header status + error banner are enough.
+  const showInProgress = !isTerminal || (s.status === "success" && !showResults);
 
   return (
     <TooltipProvider>
@@ -540,7 +578,7 @@ export default function ScanDetailPage() {
               )}
               {s.started_at && (
                 <p className="text-sm text-muted-foreground">
-                  {formatDuration(s.started_at, s.finished_at)}
+                  {formatDuration(s.started_at, s.finished_at, now)}
                   {!s.finished_at && " elapsed"}
                 </p>
               )}
@@ -551,7 +589,7 @@ export default function ScanDetailPage() {
               </p>
             </div>
           </div>
-          {isTerminal && s.status === "success" && (
+          {showResults && (
             <div className="flex flex-wrap gap-2">
               <Button asChild variant="outline" size="sm" className="gap-1.5">
                 <Link to={`/scans/${id}/sbom`}><FileCode2 className="h-4 w-4" /> View SBOM</Link>
@@ -603,7 +641,7 @@ export default function ScanDetailPage() {
         })()}
 
         {/* Summary cards */}
-        {isTerminal && s.status === "success" && (
+        {showResults && (
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <SummaryCard label="Components" value={s.component_count} />
             <SummaryCard label="Critical" value={s.critical_count} severity="critical" />
@@ -614,7 +652,7 @@ export default function ScanDetailPage() {
         )}
 
         {/* Tabs */}
-        {isTerminal && s.status === "success" && (
+        {showResults && (
           <Tabs defaultValue="findings">
             <TabsList>
               <TabsTrigger value="findings" className="gap-1.5">
@@ -740,7 +778,7 @@ export default function ScanDetailPage() {
           </Tabs>
         )}
 
-        {!isTerminal && (
+        {showInProgress && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
@@ -784,9 +822,10 @@ export default function ScanDetailPage() {
   );
 }
 
-function formatDuration(startedAt: string | null, finishedAt: string | null): string {
+function formatDuration(startedAt: string | null, finishedAt: string | null, now: number): string {
   if (!startedAt) return "";
-  const s = Math.max(0, Math.round((new Date(finishedAt ?? Date.now()).getTime() - new Date(startedAt).getTime()) / 1000));
+  const end = finishedAt ? new Date(finishedAt).getTime() : now;
+  const s = Math.max(0, Math.round((end - new Date(startedAt).getTime()) / 1000));
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
