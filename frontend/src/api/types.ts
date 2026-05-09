@@ -123,6 +123,8 @@ export interface NewCredentialInput {
 
 export type RepoProtocol = "ssh" | "https";
 export type AnalysisType = "sca" | "sast";
+/** `claude -p --effort` value. xhigh is Opus-only; Sonnet silently degrades. */
+export type LlmEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Repo {
   id: string;
@@ -137,6 +139,8 @@ export interface Repo {
   retain_clone: boolean;
   reachability_enabled: boolean;
   reachability_include_dev_deps: boolean;
+  llm_sast_effort: LlmEffort;
+  llm_recheck_effort: LlmEffort;
   source_url_template: string | null;
   last_cloned_at: string | null;
   created_at?: string;
@@ -154,6 +158,8 @@ export interface RepoUpsertInput {
   retain_clone?: boolean;
   reachability_enabled?: boolean;
   reachability_include_dev_deps?: boolean;
+  llm_sast_effort?: LlmEffort;
+  llm_recheck_effort?: LlmEffort;
   source_url_template?: string | null;
   /** Existing credential to link. Ignored if `credential` (inline) is supplied. */
   credential_id?: string | null;
@@ -178,7 +184,6 @@ export interface AdminSettings {
   llm_api_format: LlmApiFormat | null;
   llm_model: string | null;
   llm_credential_id: string | null;
-  llm_triage_token_budget: number;
   reachability_min_severity: ReachabilityMinSeverity;
   updated_at: string;
 }
@@ -193,7 +198,6 @@ export interface AdminSettingsUpdate {
   llm_model?: string | null;
   llm_credential_id?: string | null;
   llm_credential?: CredentialCreateInput | null;
-  llm_triage_token_budget?: number;
   reachability_min_severity?: ReachabilityMinSeverity;
 }
 

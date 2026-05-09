@@ -141,6 +141,7 @@ async function main(): Promise<void> {
         scopePath: scope.path,
         issues,
         tokenBudget: recheckBudget,
+        effortLevel: scope.repo.llmRecheckEffort,
         orgId: scope.repo.orgId ?? null,
       });
 
@@ -238,6 +239,7 @@ async function main(): Promise<void> {
       ignorePaths: scope.repo.ignorePaths as string[],
       scaHints,
       tokenBudget,
+      effortLevel: scope.repo.llmSastEffort,
       orgId: scope.repo.orgId ?? null,
     });
 

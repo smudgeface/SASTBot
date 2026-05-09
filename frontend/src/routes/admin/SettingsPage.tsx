@@ -53,7 +53,6 @@ export default function SettingsPage() {
   const [llmNewValue, setLlmNewValue] = useState("");
 
   // LLM assistance section state
-  const [llmTokenBudget, setLlmTokenBudget] = useState(50000);
   const [reachabilityMinSeverity, setReachabilityMinSeverity] = useState<ReachabilityMinSeverity>("high");
 
   // When the settings query completes, hydrate the form.
@@ -71,7 +70,6 @@ export default function SettingsPage() {
     setLlmCredId(data.llm_credential_id ?? "");
     setLlmCredChoice(data.llm_credential_id ? "existing" : "new");
 
-    setLlmTokenBudget(data.llm_triage_token_budget ?? 50000);
     setReachabilityMinSeverity(data.reachability_min_severity ?? "high");
   }, [settings.data]);
 
@@ -107,7 +105,6 @@ export default function SettingsPage() {
       llm_base_url: llmBaseUrl.trim() || null,
       llm_api_format: llmApiFormat,
       llm_model: llmModel.trim() || null,
-      llm_triage_token_budget: llmTokenBudget,
       reachability_min_severity: reachabilityMinSeverity,
     };
     // Only include credential keys when the user is actually making a change.
@@ -371,39 +368,24 @@ export default function SettingsPage() {
 
             <Separator />
 
-            {/* Budget + threshold */}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="llm-budget">Token budget per scan</Label>
-                <Input
-                  id="llm-budget"
-                  type="number"
-                  min={1000}
-                  step={1000}
-                  value={llmTokenBudget}
-                  onChange={(e) => setLlmTokenBudget(Number(e.target.value))}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Combined input + output tokens. Triage stops when exceeded.
-                </p>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="reach-sev">Reachability minimum severity</Label>
-                <select
-                  id="reach-sev"
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  value={reachabilityMinSeverity}
-                  onChange={(e) => setReachabilityMinSeverity(e.target.value as ReachabilityMinSeverity)}
-                >
-                  <option value="critical">Critical only</option>
-                  <option value="high">High and above</option>
-                  <option value="medium">Medium and above</option>
-                  <option value="low">Low and above</option>
-                </select>
-                <p className="text-xs text-muted-foreground">
-                  Only CVE findings at this severity or higher will be assessed for reachability.
-                </p>
-              </div>
+            {/* Threshold */}
+            <div className="space-y-1.5">
+              <Label htmlFor="reach-sev">Reachability minimum severity</Label>
+              <select
+                id="reach-sev"
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={reachabilityMinSeverity}
+                onChange={(e) => setReachabilityMinSeverity(e.target.value as ReachabilityMinSeverity)}
+              >
+                <option value="critical">Critical only</option>
+                <option value="high">High and above</option>
+                <option value="medium">Medium and above</option>
+                <option value="low">Low and above</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Only CVE findings at this severity or higher will be assessed for reachability.
+                Per-repo SAST effort and token budgets live on each repo's edit page.
+              </p>
             </div>
 
           </CardContent>

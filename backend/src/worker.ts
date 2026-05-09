@@ -116,6 +116,8 @@ interface LlmSastPipelineInput {
     ignorePaths: unknown;
     llmSastTokenBudget: number;
     llmRecheckTokenBudget: number;
+    llmSastEffort: string;
+    llmRecheckEffort: string;
     reachabilityEnabled: boolean;
     reachabilityIncludeDevDeps: boolean;
   };
@@ -184,7 +186,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
     }
 
     // 2. Detection pass.
-    log.info({ scaHintCount: scaHints.length, budget: repo.llmSastTokenBudget }, "[worker] LLM detection start");
+    log.info({ scaHintCount: scaHints.length, budget: repo.llmSastTokenBudget, effort: repo.llmSastEffort }, "[worker] LLM detection start");
     await setPhase(scanRunId, "llm_detection", { done: 0, total: repo.llmSastTokenBudget, label: "LLM SAST detection" });
     // Throttle live progress writes to once every 2s — matches the
     // useScanDetail / useScopes refetch cadence so the UI sees an update on
@@ -199,6 +201,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       ignorePaths: Array.isArray(repo.ignorePaths) ? (repo.ignorePaths as string[]) : [],
       scaHints,
       tokenBudget: repo.llmSastTokenBudget,
+      effortLevel: repo.llmSastEffort,
       orgId: run.orgId,
       onProgress: (usage) => {
         const now = Date.now();
@@ -287,7 +290,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         snippet: i.latestSnippet ?? "",
         cwe: i.latestCweIds[0] ?? "CWE-UNKNOWN",
       }));
-      log.info({ count: recheckIssues.length, budget: repo.llmRecheckTokenBudget }, "[worker] LLM recheck start");
+      log.info({ count: recheckIssues.length, budget: repo.llmRecheckTokenBudget, effort: repo.llmRecheckEffort }, "[worker] LLM recheck start");
       // Use tokens-against-budget for live progress: verdicts arrive batched
       // at the end of the claude-p run, so done=verdictCount only flips from
       // 0 to N right before the phase ends and the user sees no movement.
@@ -300,6 +303,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         scopePath,
         issues: recheckIssues,
         tokenBudget: repo.llmRecheckTokenBudget,
+        effortLevel: repo.llmRecheckEffort,
         orgId: run.orgId,
         onProgress: (usage) => {
           const now = Date.now();

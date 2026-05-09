@@ -276,6 +276,10 @@ export interface paths {
                             retain_clone: boolean;
                             reachability_enabled: boolean;
                             reachability_include_dev_deps: boolean;
+                            /** @enum {string} */
+                            llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            /** @enum {string} */
+                            llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             last_cloned_at: string | null;
                             created_at: string;
                         }[];
@@ -347,6 +351,16 @@ export interface paths {
                         reachability_enabled?: boolean;
                         /** @default true */
                         reachability_include_dev_deps?: boolean;
+                        /**
+                         * @default xhigh
+                         * @enum {string}
+                         */
+                        llm_sast_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        /**
+                         * @default medium
+                         * @enum {string}
+                         */
+                        llm_recheck_effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -419,6 +433,10 @@ export interface paths {
                             retain_clone: boolean;
                             reachability_enabled: boolean;
                             reachability_include_dev_deps: boolean;
+                            /** @enum {string} */
+                            llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            /** @enum {string} */
+                            llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -511,6 +529,10 @@ export interface paths {
                             retain_clone: boolean;
                             reachability_enabled: boolean;
                             reachability_include_dev_deps: boolean;
+                            /** @enum {string} */
+                            llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            /** @enum {string} */
+                            llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -578,6 +600,10 @@ export interface paths {
                         retain_clone?: boolean;
                         reachability_enabled?: boolean;
                         reachability_include_dev_deps?: boolean;
+                        /** @enum {string} */
+                        llm_sast_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        /** @enum {string} */
+                        llm_recheck_effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -650,6 +676,10 @@ export interface paths {
                             retain_clone: boolean;
                             reachability_enabled: boolean;
                             reachability_include_dev_deps: boolean;
+                            /** @enum {string} */
+                            llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            /** @enum {string} */
+                            llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -814,6 +844,10 @@ export interface paths {
                             retain_clone: boolean;
                             reachability_enabled: boolean;
                             reachability_include_dev_deps: boolean;
+                            /** @enum {string} */
+                            llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            /** @enum {string} */
+                            llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -1179,7 +1213,6 @@ export interface paths {
                             llm_model: string | null;
                             /** Format: uuid */
                             llm_credential_id: string | null;
-                            llm_triage_token_budget: number;
                             /** @enum {string} */
                             reachability_min_severity: "critical" | "high" | "medium" | "low";
                             updated_at: string;
@@ -1309,7 +1342,6 @@ export interface paths {
                             /** Format: date-time */
                             expires_at?: string | null;
                         }) | null;
-                        llm_triage_token_budget?: number;
                         /** @enum {string} */
                         reachability_min_severity?: "critical" | "high" | "medium" | "low";
                     };
@@ -1336,7 +1368,6 @@ export interface paths {
                             llm_model: string | null;
                             /** Format: uuid */
                             llm_credential_id: string | null;
-                            llm_triage_token_budget: number;
                             /** @enum {string} */
                             reachability_min_severity: "critical" | "high" | "medium" | "low";
                             updated_at: string;
@@ -2469,6 +2500,21 @@ export interface paths {
                             actively_exploited: boolean;
                             eol_date: string | null;
                             has_fix: boolean;
+                            ecosystem: string | null;
+                            manifest_file: string | null;
+                            manifest_line: number | null;
+                            manifest_snippet: string | null;
+                            llm_summary: string | null;
+                            confirmed_reachable: boolean;
+                            reachable_confidence: number | null;
+                            reachable_reasoning: string | null;
+                            reachable_call_sites: {
+                                file: string;
+                                line: number;
+                                snippet: string;
+                            }[] | null;
+                            reachable_model: string | null;
+                            reachable_assessed_at: string | null;
                             created_at: string;
                         }[];
                     };
@@ -2506,6 +2552,41 @@ export interface paths {
         trace?: never;
     };
     "/scans/{id}/sbom": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scans/{id}/sast-sarif": {
         parameters: {
             query?: never;
             header?: never;
@@ -2618,13 +2699,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List SAST findings for a scan run */
+        /** List SAST issues observed in this scan run */
         get: {
             parameters: {
-                query?: {
-                    severity?: "critical" | "high" | "medium" | "low" | "info";
-                    file_path?: string;
-                };
+                query?: never;
                 header?: never;
                 path: {
                     id: string;
@@ -2643,23 +2721,39 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
-                            scan_run_id: string;
+                            org_id: string | null;
                             /** Format: uuid */
                             scope_id: string;
-                            /** Format: uuid */
-                            issue_id: string;
                             fingerprint: string;
-                            rule_id: string;
-                            rule_name: string | null;
-                            rule_message: string | null;
-                            cwe_ids: string[];
                             /** @enum {string} */
-                            severity: "critical" | "high" | "medium" | "low" | "info";
-                            file_path: string;
-                            start_line: number;
-                            end_line: number | null;
-                            snippet: string | null;
+                            triage_status: "pending" | "confirmed" | "planned" | "fixed" | "false_positive" | "suppressed" | "error";
+                            triage_confidence: number | null;
+                            triage_reasoning: string | null;
+                            triage_model: string | null;
+                            triage_input_tokens: number | null;
+                            triage_output_tokens: number | null;
+                            suppressed_at: string | null;
+                            /** Format: uuid */
+                            suppressed_by_user_id: string | null;
+                            suppressed_reason: string | null;
+                            notes: string | null;
+                            /** Format: uuid */
+                            jira_ticket_id: string | null;
+                            latest_rule_id: string;
+                            latest_rule_name: string | null;
+                            latest_rule_message: string | null;
+                            latest_llm_summary: string | null;
+                            /** @enum {string} */
+                            latest_severity: "critical" | "high" | "medium" | "low" | "info";
+                            latest_cwe_ids: string[];
+                            latest_file_path: string;
+                            latest_start_line: number;
+                            latest_end_line: number | null;
+                            latest_snippet: string | null;
+                            first_seen_at: string;
+                            last_seen_at: string;
                             created_at: string;
+                            updated_at: string;
                         }[];
                     };
                 };
@@ -2689,107 +2783,6 @@ export interface paths {
         };
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/scans/{id}/sast-findings/{fid}/triage": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Update triage status for a SAST finding (admin-only) */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: string;
-                    fid: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        /** @enum {string} */
-                        status: "confirmed" | "false_positive" | "suppressed" | "pending" | "fixed";
-                        reason?: string;
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            scan_run_id: string;
-                            /** Format: uuid */
-                            scope_id: string;
-                            /** Format: uuid */
-                            issue_id: string;
-                            fingerprint: string;
-                            rule_id: string;
-                            rule_name: string | null;
-                            rule_message: string | null;
-                            cwe_ids: string[];
-                            /** @enum {string} */
-                            severity: "critical" | "high" | "medium" | "low" | "info";
-                            file_path: string;
-                            start_line: number;
-                            end_line: number | null;
-                            snippet: string | null;
-                            created_at: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                401: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            detail: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            detail: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            detail: string;
-                        };
-                    };
-                };
-            };
-        };
         delete?: never;
         options?: never;
         head?: never;
@@ -3046,6 +3039,7 @@ export interface paths {
                                 latest_cwe_ids: string[];
                                 latest_file_path: string;
                                 latest_start_line: number;
+                                latest_end_line: number | null;
                                 latest_snippet: string | null;
                                 first_seen_at: string;
                                 last_seen_at: string;
@@ -3448,6 +3442,7 @@ export interface paths {
                             latest_cwe_ids: string[];
                             latest_file_path: string;
                             latest_start_line: number;
+                            latest_end_line: number | null;
                             latest_snippet: string | null;
                             first_seen_at: string;
                             last_seen_at: string;
@@ -3692,6 +3687,7 @@ export interface paths {
                             latest_cwe_ids: string[];
                             latest_file_path: string;
                             latest_start_line: number;
+                            latest_end_line: number | null;
                             latest_snippet: string | null;
                             first_seen_at: string;
                             last_seen_at: string;

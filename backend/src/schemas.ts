@@ -15,6 +15,10 @@ export const IsoDateTimeSchema = z.string();
 
 export const RepoProtocolSchema = z.enum(["ssh", "https"]);
 export const AnalysisTypeSchema = z.enum(["sca", "sast"]);
+/** `claude -p --effort` value. xhigh is Opus-only at the time of writing —
+ *  Sonnet silently degrades it to high. */
+export const LlmEffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
+export type LlmEffort = z.infer<typeof LlmEffortSchema>;
 
 // `kind` is open — the frontend sends common values like "https_token",
 // "https_basic", "ssh_key", "jira_token", "llm_api_key".
@@ -204,6 +208,12 @@ export const RepoCreateSchema = z.object({
    *  want to skip reachability analysis on dev tooling. npm-only signal:
    *  non-npm components are unaffected. */
   reachability_include_dev_deps: z.boolean().default(true),
+  /** `claude -p --effort` value for SAST detection / recheck. Detection
+   *  defaults to xhigh (Opus 4.7 docs recommend xhigh for agentic coding);
+   *  recheck defaults to medium (verification, not exploration). xhigh is
+   *  Opus-only — Sonnet silently degrades it. */
+  llm_sast_effort: LlmEffortSchema.default("xhigh"),
+  llm_recheck_effort: LlmEffortSchema.default("medium"),
   credential_id: UuidSchema.nullable().optional(),
   // NOTE: the contract names the inline field `credential`, NOT `new_credential`.
   credential: CredentialCreateSchema.nullable().optional(),
@@ -224,6 +234,8 @@ export const RepoUpdateSchema = z.object({
   retain_clone: z.boolean().optional(),
   reachability_enabled: z.boolean().optional(),
   reachability_include_dev_deps: z.boolean().optional(),
+  llm_sast_effort: LlmEffortSchema.optional(),
+  llm_recheck_effort: LlmEffortSchema.optional(),
   credential_id: UuidSchema.nullable().optional(),
   credential: CredentialCreateSchema.nullable().optional(),
 });
@@ -246,6 +258,8 @@ export const RepoOutSchema = z.object({
   retain_clone: z.boolean(),
   reachability_enabled: z.boolean(),
   reachability_include_dev_deps: z.boolean(),
+  llm_sast_effort: LlmEffortSchema,
+  llm_recheck_effort: LlmEffortSchema,
   /** Set whenever the worker finishes a clone/fetch for this repo. Null
    *  means no local cache exists — "Purge cache" should be disabled. */
   last_cloned_at: IsoDateTimeSchema.nullable(),
@@ -276,7 +290,6 @@ export const AppSettingsUpdateSchema = z.object({
   llm_model: z.string().nullable().optional(),
   llm_credential_id: UuidSchema.nullable().optional(),
   llm_credential: CredentialCreateSchema.nullable().optional(),
-  llm_triage_token_budget: z.number().int().min(1000).optional(),
   reachability_min_severity: ReachabilityMinSeveritySchema.optional(),
 });
 export type AppSettingsUpdate = z.infer<typeof AppSettingsUpdateSchema>;
@@ -291,7 +304,6 @@ export const AppSettingsOutSchema = z.object({
   llm_api_format: z.string().nullable(),
   llm_model: z.string().nullable(),
   llm_credential_id: UuidSchema.nullable(),
-  llm_triage_token_budget: z.number().int(),
   reachability_min_severity: ReachabilityMinSeveritySchema,
   updated_at: IsoDateTimeSchema,
 });

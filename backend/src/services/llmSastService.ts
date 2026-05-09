@@ -138,6 +138,8 @@ export interface RunDetectionInput {
   ignorePaths: string[];
   scaHints: ScaHintInput[];
   tokenBudget: number;
+  /** Effort level for `claude -p --effort`. */
+  effortLevel: string;
   orgId: string | null;
   /** Live token-usage callback for setPhase progress. See SpawnClaudeInput. */
   onProgress?: (usage: TokenUsage) => void;
@@ -236,6 +238,11 @@ interface SpawnClaudeInput {
   apiKey: string;
   baseUrl: string;
   claudeHome: string;
+  /** `--effort` value passed to claude-p. low | medium | high | xhigh | max.
+   *  Required so we never silently inherit the Claude Code product default
+   *  (which differs by model — xhigh on Opus 4.7, high on Sonnet 4.6 — and
+   *  could change again in a future release). */
+  effortLevel: string;
   /** Called once per assistant-text line (already trimmed of the trailing newline). */
   onLine: (line: string) => void;
   /**
@@ -259,6 +266,8 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
     input.userPrompt,
     "--model",
     input.modelName,
+    "--effort",
+    input.effortLevel,
     "--allowed-tools",
     "Bash Read Glob Grep",
     "--permission-mode",
@@ -456,6 +465,7 @@ export async function runDetection(input: RunDetectionInput): Promise<RunDetecti
     apiKey,
     baseUrl,
     claudeHome,
+    effortLevel: input.effortLevel,
     onProgress: input.onProgress,
     onLine: (line) => {
       if (!line.startsWith("{")) return;
@@ -543,6 +553,9 @@ export interface RunRecheckInput {
   scopePath: string;
   issues: RecheckIssueInput[];
   tokenBudget: number;
+  /** Effort level for `claude -p --effort`. Recheck is narrow verification
+   *  and typically wants a lower effort than detection. */
+  effortLevel: string;
   orgId: string | null;
   /** Called on each assistant stream event with the running session usage.
    *  Same semantics as RunDetectionInput.onProgress — used for live phase
@@ -627,6 +640,7 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
     apiKey,
     baseUrl,
     claudeHome,
+    effortLevel: input.effortLevel,
     onProgress: input.onProgress,
     onLine: (line) => {
       if (!line.startsWith("{")) return;

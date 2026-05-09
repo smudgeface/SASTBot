@@ -124,6 +124,14 @@ model Repo {
   // bound the detection pass and the per-scan recheck pass respectively.
   llmSastTokenBudget    Int     @default(300000)    @map("llm_sast_token_budget")
   llmRecheckTokenBudget Int     @default(50000)     @map("llm_recheck_token_budget")
+  // Effort level passed to `claude -p --effort`. Detection is open-ended
+  // search and benefits from xhigh on Opus 4.7 (per docs guidance for
+  // coding/agentic work). Recheck is narrow verification and is fine at
+  // medium. Allowed values: low | medium | high | xhigh | max. xhigh is
+  // Opus-only at the time of writing — Sonnet silently degrades it. The
+  // CLI accepts the string verbatim so no model-side validation is needed.
+  llmSastEffort         String  @default("xhigh")   @map("llm_sast_effort")
+  llmRecheckEffort      String  @default("medium")  @map("llm_recheck_effort")
   // When false, the LLM SAST pass receives an empty SCA-hint input file
   // (skipping the reachability portion of Goal 2 in sast_detection.md).
   // Use for repos where the reachability signal hasn't proven worth the
@@ -159,7 +167,6 @@ model AppSettings {
   llmApiFormat              String?  @map("llm_api_format")
   llmModel                  String?  @map("llm_model")
   llmCredentialId           String?  @map("llm_credential_id") @db.Uuid
-  llmTriageTokenBudget      Int      @default(50000) @map("llm_triage_token_budget")
   reachabilityMinSeverity   String   @default("high") @map("reachability_min_severity")
   updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 

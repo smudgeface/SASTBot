@@ -20,7 +20,7 @@ import {
   useUpdateRepo,
 } from "@/api/queries/repos";
 import { useTriggerScan } from "@/api/queries/scans";
-import type { AnalysisType, Repo, RepoProtocol, RepoUpsertInput } from "@/api/types";
+import type { AnalysisType, LlmEffort, Repo, RepoProtocol, RepoUpsertInput } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -390,6 +390,8 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   const [retainClone, setRetainClone] = useState<boolean>(repo?.retain_clone ?? false);
   const [reachabilityEnabled, setReachabilityEnabled] = useState<boolean>(repo?.reachability_enabled ?? true);
   const [reachabilityIncludeDevDeps, setReachabilityIncludeDevDeps] = useState<boolean>(repo?.reachability_include_dev_deps ?? true);
+  const [llmSastEffort, setLlmSastEffort] = useState<LlmEffort>(repo?.llm_sast_effort ?? "xhigh");
+  const [llmRecheckEffort, setLlmRecheckEffort] = useState<LlmEffort>(repo?.llm_recheck_effort ?? "medium");
   const [sourceUrlTemplate, setSourceUrlTemplate] = useState<string>(repo?.source_url_template ?? "");
 
   const [credentialChoice, setCredentialChoice] = useState<CredentialChoice>(
@@ -437,6 +439,8 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       retain_clone: retainClone,
       reachability_enabled: reachabilityEnabled,
       reachability_include_dev_deps: reachabilityIncludeDevDeps,
+      llm_sast_effort: llmSastEffort,
+      llm_recheck_effort: llmRecheckEffort,
       source_url_template: sourceUrlTemplate.trim() || null,
     };
 
@@ -685,6 +689,52 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 </div>
               </label>
             )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>LLM effort</Label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor="llm-sast-effort" className="text-xs text-muted-foreground">
+                  SAST detection
+                </Label>
+                <select
+                  id="llm-sast-effort"
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={llmSastEffort}
+                  onChange={(e) => setLlmSastEffort(e.target.value as LlmEffort)}
+                >
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="xhigh">xhigh (Opus only)</option>
+                  <option value="max">max</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="llm-recheck-effort" className="text-xs text-muted-foreground">
+                  SAST recheck
+                </Label>
+                <select
+                  id="llm-recheck-effort"
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={llmRecheckEffort}
+                  onChange={(e) => setLlmRecheckEffort(e.target.value as LlmEffort)}
+                >
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="xhigh">xhigh (Opus only)</option>
+                  <option value="max">max</option>
+                </select>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Passed to <code className="font-mono">claude -p --effort</code>. Detection is
+              open-ended search and benefits from <code>xhigh</code> on Opus 4.7; recheck is
+              narrow verification and is fine at <code>medium</code>. <code>xhigh</code> is
+              Opus-only — Sonnet silently degrades it.
+            </p>
           </div>
 
           <div className="space-y-1.5">

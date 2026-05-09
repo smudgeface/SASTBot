@@ -167,6 +167,8 @@ export function repoToOut(repo: Repo): RepoOut {
     retain_clone: repo.retainClone,
     reachability_enabled: repo.reachabilityEnabled,
     reachability_include_dev_deps: repo.reachabilityIncludeDevDeps,
+    llm_sast_effort: repo.llmSastEffort as "low" | "medium" | "high" | "xhigh" | "max",
+    llm_recheck_effort: repo.llmRecheckEffort as "low" | "medium" | "high" | "xhigh" | "max",
     last_cloned_at: repo.lastClonedAt ? repo.lastClonedAt.toISOString() : null,
     created_at: repo.createdAt.toISOString(),
   };
@@ -183,7 +185,6 @@ export function appSettingsToOut(s: AppSettings): AppSettingsOut {
     llm_api_format: s.llmApiFormat,
     llm_model: s.llmModel,
     llm_credential_id: s.llmCredentialId,
-    llm_triage_token_budget: s.llmTriageTokenBudget,
     reachability_min_severity: s.reachabilityMinSeverity as "critical" | "high" | "medium" | "low",
     updated_at: s.updatedAt.toISOString(),
   };

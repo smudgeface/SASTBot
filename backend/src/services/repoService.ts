@@ -95,6 +95,8 @@ export async function createRepo(
           retainClone: input.retain_clone ?? false,
           reachabilityEnabled: input.reachability_enabled ?? true,
           reachabilityIncludeDevDeps: input.reachability_include_dev_deps ?? true,
+          llmSastEffort: input.llm_sast_effort ?? "xhigh",
+          llmRecheckEffort: input.llm_recheck_effort ?? "medium",
         },
       });
 
@@ -160,6 +162,8 @@ export async function updateRepo(
       if (input.retain_clone !== undefined) data.retainClone = input.retain_clone;
       if (input.reachability_enabled !== undefined) data.reachabilityEnabled = input.reachability_enabled;
       if (input.reachability_include_dev_deps !== undefined) data.reachabilityIncludeDevDeps = input.reachability_include_dev_deps;
+      if (input.llm_sast_effort !== undefined) data.llmSastEffort = input.llm_sast_effort;
+      if (input.llm_recheck_effort !== undefined) data.llmRecheckEffort = input.llm_recheck_effort;
 
       const updated = await tx.repo.update({ where: { id }, data });
 
