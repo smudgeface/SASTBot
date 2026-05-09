@@ -829,3 +829,233 @@ clear the five false-positive `System.Net.Http` issues via the
 existing auto-fix sweep. Confirm the scope's SCA count drops by 5,
 then audit other NuGet-heavy scopes the same way.
 
+## Scan-page live UX + worker diagnostics (2026-05-09)
+
+### Why we did this
+
+The M6l verification scan exposed three rough edges on the scan detail
+page that all came from the same root cause: the page was assuming
+that "data is fresh because it was fetched recently" without a way to
+prove it.
+
+1. The elapsed timer didn't tick. Watching a 14-min Opus run on
+   `/GoWeb`, the duration display stayed frozen between phase
+   transitions and only jumped when `phase_progress` happened to
+   change.
+2. The "X of 300000 tokens" counter stayed at 0 for the entire LLM
+   detection phase, then flipped to its final value at the end. Made
+   long-running scans look hung.
+3. The recheck phase stuck at "0 of N issues" for the full ~60s
+   duration, then flashed briefly before the page moved on.
+4. After scan completion, the SAST count on the scan page sometimes
+   showed an incorrect transient value (11) before settling on the
+   real count (24).
+
+Separately, a /GoWeb scan crashed silently mid-detection with no stack
+trace — pnpm just printed `ELIFECYCLE Command failed` and the worker
+restarted via Docker. We had no signal about what broke.
+
+### Root causes
+
+**TanStack Query v5 structural sharing.** Identical content between
+refetches → same `data` reference → component doesn't re-render.
+`formatDuration(started_at, undefined)` reads `Date.now()` at render
+time, so without a render the timer can't advance. Same root cause for
+why `useSastFindings` cached stale data when it wasn't polling.
+
+**Worker calls `setPhase` once per phase boundary.** During the long
+LLM detection / recheck phases, no further updates happen — the
+phase_progress JSONB stays at `{done: 0, total: budget, label: "..."}`
+for the entire phase. Recheck verdicts arrive batched at the end of
+the claude-p run (one big assistant message), so even count-based
+progress can't show movement during the run.
+
+**No `uncaughtException` / `unhandledRejection` handlers.** Any async
+error in stream-event callbacks killed the worker silently. Node's
+default exit-on-unhandled-rejection behavior leaves no diagnostic.
+
+### What shipped
+
+**Frontend ticker hook.** New `useNow(intervalMs, enabled)` in
+`frontend/src/lib/useNow.ts` — `setInterval`-driven `useState` that
+forces a re-render every second while the scan is live. Bound
+explicitly into `formatDuration(startedAt, finishedAt, now)` as a
+third argument so React's reconciler sees the JSX dependency on
+`now`; the earlier "just call the hook and rely on the side-effect
+re-render" form didn't work because nothing in the rendered output
+referenced the returned value.
+
+**Per-message LLM token usage.** `spawnClaudeAndStream` now extracts
+`message.usage` from each `assistant` stream event and accumulates
+cumulatively (`inputTokens / outputTokens / cache_*` per turn). The
+terminal `result` event still overwrites with claude-p's authoritative
+session totals, so accumulation drift doesn't affect the post-run
+audit log. New optional `onProgress(usage)` callback on
+`SpawnClaudeInput`. The worker passes a 2s-throttled callback that
+calls `setPhase` with `done = inputTokens + outputTokens` against
+`total = repo.llmSastTokenBudget`. Same pattern reused for recheck —
+verdict-count was the wrong unit (verdicts arrive batched at the end
+of the run; counter only moves once); switched recheck progress to
+tokens-against-budget for visual continuity with detection.
+
+**Cancelled-scan UI fix.** `isTerminal` now includes `"cancelled"`.
+Without this, a cancelled scan showed both "Cancelled" in the header
+status AND "Scan in progress…" in the lower card simultaneously.
+
+**`showResults` / `showInProgress` gates.** Tables and summary cards
+now require `isTerminal && success && !dataIsFetching` to render;
+otherwise the in-progress UI stays up. The "scan transient" between
+`status='success'` and the post-recheck-apply data refetch was a real
+race — fixed two ways for belt-and-suspenders:
+
+1. `useScanFindings` and `useSastFindings` now poll every 2s while the
+   cached scan data shows `pending`/`running`. Reads scan status from
+   the QueryClient cache via a `liveRefetchInterval` helper — caller
+   API unchanged.
+2. `useEffect` in `ScanDetailPage` invalidates the SAST / SCA /
+   components caches the moment scan status transitions to terminal.
+   Covers the race where the scan poll wins, `refetchInterval` returns
+   false, and SAST polling stops before catching the
+   post-recheck-apply state.
+
+**Worker fatal handlers.** `worker.ts` now installs
+`process.on('uncaughtException')` and `process.on('unhandledRejection')`
+that log `level=fatal` with full stack before exiting non-zero. We
+haven't reproduced the silent crash since landing them, but the next
+recurrence will print actionable info.
+
+### What we learned
+
+- **"It re-renders on data change" is not a contract.** TanStack
+  Query's structural sharing is an optimization that makes the
+  consumer's view of "freshness" subtly wrong: the data you read is
+  fresh, but the *moment* the component last re-rendered may be much
+  older than you'd expect. The fix is always to bind your
+  wall-clock-dependent computation to a tick source, not to data
+  state.
+- **Throttle output, not invocation.** The first attempt at recheck
+  progress was verdict-count-based with a 2s throttle. Verdicts
+  arrived all at once at the end of the claude-p run, the throttle
+  blocked all but the first, and the user saw "0 → 1 → done" with no
+  intermediate movement. Switching to tokens-per-assistant-event
+  surfaces the actual work happening (one tool call = one event = one
+  update). When picking a progress unit, pick the one that ticks at
+  the cadence the LLM produces output, not the cadence the post-run
+  semantics imply.
+- **Belt + suspenders for race conditions in client caches.** Polling
+  every 2s during running gives most refreshes; explicit
+  `invalidateQueries` on the status transition catches the "last poll
+  was too early" race. Either alone leaves a window; both together
+  close it.
+- **Diagnostic wiring is cheap; debug only when you have signal.**
+  The fatal handlers are 8 lines of code. We spent more time
+  speculating about what might be killing the worker than we'd have
+  spent landing the handlers and waiting for the next crash to print
+  a stack. Default to instrumentation-first when the bug is
+  intermittent.
+
+## M6m — explicit per-phase, per-repo LLM effort (2026-05-09)
+
+### Why we did this
+
+After the live-progress fixes, we re-ran scans to validate. Then
+swapped the configured model from Sonnet 4.6 to Opus 4.7 to compare.
+Numbers were striking — and confusing.
+
+| Scope | Sonnet 4.6 | Opus 4.7 | Δ |
+|-------|-----------|----------|---|
+| Root: detection duration | 403s | 877s | 2.2× slower |
+| Root: cache reads | 4.3M | 22.3M | 5.2× more |
+| Root: detection cost | $2.23 | $13.84 | 6.2× more |
+| Root: SAST findings | 24 | 39 | +15 |
+| /GoWeb: detection cost | ~$1 | $3.81 | 4× more |
+| /GoWeb: SAST findings | 8 | 18 | +10 |
+
+Opus produced more thorough output for more cost. But how much of
+that delta was "Opus is a better model" vs "Opus was running at a
+different effort tier"? We had no idea — we never set `--effort`
+explicitly.
+
+### What's actually happening with effort
+
+`claude --help` exposes `--effort <level>` with values
+`low | medium | high | xhigh | max`. Two layers of defaults:
+
+| Layer | Default for Opus 4.7 |
+|-------|----------------------|
+| Anthropic API (raw `messages.create`) | `high` |
+| Claude Code product (incl. `claude -p`) | **`xhigh`** — raised "for all plans" in 4.7's release notes |
+
+So the Sonnet runs were at Sonnet's `high` default; the Opus runs
+were at Opus's `xhigh` default. We were comparing different efforts,
+not just different models. The Anthropic effort docs explicitly
+recommend xhigh as the starting point for Opus 4.7 on coding/agentic
+work, so the Opus runs were doing the right thing — but the
+comparison was conflated and the cost wasn't a deliberate choice.
+
+### What shipped
+
+**Schema migration `20260509093900_m6m_repo_effort_drop_triage_budget`:**
+
+- `repos.llm_sast_effort    TEXT NOT NULL DEFAULT 'xhigh'`
+- `repos.llm_recheck_effort TEXT NOT NULL DEFAULT 'medium'`
+- `DROP app_settings.llm_triage_token_budget` — its `llmTriageService`
+  was removed in M6g; the field had been orphaned since (read by no
+  service code, still surfaced as "Token budget per scan" on the
+  settings page).
+
+**Backend.** `spawnClaudeAndStream` now requires `effortLevel` and
+passes `--effort <level>` to claude-p. `RunDetectionInput` /
+`RunRecheckInput` plumb it through; worker reads from
+`repo.llmSastEffort` / `repo.llmRecheckEffort`. The dry-run CLI
+matches.
+
+**Frontend.** Repo edit dialog: side-by-side selectors for SAST
+detection / recheck effort, between Reachability analysis and Source
+URL template. Settings page: removed the orphan "Token budget per
+scan" input — reachability minimum severity is now the only field in
+that section, with copy noting that per-repo SAST settings live on
+the repo edit page.
+
+**Defaults follow the docs.** Detection at `xhigh` ("Start with xhigh
+for coding and agentic use cases" — Opus 4.7 effort guide). Recheck
+at `medium` — recheck is narrow verification (one location, one
+snippet, three discrete answers), no need for deep agentic
+exploration.
+
+### What we learned
+
+- **Always pass effort explicitly.** Claude Code's product default
+  has already changed once (high → xhigh in the 4.7 release) and may
+  change again. A scan that's "the same" between sessions but at a
+  different effort tier is silently a different test. Effort is a
+  first-class parameter, not a model attribute.
+- **Per-phase before per-model.** Recheck and detection have
+  different shapes — one is open-ended search, the other is narrow
+  verification. Tying effort to the model alone (cheap-model =
+  low-effort, expensive-model = high-effort) misses that detection
+  on a cheap model still benefits from medium/high effort. Phase is
+  the better dimension.
+- **A "dead" field can survive on the UI for a long time.**
+  `llm_triage_token_budget` was orphaned in M6g (April) and still
+  shipped in the settings page until today (May). Reading the schema
+  from the form is fine; the form is supposed to drift TOWARD what
+  the schema says, not the other way around. When deleting service
+  code, also delete the schema field, then the wire types, then the
+  UI — top to bottom.
+- **Open question for next time:** the SCA-hint set passed to LLM
+  detection (currently 11-120 entries depending on scope) is
+  meaningful work — anti-duplication against OSV findings + Goal 2
+  reachability analysis. It's already gated by
+  `repo.reachability_enabled`, but a finer-grained cap
+  (`max_sca_hints = top-N by CVSS`) might let operators trade
+  detection time against reachability coverage on hint-heavy scopes.
+  Filed but not landed.
+
+**Next** — Now that effort is explicit, run a real Sonnet@high vs
+Opus@xhigh comparison knowing the variables, plus a Sonnet@high vs
+Sonnet@max run to isolate the effort dimension from the model
+dimension. The 0-fixed/all-still-present pattern across recheck runs
+also wants more data points before we trust the recheck phase
+unconditionally.
+
