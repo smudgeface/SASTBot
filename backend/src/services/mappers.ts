@@ -429,6 +429,7 @@ export function sastIssueToOut(i: SastIssue): SastIssueOut {
     latest_cwe_ids: i.latestCweIds,
     latest_file_path: i.latestFilePath,
     latest_start_line: i.latestStartLine,
+    latest_end_line: i.latestEndLine,
     latest_snippet: i.latestSnippet,
     first_seen_at: i.firstSeenAt.toISOString(),
     last_seen_at: i.lastSeenAt.toISOString(),

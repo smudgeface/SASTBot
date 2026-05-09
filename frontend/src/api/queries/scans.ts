@@ -46,6 +46,21 @@ export function useSbomJson(scanId: string | undefined) {
   });
 }
 
+// SARIF v2.1.0 document derived from the SAST issues observed in this run.
+// Same lifetime as SBOM — generated post-detection on the worker, immutable
+// once the scan completes.
+export function useSastSarif(scanId: string | undefined) {
+  return useQuery<string>({
+    queryKey: [...scansKey, scanId, "sast-sarif"],
+    queryFn: async () => {
+      const data = await apiFetch<unknown>(`/scans/${scanId}/sast-sarif`);
+      return JSON.stringify(data, null, 2);
+    },
+    enabled: !!scanId,
+    staleTime: Infinity,
+  });
+}
+
 export function useScanDetail(scanId: string | undefined) {
   return useQuery<Scan>({
     queryKey: [...scansKey, scanId],

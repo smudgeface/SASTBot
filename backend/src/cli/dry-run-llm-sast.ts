@@ -176,6 +176,8 @@ async function main(): Promise<void> {
         const applyResult = await applyRecheckVerdicts(prisma, {
           scanRunId: run.id,
           scopeId: scope.id,
+          scopeDir: cloneDir,
+          scopePath,
           inputIssues: issues,
           verdicts: result.verdicts,
         });

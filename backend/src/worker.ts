@@ -15,6 +15,7 @@ import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { backfillReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
 import { toRepoRelative } from "./services/scopePath.js";
+import { buildSarifFromIssues } from "./services/sarifService.js";
 import {
   applyRecheckVerdicts,
   cleanupTmp as cleanupLlmTmp,
@@ -289,6 +290,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       const apply = await applyRecheckVerdicts(prisma, {
         scanRunId,
         scopeId: run.scopeId,
+        scopeDir: scanDir,
+        scopePath,
         inputIssues: recheckIssues,
         verdicts: recheck.verdicts,
       });
@@ -331,9 +334,39 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       where: { id: scanRunId },
       data: { sastFindingCount: sastCount },
     });
+
+    // 8. Generate the SARIF export from the issues observed in this run so
+    //    operators can hand the standard JSON to dashboards / CI gates /
+    //    compliance evidence collection. Cheap; idempotent.
+    await regenerateSastSarifForScan(scanRunId, run.scopeId, scopePath);
   } finally {
     await cleanupLlmTmp(scanRunId);
   }
+}
+
+async function regenerateSastSarifForScan(
+  scanRunId: string,
+  scopeId: string,
+  scopePath: string,
+): Promise<void> {
+  const issues = await prisma.sastIssue.findMany({
+    where: { scopeId, lastSeenScanRunId: scanRunId },
+  });
+  const run = await prisma.scanRun.findUnique({
+    where: { id: scanRunId },
+    select: { startedAt: true, finishedAt: true },
+  });
+  const sarif = buildSarifFromIssues(issues, {
+    toolVersion: process.env.npm_package_version ?? "0.1.0",
+    modelName: "claude-code-cli",
+    scopePath,
+    startedAt: run?.startedAt ?? null,
+    endedAt: run?.finishedAt ?? null,
+  });
+  await prisma.scanRun.update({
+    where: { id: scanRunId },
+    data: { sastSarif: sarif as Prisma.InputJsonValue },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +661,101 @@ async function backfillManifestPathPrefixes(): Promise<void> {
 
 backfillManifestPathPrefixes().catch((err) => {
   logger.warn({ err }, "[worker] manifest-path-prefix backfill failed");
+});
+
+// Generate sast_sarif for runs that pre-date the column (M6j cutover).
+// Idempotent — only fills NULL rows. Goes one scan at a time so a partial
+// failure doesn't take down the whole boot.
+async function backfillSastSarif(): Promise<void> {
+  const runs = await prisma.scanRun.findMany({
+    where: { sastSarif: { equals: Prisma.DbNull }, sastFindingCount: { gt: 0 } },
+    select: { id: true, scopeId: true, startedAt: true, finishedAt: true, scope: { select: { path: true } } },
+  });
+  if (runs.length === 0) return;
+  let filled = 0;
+  for (const r of runs) {
+    try {
+      const issues = await prisma.sastIssue.findMany({
+        where: { scopeId: r.scopeId, lastSeenScanRunId: r.id },
+      });
+      const sarif = buildSarifFromIssues(issues, {
+        toolVersion: process.env.npm_package_version ?? "0.1.0",
+        modelName: "claude-code-cli",
+        scopePath: r.scope.path,
+        startedAt: r.startedAt,
+        endedAt: r.finishedAt,
+      });
+      await prisma.scanRun.update({
+        where: { id: r.id },
+        data: { sastSarif: sarif as Prisma.InputJsonValue },
+      });
+      filled++;
+    } catch (err) {
+      logger.warn({ err, scanRunId: r.id }, "[worker] sast-sarif backfill: skipping run");
+    }
+  }
+  if (filled > 0) {
+    logger.info({ filled, total: runs.length }, "[worker] backfilled sast_sarif");
+  }
+}
+
+backfillSastSarif().catch((err) => {
+  logger.warn({ err }, "[worker] sast-sarif backfill failed");
+});
+
+// M6k: re-extract SAST snippets from disk so they all conform to the
+// canonical 3-lines-before / problem / 3-lines-after layout. Old snippets
+// were the raw LLM output and varied wildly in length, forcing the
+// frontend to use a keyword-search heuristic to find the match. Refreshes
+// every issue whose scope's repo is retained on disk; absence-style rows
+// (snippet starts with `__absence__:`) are skipped — they have no real
+// code site.
+async function backfillSastSnippets(): Promise<void> {
+  const { repoCachePath } = await import("./services/repoCache.js");
+  const { stat } = await import("node:fs/promises");
+  const { readSourceSnippet } = await import("./services/sourceSnippet.js");
+
+  const scopes = await prisma.scanScope.findMany({
+    where: { repo: { retainClone: true } },
+    select: { id: true, repoId: true, path: true },
+  });
+  let refreshed = 0;
+  for (const scope of scopes) {
+    const cacheDir = repoCachePath(scope.repoId);
+    try { await stat(cacheDir); } catch { continue; }
+    const scopeDir = scope.path === "/" || scope.path === "" ? cacheDir : join(cacheDir, scope.path);
+    const issues = await prisma.sastIssue.findMany({
+      where: { scopeId: scope.id },
+      select: { id: true, latestFilePath: true, latestStartLine: true, latestEndLine: true, latestSnippet: true },
+    });
+    for (const i of issues) {
+      if (i.latestSnippet?.startsWith("__absence__:")) continue;
+      // latestFilePath is repo-rooted; readSourceSnippet expects scope-relative.
+      const scopeRel = scope.path === "/" || scope.path === ""
+        ? i.latestFilePath
+        : i.latestFilePath.replace(new RegExp(`^${scope.path.replace(/^\//, "").replace(/\/$/, "")}/`), "");
+      const fresh = await readSourceSnippet(
+        scopeDir,
+        scopeRel,
+        i.latestStartLine,
+        i.latestEndLine ?? undefined,
+      );
+      if (!fresh) continue;
+      if (fresh.text === i.latestSnippet) continue;
+      await prisma.sastIssue.update({
+        where: { id: i.id },
+        data: { latestSnippet: fresh.text },
+      });
+      refreshed++;
+    }
+  }
+  if (refreshed > 0) {
+    logger.info({ refreshed }, "[worker] backfilled SAST snippets from disk");
+  }
+}
+
+backfillSastSnippets().catch((err) => {
+  logger.warn({ err }, "[worker] sast-snippet backfill failed");
 });
 
 backfillRepoRelativePaths().catch((err) => {

@@ -17,6 +17,7 @@ import { z } from "zod";
 import { loadConfig } from "../config.js";
 import { decodeCredential } from "./credentialService.js";
 import { upsertSastIssueFromDetection } from "./issueService.js";
+import { readSourceSnippet } from "./sourceSnippet.js";
 import { toRepoRelative, toScopeRelative } from "./scopePath.js";
 import { getOrCreateSettings } from "./settingsService.js";
 import { loadPrompt } from "./promptLoader.js";
@@ -44,7 +45,10 @@ const SastRecord = z.object({
   start_line: z.number().int().nonnegative(),
   end_line: z.number().int().nonnegative(),
   summary: z.string(),
-  snippet: z.string(),
+  // M6k: snippet is now built by the worker from the file on disk so we
+  // can guarantee a canonical N-line context window. Accept the field if
+  // the model emits it (back-compat / chatty models) but never trust it.
+  snippet: z.string().optional(),
   confidence: z.number().min(0).max(1),
   reasoning: z.string(),
 });
@@ -72,7 +76,8 @@ const ReachabilityRecord = z.object({
       z.object({
         file: z.string(),
         line: z.number().int().nonnegative(),
-        snippet: z.string(),
+        // Worker-built post-detection (M6k); model may still emit it.
+        snippet: z.string().optional(),
       }),
     )
     .default([]),
@@ -637,6 +642,12 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
 export interface ApplyRecheckInput {
   scanRunId: string;
   scopeId: string;
+  /** Absolute path to the scope's working dir on disk — used to refresh the
+   *  snippet from the file system on `still_present` verdicts (M6k). */
+  scopeDir: string;
+  /** Repo-rooted scope path ("/" or "/GoWeb") — needed to translate the
+   *  issue's repo-rooted file path back to scope-relative when reading. */
+  scopePath: string;
   /** Issues that were sent into the recheck pass — needed to detect "no verdict
    *  emitted" cases where the model silently dropped one. */
   inputIssues: RecheckIssueInput[];
@@ -684,7 +695,7 @@ export async function applyRecheckVerdicts(
     // Defensive scope check — refuse to mutate an issue from another scope.
     const row = await db.sastIssue.findFirst({
       where: { id: issue.id, scopeId: input.scopeId },
-      select: { id: true },
+      select: { id: true, latestFilePath: true, latestStartLine: true, latestEndLine: true },
     });
     if (!row) {
       logger.warn(
@@ -695,14 +706,25 @@ export async function applyRecheckVerdicts(
     }
 
     if (v.verdict === "still_present") {
+      // Refresh the snippet from disk so it reflects the canonical 7-line
+      // layout (M6k). The recheck only confirms presence — the line itself
+      // hasn't moved (the model would emit a "fixed" verdict otherwise),
+      // so we read at row.latestStartLine. Fall back to the LLM-supplied
+      // current_snippet only if the file isn't readable.
+      const scopeRelPath = toScopeRelative(input.scopePath, row.latestFilePath);
+      const fileSnippet = await readSourceSnippet(
+        input.scopeDir,
+        scopeRelPath,
+        row.latestStartLine,
+        row.latestEndLine ?? undefined,
+      );
       await db.sastIssue.update({
         where: { id: issue.id },
         data: {
           lastSeenAt: new Date(),
           lastSeenScanRunId: input.scanRunId,
           // Preserve triageStatus — recheck does not flip pending/error/etc.
-          // Update the snippet if the model relocated the finding.
-          latestSnippet: v.current_snippet ?? undefined,
+          latestSnippet: fileSnippet?.text ?? v.current_snippet ?? undefined,
         },
       });
       result.stillPresent++;
@@ -847,7 +869,17 @@ export async function persistDetection(
         input.scopeDir,
         r.file_path,
         r.start_line,
-        r.snippet,
+        r.snippet ?? "",
+      );
+      // Build the snippet from disk; fall back to the LLM-supplied one only
+      // if the file isn't readable (deleted, race, etc.). Honors r.end_line
+      // so multi-line problems (e.g. paired #define blocks) get all the
+      // problem rows + 3 lines of context on each side.
+      const fileSnippet = await readSourceSnippet(
+        input.scopeDir,
+        r.file_path,
+        r.start_line,
+        r.end_line,
       );
       await upsertSastIssueFromDetection(db, input.scanRunId, input.scopeId, input.orgId, {
         fingerprint,
@@ -858,7 +890,8 @@ export async function persistDetection(
         cweIds: [r.cwe],
         filePath: toRepoRelative(input.scopePath, r.file_path),
         startLine: r.start_line,
-        snippet: r.snippet,
+        endLine: r.end_line,
+        snippet: fileSnippet?.text ?? r.snippet ?? null,
       });
       result.sastUpserted++;
     } else if (r.kind === "sast_absence") {
@@ -872,6 +905,7 @@ export async function persistDetection(
         cweIds: [r.cwe],
         filePath: toRepoRelative(input.scopePath, r.evidence_file),
         startLine: r.evidence_line,
+        endLine: null,
         snippet: `__absence__:${r.cwe}`,
       });
       result.sastAbsenceUpserted++;
@@ -890,10 +924,18 @@ export async function persistDetection(
         );
         continue;
       }
-      const repoRootedSites = r.call_sites.map((s) => ({
-        ...s,
-        file: toRepoRelative(input.scopePath, s.file),
-      }));
+      // M6k: build call-site snippets from disk so they match the canonical
+      // 7-line layout. The LLM-supplied snippet is fallback only.
+      const repoRootedSites = await Promise.all(
+        r.call_sites.map(async (s) => {
+          const fileSnippet = await readSourceSnippet(input.scopeDir, s.file, s.line);
+          return {
+            file: toRepoRelative(input.scopePath, s.file),
+            line: s.line,
+            snippet: fileSnippet?.text ?? s.snippet ?? "",
+          };
+        }),
+      );
       await db.scaIssue.update({
         where: { id: r.sca_issue_id },
         data: {

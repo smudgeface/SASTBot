@@ -107,14 +107,14 @@ Emit one JSON object per line. Allowed shapes:
   "start_line": 68,
   "end_line": 69,
   "summary": "Hardcoded super-user password defined as macro",
-  "snippet": "...",
   "confidence": 0.98,
   "reasoning": "Macro grants SuperAccess on any device per GsCore.cpp:2367-2372."
 }
 ```
 
 `cvss_vector` is optional. `file_path` must be relative to the scope root.
-`snippet` follows the 7-line rule from the system prompt.
+**Do NOT emit a `snippet` field** — the worker reads the file and builds the
+context window itself. See the system prompt's "Line range" section.
 
 **`start_line` precision:** point at the exact line of code that *contains*
 the vulnerability — the unsafe call, the unsafe assignment, the macro
@@ -151,7 +151,7 @@ the wrong line creates duplicate findings on the next scan.
   "reachable": true,
   "confidence": 0.85,
   "call_sites": [
-    {"file": "src/utils.js", "line": 42, "snippet": "const tpl = _.template(userInput);"}
+    {"file": "src/utils.js", "line": 42}
   ],
   "reasoning": "lodash.template called with a user-controlled string in BuildManager."
 }

@@ -545,6 +545,9 @@ export const SastIssueOutSchema = z.object({
   latest_cwe_ids: z.array(z.string()),
   latest_file_path: z.string(),
   latest_start_line: z.number().int(),
+  /** Inclusive last line of the problem region. NULL for absence rows and
+   *  for legacy issues that pre-date M6k; treat as single-line. */
+  latest_end_line: z.number().int().nullable(),
   latest_snippet: z.string().nullable(),
   first_seen_at: IsoDateTimeSchema,
   last_seen_at: IsoDateTimeSchema,

@@ -22,6 +22,7 @@ import {
   useScanComponents,
   useScanFindings,
   useSbomJson,
+  useSastSarif,
   useSastFindings,
 } from "@/api/queries/scans";
 import { useRepos } from "@/api/queries/repos";
@@ -458,6 +459,7 @@ export default function ScanDetailPage() {
   const components = useScanComponents(id);
   const repos = useRepos();
   const sbom = useSbomJson(id);
+  const sarif = useSastSarif(id);
   const sast = useSastFindings(id);
 
   const [scaSeverities, setScaSeverities] = useState<Set<string>>(new Set());
@@ -541,13 +543,20 @@ export default function ScanDetailPage() {
             </div>
           </div>
           {isTerminal && s.status === "success" && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button asChild variant="outline" size="sm" className="gap-1.5">
                 <Link to={`/scans/${id}/sbom`}><FileCode2 className="h-4 w-4" /> View SBOM</Link>
               </Button>
               <Button variant="outline" size="sm" className="gap-1.5" disabled={!sbom.data}
                 onClick={() => downloadBlob(sbom.data!, `sbom-${repoName ?? "scan"}-${(id ?? "").slice(0, 8)}.cdx.json`)}>
                 <Download className="h-4 w-4" /> Download SBOM
+              </Button>
+              <Button asChild variant="outline" size="sm" className="gap-1.5" disabled={!sarif.data}>
+                <Link to={`/scans/${id}/sast-sarif`}><FileCode2 className="h-4 w-4" /> View SARIF</Link>
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1.5" disabled={!sarif.data}
+                onClick={() => downloadBlob(sarif.data!, `sast-${repoName ?? "scan"}-${(id ?? "").slice(0, 8)}.sarif.json`)}>
+                <Download className="h-4 w-4" /> Download SARIF
               </Button>
             </div>
           )}

@@ -201,6 +201,41 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // SARIF v2.1.0 export of the LLM SAST findings observed in this run.
+  // Mirrors the SBOM endpoint: pretty-printed JSON with an attachment
+  // disposition so browsers offer "save as" by default. Operators can
+  // hand the file off to dashboards / CI gates / compliance evidence.
+  app.get(
+    "/scans/:id/sast-sarif",
+    {
+      preHandler: [app.authenticate],
+    },
+    async (req, reply) => {
+      const orgId = (req as unknown as { user?: { orgId?: string } }).user?.orgId ?? null;
+      const params = req.params as { id: string };
+
+      const run = await prisma.scanRun.findFirst({
+        where: { id: params.id, orgId: orgId ?? null },
+        select: { id: true, sastSarif: true, repo: { select: { name: true } } },
+      });
+      if (!run) {
+        return reply.code(404).send({ detail: "Scan run not found" });
+      }
+      if (!run.sastSarif) {
+        return reply
+          .code(404)
+          .send({ detail: "SARIF not yet available for this scan" });
+      }
+
+      const filename = `sast-${(run.repo as { name: string }).name}-${params.id.slice(0, 8)}.sarif.json`;
+      const pretty = JSON.stringify(run.sastSarif, null, 2);
+      return reply
+        .header("Content-Type", "application/json; charset=utf-8")
+        .header("Content-Disposition", `attachment; filename="${filename}"`)
+        .send(pretty);
+    },
+  );
+
   // Trigger a scan — kept here to minimise route file count.
   // (Previously lived in adminRepos.ts but it's really a scan operation.)
   typed.get(

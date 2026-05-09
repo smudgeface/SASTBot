@@ -36,6 +36,9 @@ export interface SastDetectionInput {
   cweIds: string[];
   filePath: string;
   startLine: number;
+  /** Inclusive last line of the problem region. null for absence-style
+   *  records (no specific code site) or for old data that pre-dates M6k. */
+  endLine: number | null;
   snippet: string | null;
 }
 
@@ -68,6 +71,7 @@ export async function upsertSastIssueFromDetection(
       latestCweIds: detection.cweIds,
       latestFilePath: detection.filePath,
       latestStartLine: detection.startLine,
+      latestEndLine: detection.endLine,
       latestSnippet: detection.snippet,
       firstSeenScanRunId: scanRunId,
       lastSeenScanRunId: scanRunId,
@@ -82,6 +86,7 @@ export async function upsertSastIssueFromDetection(
       latestCweIds: detection.cweIds,
       latestFilePath: detection.filePath,
       latestStartLine: detection.startLine,
+      latestEndLine: detection.endLine,
       latestSnippet: detection.snippet,
     },
   });

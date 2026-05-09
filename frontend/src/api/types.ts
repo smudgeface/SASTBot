@@ -398,6 +398,9 @@ export interface SastIssue {
   latest_cwe_ids: string[];
   latest_file_path: string;
   latest_start_line: number;
+  /** Inclusive last line of the problem region. null for absence rows and
+   *  for issues that pre-date the worker-builds-snippet cutover. */
+  latest_end_line: number | null;
   latest_snippet: string | null;
   first_seen_at: string;
   last_seen_at: string;

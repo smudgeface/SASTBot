@@ -10,6 +10,7 @@ import ScopeDetailPage from "@/routes/ScopeDetailPage";
 import ScansPage from "@/routes/ScansPage";
 import ScanDetailPage from "@/routes/ScanDetailPage";
 import SbomViewerPage from "@/routes/SbomViewerPage";
+import SastSarifViewerPage from "@/routes/SastSarifViewerPage";
 import ReposPage from "@/routes/admin/ReposPage";
 import SettingsPage from "@/routes/admin/SettingsPage";
 import CredentialsPage from "@/routes/admin/CredentialsPage";
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="/scans" element={<ScansPage />} />
         <Route path="/scans/:id" element={<ScanDetailPage />} />
         <Route path="/scans/:id/sbom" element={<SbomViewerPage />} />
+        <Route path="/scans/:id/sast-sarif" element={<SastSarifViewerPage />} />
         <Route
           path="/admin/repos"
           element={

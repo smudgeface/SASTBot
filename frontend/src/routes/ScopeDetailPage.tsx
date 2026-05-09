@@ -656,8 +656,7 @@ function SastIssueRow({
               <ContextSnippet
                 snippet={issue.latest_snippet}
                 matchLine={issue.latest_start_line}
-                summary={issue.latest_llm_summary}
-                ruleMessage={issue.latest_rule_message}
+                matchEndLine={issue.latest_end_line}
                 className="mb-3"
               />
             )}
