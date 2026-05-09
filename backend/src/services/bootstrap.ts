@@ -28,7 +28,11 @@ export async function bootstrapIfEmpty(): Promise<void> {
 
   const config = loadConfig();
   const email = config.bootstrapAdminEmail;
-  const password = randomBytes(18).toString("base64url");
+  // Honor BOOTSTRAP_ADMIN_PASSWORD as a dev convenience; otherwise random.
+  // Loud warning when the env override is in use so it can't sneak into prod
+  // via a copy-pasted env file.
+  const usingFixedPassword = !!config.bootstrapAdminPassword;
+  const password = config.bootstrapAdminPassword ?? randomBytes(18).toString("base64url");
   const passwordHash = await hashPassword(password);
 
   await prisma.user.create({
@@ -43,4 +47,11 @@ export async function bootstrapIfEmpty(): Promise<void> {
 
   // eslint-disable-next-line no-console
   console.log(`[BOOTSTRAP] admin email: ${email} password: ${password}`);
+  if (usingFixedPassword) {
+    // eslint-disable-next-line no-console
+    console.log(
+      "[BOOTSTRAP] WARNING: BOOTSTRAP_ADMIN_PASSWORD is set — using a FIXED password. " +
+        "This is a dev convenience only; unset it in production deployments.",
+    );
+  }
 }

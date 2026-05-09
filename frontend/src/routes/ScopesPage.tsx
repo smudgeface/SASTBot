@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/table";
 import { formatRelative } from "@/lib/format";
 import type { ActiveScan } from "@/api/types";
-import { SCAN_PHASE_LABELS } from "@/api/types";
+import { SCAN_PHASE_LABELS, SCAN_PHASE_UNITS, SCAN_PHASE_CAPS } from "@/api/types";
 
 function SeverityChip({ n, label }: { n: number; label: string }) {
   if (n === 0) return null;
@@ -30,6 +30,8 @@ function ActiveScanCell({ scan }: { scan: ActiveScan }) {
     ? (scan.phase_progress?.label ?? SCAN_PHASE_LABELS[scan.current_phase])
     : "Starting…";
   const progress = scan.phase_progress;
+  const unit = scan.current_phase ? SCAN_PHASE_UNITS[scan.current_phase] : undefined;
+  const isCap = scan.current_phase ? SCAN_PHASE_CAPS.has(scan.current_phase) : false;
   return (
     <div className="inline-flex flex-col items-end gap-0.5">
       <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
@@ -38,7 +40,8 @@ function ActiveScanCell({ scan }: { scan: ActiveScan }) {
       </span>
       {progress && progress.total > 0 && (
         <span className="text-[10px] text-muted-foreground">
-          {progress.done}/{progress.total} · {Math.round((progress.done / progress.total) * 100)}%
+          {progress.done}/{progress.total}{unit ? ` ${unit}` : ""}
+          {isCap ? " (max)" : ` · ${Math.round((progress.done / progress.total) * 100)}%`}
         </span>
       )}
     </div>

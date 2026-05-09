@@ -536,8 +536,98 @@ async function backfillRepoRelativePaths(): Promise<void> {
   }
 }
 
+// Recomputes scan_runs.{critical,high,medium,low}_count from the actual
+// SCA findings + SAST issues observed in each run. Until this commit the
+// counts only reflected SCA, so historical rows show partial totals on the
+// scans list. Idempotent — same input → same output.
+//
+// Each table is aggregated separately first; joining `scan_findings` to
+// `sast_issues` directly produces a Cartesian product per scan_run and
+// inflates the totals by the multiplied row count.
+async function backfillScanRunSeverities(): Promise<void> {
+  const updated = await prisma.$executeRawUnsafe(`
+    WITH sca_counts AS (
+      SELECT scan_run_id,
+        COUNT(*) FILTER (WHERE severity = 'critical') AS critical,
+        COUNT(*) FILTER (WHERE severity = 'high') AS high,
+        COUNT(*) FILTER (WHERE severity = 'medium') AS medium,
+        COUNT(*) FILTER (WHERE severity = 'low') AS low
+      FROM scan_findings
+      GROUP BY scan_run_id
+    ),
+    sast_counts AS (
+      SELECT last_seen_scan_run_id AS scan_run_id,
+        COUNT(*) FILTER (WHERE latest_severity = 'critical') AS critical,
+        COUNT(*) FILTER (WHERE latest_severity = 'high') AS high,
+        COUNT(*) FILTER (WHERE latest_severity = 'medium') AS medium,
+        COUNT(*) FILTER (WHERE latest_severity = 'low') AS low
+      FROM sast_issues
+      GROUP BY last_seen_scan_run_id
+    ),
+    totals AS (
+      SELECT sr.id AS scan_run_id,
+        COALESCE(sca.critical, 0) + COALESCE(sast.critical, 0) AS critical,
+        COALESCE(sca.high, 0) + COALESCE(sast.high, 0) AS high,
+        COALESCE(sca.medium, 0) + COALESCE(sast.medium, 0) AS medium,
+        COALESCE(sca.low, 0) + COALESCE(sast.low, 0) AS low
+      FROM scan_runs sr
+      LEFT JOIN sca_counts sca ON sca.scan_run_id = sr.id
+      LEFT JOIN sast_counts sast ON sast.scan_run_id = sr.id
+      WHERE sr.status = 'success'
+    )
+    UPDATE scan_runs sr
+    SET critical_count = t.critical,
+        high_count = t.high,
+        medium_count = t.medium,
+        low_count = t.low
+    FROM totals t
+    WHERE sr.id = t.scan_run_id
+      AND (sr.critical_count, sr.high_count, sr.medium_count, sr.low_count)
+        IS DISTINCT FROM (t.critical, t.high, t.medium, t.low)
+  `);
+  if (updated > 0) {
+    logger.info({ rowsUpdated: updated }, "[worker] backfilled scan_runs severity counts (SCA + SAST combined)");
+  }
+}
+
 backfillLlmSummaries().catch((err) => {
   logger.warn({ err }, "[worker] backfill failed — will retry on next scan");
+});
+
+backfillScanRunSeverities().catch((err) => {
+  logger.warn({ err }, "[worker] scan-run severity backfill failed");
+});
+
+// Strip leaked `clones/<UUID>/` (and `../clones/<UUID>/`) prefixes from
+// historical manifest paths. cdxgen 12.x emits paths in several shapes that
+// the original prefix-strip didn't handle, leaving the repo's clone GUID
+// embedded in the stored path. The "Declared in" link then renders a broken
+// URL with the GUID in it. Idempotent — paths already correct don't match.
+async function backfillManifestPathPrefixes(): Promise<void> {
+  const pattern =
+    "^.*?clones/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/";
+  const sbomUpdated = await prisma.$executeRawUnsafe(
+    `UPDATE sbom_components
+     SET manifest_file = regexp_replace(manifest_file, $1, '')
+     WHERE manifest_file ~ $1`,
+    pattern,
+  );
+  const scaUpdated = await prisma.$executeRawUnsafe(
+    `UPDATE sca_issues
+     SET latest_manifest_file = regexp_replace(latest_manifest_file, $1, '')
+     WHERE latest_manifest_file ~ $1`,
+    pattern,
+  );
+  if (sbomUpdated > 0 || scaUpdated > 0) {
+    logger.info(
+      { sbomUpdated, scaUpdated },
+      "[worker] backfilled manifest paths (stripped leaked clone-root prefix)",
+    );
+  }
+}
+
+backfillManifestPathPrefixes().catch((err) => {
+  logger.warn({ err }, "[worker] manifest-path-prefix backfill failed");
 });
 
 backfillRepoRelativePaths().catch((err) => {
@@ -772,13 +862,27 @@ const worker = new Worker<ScanJobData>(
         log.info("[worker] auto-fixed resolved SCA issues");
       }
 
-      // ── Step 8: update SCA severity summary counters ─────────────────────
+      // ── Step 8: update severity summary counters (SCA + SAST) ────────────
+      // Combined totals so the scans list and scan detail page show the full
+      // picture for a run, not just the SCA half. SAST `info` severity is
+      // intentionally not surfaced here — it has no critical/high/medium/low
+      // bucket and operators don't track it as risk.
       const counts = { critical: 0, high: 0, medium: 0, low: 0 };
       for (const f of findings) {
         if (f.severity === "critical") counts.critical++;
         else if (f.severity === "high") counts.high++;
         else if (f.severity === "medium") counts.medium++;
         else if (f.severity === "low") counts.low++;
+      }
+      const sastIssuesForScan = await prisma.sastIssue.findMany({
+        where: { lastSeenScanRunId: scanRunId },
+        select: { latestSeverity: true },
+      });
+      for (const i of sastIssuesForScan) {
+        if (i.latestSeverity === "critical") counts.critical++;
+        else if (i.latestSeverity === "high") counts.high++;
+        else if (i.latestSeverity === "medium") counts.medium++;
+        else if (i.latestSeverity === "low") counts.low++;
       }
 
       const finishedAt = new Date();

@@ -265,6 +265,23 @@ export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
   finalizing: "Finalizing",
 };
 
+// Unit for the done/total counters per phase. Phases without an entry render
+// just the number (e.g. "0 of 45 · 10%"); phases with one append the unit
+// ("0 of 300000 tokens · 0%") so the magnitude isn't mysterious.
+export const SCAN_PHASE_UNITS: Partial<Record<ScanPhase, string>> = {
+  osv: "components",
+  eol: "components",
+  llm_detection: "tokens",
+  llm_recheck: "issues",
+  sca_summaries: "summaries",
+};
+
+// Phases where `total` is a hard cap (e.g. token budget), not a goal — `done`
+// advances toward the cap as a "still moving" signal but isn't expected to
+// reach it. Render with `(max)` suffix and no percentage / bar so the UI
+// doesn't suggest filling to 100% is the objective.
+export const SCAN_PHASE_CAPS = new Set<ScanPhase>(["llm_detection"]);
+
 // ---------------------------------------------------------------------------
 // SCA — SBOM components and findings (M3)
 // ---------------------------------------------------------------------------
@@ -308,6 +325,21 @@ export interface ScanFinding {
   eol_date: string | null;
   /** True when OSV advisory includes at least one fixed version. */
   has_fix: boolean;
+  ecosystem: string | null;
+  /** Manifest declaration site — joined from the SCA issue. */
+  manifest_file: string | null;
+  manifest_line: number | null;
+  manifest_snippet: string | null;
+  /** LLM-generated longer-form description for the expanded panel. */
+  llm_summary: string | null;
+  /** Reachability verdict — `reachable_assessed_at` is the truthiness gate;
+   *  null means the verdict hasn't been computed yet for this issue. */
+  confirmed_reachable: boolean;
+  reachable_confidence: number | null;
+  reachable_reasoning: string | null;
+  reachable_call_sites: { file: string; line: number; snippet: string }[] | null;
+  reachable_model: string | null;
+  reachable_assessed_at: string | null;
   created_at: string;
 }
 

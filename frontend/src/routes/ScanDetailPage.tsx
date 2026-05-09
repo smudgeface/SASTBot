@@ -25,8 +25,8 @@ import {
   useSastFindings,
 } from "@/api/queries/scans";
 import { useRepos } from "@/api/queries/repos";
-import type { FindingSeverity, SastFinding, SbomComponent, ScanFinding } from "@/api/types";
-import { SCAN_PHASE_LABELS } from "@/api/types";
+import type { FindingSeverity, SastIssue, SbomComponent, ScanFinding } from "@/api/types";
+import { SCAN_PHASE_LABELS, SCAN_PHASE_UNITS, SCAN_PHASE_CAPS } from "@/api/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,23 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { severityChipClass, formatDate } from "@/lib/format";
+import { FilterGroup, Pipe } from "@/components/filters";
+import { ContextSnippet } from "@/components/ContextSnippet";
+import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
+
+function VulnLink({ id, className }: { id: string; className?: string }) {
+  return (
+    <a
+      href={vulnUrl(id)}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className={cn("font-mono hover:underline text-blue-600 dark:text-blue-400", className)}
+    >
+      {id}
+    </a>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,9 +92,15 @@ function basename(path: string): string {
 
 function buildSourceUrl(template: string | null | undefined, file: string, line?: number | null): string | null {
   if (!template) return null;
-  return template
-    .replace(/\$FILE/g, encodeURI(file))
-    .replace(/\$LINE/g, line != null ? String(line) : "");
+  let url = template.replace(/\$FILE/g, encodeURI(file));
+  if (line != null) {
+    url = url.replace(/\$LINE/g, String(line));
+  } else {
+    // Drop the entire fragment / query segment that holds `$LINE` when there
+    // is no line — otherwise we'd leave an orphan `#` or `?line=` in the URL.
+    url = url.replace(/[#?][^#?]*\$LINE[^#?]*/g, "").replace(/\$LINE/g, "");
+  }
+  return url;
 }
 
 function FileLink({
@@ -127,17 +150,25 @@ function SummaryCard({ label, value, severity }: { label: string; value: number;
 
 function FindingRow({
   finding,
-  manifestFile,
   sourceUrlTemplate,
 }: {
   finding: ScanFinding;
-  manifestFile: string | null | undefined;
   sourceUrlTemplate: string | null | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isCve = finding.finding_type === "cve";
   const summary = finding.summary
     ?? (finding.finding_type === "eol" ? "End of life" : finding.finding_type === "deprecated" ? "Deprecated package" : "—");
+  const manifestFile = finding.manifest_file;
+  // Match scope page's "runtime" relabel for CycloneDX `required`. Anything
+  // else (optional, excluded, null) shows the raw value or "unknown".
+  const componentScopeLabel =
+    finding.component_scope === "required"
+      ? "runtime"
+      : (finding.component_scope ?? "unknown");
+  const otherAliases = isCve
+    ? finding.aliases.filter((a) => a !== finding.osv_id && a !== finding.cve_id)
+    : [];
 
   return (
     <>
@@ -148,73 +179,123 @@ function FindingRow({
         <TableCell className="w-24"><SeverityBadge severity={finding.severity} /></TableCell>
         <TableCell className="text-sm">
           <div className="line-clamp-1">{summary}</div>
-          <div className="text-xs text-muted-foreground font-mono mt-0.5">
-            {finding.component_name}
-            {finding.component_version && <span>@{finding.component_version}</span>}
-          </div>
         </TableCell>
-        <TableCell
-          className="w-64 font-mono text-xs text-muted-foreground truncate"
-          title={manifestFile ?? undefined}
-        >
-          {manifestFile ? basename(manifestFile) : "—"}
+        <TableCell className="w-64 overflow-hidden">
+          {manifestFile ? (
+            <>
+              <div
+                className="truncate text-xs text-muted-foreground font-mono"
+                title={`${manifestFile}${finding.manifest_line ? `:${finding.manifest_line}` : ""}`}
+              >
+                {basename(manifestFile)}
+                {finding.manifest_line ? `:${finding.manifest_line}` : ""}
+              </div>
+              <div
+                className="truncate text-[10px] text-muted-foreground font-mono mt-0.5"
+                title={`${finding.component_name}${finding.component_version ? `@${finding.component_version}` : ""}`}
+              >
+                {finding.component_name}
+                {finding.component_version ? `@${finding.component_version}` : ""}
+              </div>
+            </>
+          ) : (
+            <div
+              className="truncate text-xs text-muted-foreground font-mono"
+              title={`${finding.component_name}${finding.component_version ? `@${finding.component_version}` : ""}`}
+            >
+              {finding.component_name}
+              {finding.component_version ? `@${finding.component_version}` : ""}
+            </div>
+          )}
         </TableCell>
       </TableRow>
       {expanded && (
         <TableRow>
-          <TableCell colSpan={4} className="bg-muted/30 py-3 px-6 space-y-2 text-sm">
-            {finding.summary && <p>{finding.summary}</p>}
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              <span className="font-mono">
-                {finding.component_name}
-                {finding.component_version && <span>@{finding.component_version}</span>}
-              </span>
-              {finding.component_scope && finding.component_scope !== "required" && (
-                <span className="text-[10px] uppercase">scope: {finding.component_scope}</span>
-              )}
-              {isCve && (
-                <a
-                  href={vulnUrl(finding.cve_id ?? finding.osv_id)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="font-mono hover:underline text-blue-600 dark:text-blue-400"
-                >
-                  {finding.cve_id ?? finding.osv_id}
-                </a>
-              )}
-              {finding.finding_type === "eol" && (
-                <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300">
-                  End of Life
+          <TableCell colSpan={4} className="bg-muted/30 p-4 space-y-3">
+            {finding.actively_exploited && (
+              <div className="flex items-start gap-2 rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>
+                  <span className="font-semibold">Actively exploited</span>
+                  {" — "}listed in CISA KEV. Prioritize remediation.
                 </span>
-              )}
-              {finding.finding_type === "deprecated" && (
-                <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase bg-amber-100 text-amber-800 border-amber-200">
-                  Deprecated
-                </span>
-              )}
-              {finding.has_fix && <span className="text-green-600 font-medium">✓ Fix available</span>}
-            </div>
-            {manifestFile && (
-              <p className="text-xs">
-                <span className="text-muted-foreground">Declared in </span>
-                <FileLink template={sourceUrlTemplate} file={manifestFile} className="font-mono">
-                  {manifestFile}
-                </FileLink>
-              </p>
-            )}
-            {finding.eol_date && <p className="text-xs text-muted-foreground">EOL date: {finding.eol_date.slice(0, 10)}</p>}
-            {isCve && finding.aliases.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {finding.aliases.map((a) => (
-                  <a key={a} href={vulnUrl(a)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex">
-                    <Badge variant="outline" className="font-mono text-xs hover:bg-muted cursor-pointer">{a}</Badge>
-                  </a>
-                ))}
               </div>
             )}
-            {isCve && finding.cvss_vector && (
-              <p className="font-mono text-xs text-muted-foreground">{finding.cvss_vector}</p>
+            {finding.llm_summary && finding.llm_summary !== finding.summary && (
+              <p className="text-sm">{finding.llm_summary}</p>
+            )}
+            {manifestFile && (
+              <div className="space-y-1">
+                <p className="text-xs font-mono text-muted-foreground break-all">
+                  <FileLink
+                    template={sourceUrlTemplate}
+                    file={manifestFile}
+                    line={finding.manifest_line}
+                  >
+                    {manifestFile}
+                    {finding.manifest_line ? `:${finding.manifest_line}` : ""}
+                  </FileLink>
+                </p>
+                {finding.manifest_snippet && finding.manifest_line && (
+                  <ContextSnippet
+                    snippet={finding.manifest_snippet}
+                    matchLine={finding.manifest_line}
+                  />
+                )}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <span>
+                <span className="font-medium">OSV:&nbsp;</span>
+                <VulnLink id={finding.osv_id} className="text-xs" />
+              </span>
+              {finding.cve_id && (
+                <span>
+                  <span className="font-medium">CVE:&nbsp;</span>
+                  <VulnLink id={finding.cve_id} className="text-xs" />
+                </span>
+              )}
+              {(finding.cvss_score != null || finding.cvss_vector) && (
+                <span>
+                  <span className="font-medium">CVSS:</span>{" "}
+                  {finding.cvss_score != null
+                    ? finding.cvss_score.toFixed(1)
+                    : finding.cvss_vector?.startsWith("CVSS:4.")
+                      ? <span title="CVSS v4.0 score calculation not yet implemented">v4.0</span>
+                      : "—"}
+                  {finding.cvss_vector && (
+                    <span className="font-mono ml-1 text-[10px]">({finding.cvss_vector})</span>
+                  )}
+                </span>
+              )}
+              {finding.ecosystem && (
+                <span><span className="font-medium">Ecosystem:</span> {finding.ecosystem}</span>
+              )}
+              <span>
+                <span className="font-medium">Scope:</span>{" "}
+                {componentScopeLabel}
+              </span>
+              {finding.has_fix && (
+                <span className="text-green-600 font-medium">✓ Fix available</span>
+              )}
+              {finding.eol_date && (
+                <span><span className="font-medium">EOL date:</span> {finding.eol_date.slice(0, 10)}</span>
+              )}
+            </div>
+            {finding.reachable_assessed_at && (
+              <ReachabilityVerdict
+                fields={finding}
+                sourceUrlTemplate={sourceUrlTemplate}
+                FileLink={FileLink}
+              />
+            )}
+            {otherAliases.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 items-center text-xs">
+                <span className="text-muted-foreground font-medium">Aliases:</span>
+                {otherAliases.map((alias) => (
+                  <VulnLink key={alias} id={alias} className="text-xs" />
+                ))}
+              </div>
             )}
           </TableCell>
         </TableRow>
@@ -228,14 +309,19 @@ function FindingRow({
 // ---------------------------------------------------------------------------
 
 function SastRow({
-  finding,
+  issue,
   sourceUrlTemplate,
 }: {
-  finding: SastFinding;
+  issue: SastIssue;
   sourceUrlTemplate: string | null | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const summary = finding.rule_message ?? finding.rule_id.split(".").pop()?.replace(/-/g, " ") ?? finding.rule_id;
+  const summary =
+    issue.latest_llm_summary
+    ?? issue.latest_rule_message
+    ?? issue.latest_rule_id.split(".").pop()?.replace(/-/g, " ")
+    ?? issue.latest_rule_id;
+  const isLlmRuleId = issue.latest_rule_id.startsWith("llm:");
 
   return (
     <>
@@ -243,13 +329,13 @@ function SastRow({
         <TableCell className="w-6">
           {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
         </TableCell>
-        <TableCell className="w-24"><SeverityBadge severity={finding.severity} /></TableCell>
+        <TableCell className="w-24"><SeverityBadge severity={issue.latest_severity} /></TableCell>
         <TableCell className="text-sm text-muted-foreground line-clamp-1">{summary}</TableCell>
         <TableCell
           className="w-64 font-mono text-xs text-muted-foreground truncate"
-          title={`${finding.file_path}:${finding.start_line}`}
+          title={`${issue.latest_file_path}:${issue.latest_start_line}`}
         >
-          {basename(finding.file_path)}:{finding.start_line}
+          {basename(issue.latest_file_path)}:{issue.latest_start_line}
         </TableCell>
       </TableRow>
       {expanded && (
@@ -258,20 +344,24 @@ function SastRow({
             <p className="text-xs">
               <FileLink
                 template={sourceUrlTemplate}
-                file={finding.file_path}
-                line={finding.start_line}
+                file={issue.latest_file_path}
+                line={issue.latest_start_line}
                 className="font-mono"
               >
-                {finding.file_path}:{finding.start_line}
+                {issue.latest_file_path}:{issue.latest_start_line}
               </FileLink>
             </p>
-            {finding.snippet && (
-              <pre className="rounded bg-background border p-3 text-xs overflow-x-auto font-mono whitespace-pre-wrap">{finding.snippet}</pre>
+            {issue.latest_snippet && (
+              <pre className="rounded bg-background border p-3 text-xs overflow-x-auto font-mono whitespace-pre-wrap">{issue.latest_snippet}</pre>
             )}
-            {finding.rule_message && <p className="text-sm text-muted-foreground">{finding.rule_message}</p>}
-            <p className="font-mono text-xs text-muted-foreground">{finding.rule_id}</p>
-            {finding.cwe_ids.length > 0 && (
-              <div className="flex gap-1">{finding.cwe_ids.map((c) => <Badge key={c} variant="outline" className="font-mono text-xs">{c}</Badge>)}</div>
+            {issue.latest_rule_message && issue.latest_rule_message !== summary && (
+              <p className="text-sm text-muted-foreground">{issue.latest_rule_message}</p>
+            )}
+            {!isLlmRuleId && (
+              <p className="font-mono text-xs text-muted-foreground">{issue.latest_rule_id}</p>
+            )}
+            {issue.latest_cwe_ids.length > 0 && (
+              <div className="flex gap-1">{issue.latest_cwe_ids.map((c) => <Badge key={c} variant="outline" className="font-mono text-xs">{c}</Badge>)}</div>
             )}
           </TableCell>
         </TableRow>
@@ -383,7 +473,6 @@ export default function ScanDetailPage() {
   const repo = repos.data?.find((r) => r.id === scan.data?.repo_id);
   const repoName = repo?.name;
   const sourceUrlTemplate = repo?.source_url_template ?? null;
-  const componentsById = new Map((components.data ?? []).map((c) => [c.id, c]));
   const allFindings = findings.data ?? [];
   const sortedFindings = [...allFindings].sort(
     (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || (b.cvss_score ?? 0) - (a.cvss_score ?? 0),
@@ -396,10 +485,10 @@ export default function ScanDetailPage() {
 
   const allSast = sast.data ?? [];
   const sortedSast = [...allSast].sort(
-    (a, b) => (SEVERITY_ORDER[a.severity as FindingSeverity] ?? 9) - (SEVERITY_ORDER[b.severity as FindingSeverity] ?? 9),
+    (a, b) => (SEVERITY_ORDER[a.latest_severity as FindingSeverity] ?? 9) - (SEVERITY_ORDER[b.latest_severity as FindingSeverity] ?? 9),
   );
   const filteredSast = sastSeverities.size > 0
-    ? sortedSast.filter((f) => sastSeverities.has(f.severity))
+    ? sortedSast.filter((i) => sastSeverities.has(i.latest_severity))
     : sortedSast;
 
   if (scan.isLoading) return <div className="p-8 text-sm text-muted-foreground">Loading scan…</div>;
@@ -516,7 +605,7 @@ export default function ScanDetailPage() {
               </TabsTrigger>
               <TabsTrigger value="sast" className="gap-1.5">
                 <ScanSearch className="h-3.5 w-3.5" />Raw SAST Detections
-                {s.sast_finding_count > 0 && <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs">{s.sast_finding_count}</span>}
+                {allSast.length > 0 && <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs">{allSast.length}</span>}
               </TabsTrigger>
               <TabsTrigger value="components" className="gap-1.5">
                 <Package className="h-3.5 w-3.5" />Components
@@ -525,34 +614,30 @@ export default function ScanDetailPage() {
             </TabsList>
 
             <TabsContent value="findings" className="mt-4">
-              {/* Filter bar — same pipe-group pattern as scope detail */}
               <div className="flex flex-wrap items-center gap-y-2 gap-x-0 mb-3">
-                {(["critical", "high", "medium", "low"] as const).map((sev, i) => (
-                  <div key={sev} className="flex items-center">
-                    {i > 0 && <span className="mx-1 text-[10px] text-muted-foreground/50 select-none">|</span>}
-                    <button onClick={() => toggleSet(scaSeverities, sev, setScaSeverities)}
-                      className={cn("rounded px-2 py-0.5 text-xs font-medium border transition-colors",
-                        scaSeverities.has(sev) ? severityChipClass(sev) : "border-transparent text-muted-foreground hover:border-border")}>
-                      {sev}
-                    </button>
-                  </div>
-                ))}
-                <div className="self-stretch w-px bg-border mx-1" />
-                {(["cve", "eol", "deprecated"] as const).map((t, i) => (
-                  <div key={t} className="flex items-center">
-                    {i > 0 && <span className="mx-1 text-[10px] text-muted-foreground/50 select-none">|</span>}
-                    <button onClick={() => toggleSet(scaTypes, t, setScaTypes)}
-                      className={cn("rounded px-2 py-0.5 text-xs font-medium border transition-colors",
-                        scaTypes.has(t) ? "bg-accent text-accent-foreground border-border" : "border-transparent text-muted-foreground hover:border-border")}>
-                      {t === "deprecated" ? "Deprecated" : t.toUpperCase()}
-                    </button>
-                  </div>
-                ))}
+                <FilterGroup
+                  items={["critical", "high", "medium", "low"] as const}
+                  active={scaSeverities as ReadonlySet<"critical" | "high" | "medium" | "low">}
+                  onToggle={(s) => toggleSet(scaSeverities, s, setScaSeverities)}
+                  label={(s) => s.charAt(0).toUpperCase() + s.slice(1)}
+                  colorFn={(s) => severityChipClass(s)}
+                />
+                <Pipe />
+                <FilterGroup
+                  items={["cve", "eol", "deprecated"] as const}
+                  active={scaTypes as ReadonlySet<"cve" | "eol" | "deprecated">}
+                  onToggle={(t) => toggleSet(scaTypes, t, setScaTypes)}
+                  label={(t) => (t === "deprecated" ? "Deprecated" : t.toUpperCase())}
+                />
                 {(scaSeverities.size > 0 || scaTypes.size > 0) && (
                   <>
-                    <div className="self-stretch w-px bg-border mx-1" />
-                    <button onClick={() => { setScaSeverities(new Set()); setScaTypes(new Set()); }}
-                      className="text-xs text-muted-foreground underline underline-offset-2 px-1">Clear</button>
+                    <Pipe />
+                    <button
+                      onClick={() => { setScaSeverities(new Set()); setScaTypes(new Set()); }}
+                      className="text-xs text-muted-foreground underline underline-offset-2 px-1"
+                    >
+                      Clear
+                    </button>
                   </>
                 )}
               </div>
@@ -576,7 +661,6 @@ export default function ScanDetailPage() {
                         <FindingRow
                           key={f.id}
                           finding={f}
-                          manifestFile={componentsById.get(f.component_id)?.manifest_file ?? null}
                           sourceUrlTemplate={sourceUrlTemplate}
                         />
                       ))}
@@ -587,23 +671,23 @@ export default function ScanDetailPage() {
             </TabsContent>
 
             <TabsContent value="sast" className="mt-4">
-              {/* Severity filter */}
               <div className="flex flex-wrap items-center gap-y-2 gap-x-0 mb-3">
-                {(["critical", "high", "medium", "low", "info"] as const).map((sev, i) => (
-                  <div key={sev} className="flex items-center">
-                    {i > 0 && <span className="mx-1 text-[10px] text-muted-foreground/50 select-none">|</span>}
-                    <button onClick={() => toggleSet(sastSeverities, sev, setSastSeverities)}
-                      className={cn("rounded px-2 py-0.5 text-xs font-medium border transition-colors",
-                        sastSeverities.has(sev) ? severityChipClass(sev) : "border-transparent text-muted-foreground hover:border-border")}>
-                      {sev}
-                    </button>
-                  </div>
-                ))}
+                <FilterGroup
+                  items={["critical", "high", "medium", "low", "info"] as const}
+                  active={sastSeverities as ReadonlySet<"critical" | "high" | "medium" | "low" | "info">}
+                  onToggle={(s) => toggleSet(sastSeverities, s, setSastSeverities)}
+                  label={(s) => s.charAt(0).toUpperCase() + s.slice(1)}
+                  colorFn={(s) => severityChipClass(s)}
+                />
                 {sastSeverities.size > 0 && (
                   <>
-                    <div className="self-stretch w-px bg-border mx-1" />
-                    <button onClick={() => setSastSeverities(new Set())}
-                      className="text-xs text-muted-foreground underline underline-offset-2 px-1">Clear</button>
+                    <Pipe />
+                    <button
+                      onClick={() => setSastSeverities(new Set())}
+                      className="text-xs text-muted-foreground underline underline-offset-2 px-1"
+                    >
+                      Clear
+                    </button>
                   </>
                 )}
               </div>
@@ -623,8 +707,8 @@ export default function ScanDetailPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredSast.map((f) => (
-                        <SastRow key={f.id} finding={f} sourceUrlTemplate={sourceUrlTemplate} />
+                      {filteredSast.map((i) => (
+                        <SastRow key={i.id} issue={i} sourceUrlTemplate={sourceUrlTemplate} />
                       ))}
                     </TableBody>
                   </Table>
@@ -648,20 +732,31 @@ export default function ScanDetailPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              {s.phase_progress && s.phase_progress.total > 0 && (
+              {s.phase_progress && s.phase_progress.total > 0 && (() => {
+                const unit = s.current_phase ? SCAN_PHASE_UNITS[s.current_phase] : undefined;
+                const isCap = s.current_phase ? SCAN_PHASE_CAPS.has(s.current_phase) : false;
+                return (
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>{s.phase_progress.done} of {s.phase_progress.total}</span>
-                    <span>{Math.round((s.phase_progress.done / s.phase_progress.total) * 100)}%</span>
+                    <span>
+                      {s.phase_progress.done} of {s.phase_progress.total}{unit ? ` ${unit}` : ""}
+                      {isCap ? " (max)" : ""}
+                    </span>
+                    {!isCap && (
+                      <span>{Math.round((s.phase_progress.done / s.phase_progress.total) * 100)}%</span>
+                    )}
                   </div>
-                  <div className="h-1.5 rounded bg-muted overflow-hidden">
-                    <div
-                      className="h-full bg-primary transition-all"
-                      style={{ width: `${Math.min(100, (s.phase_progress.done / s.phase_progress.total) * 100)}%` }}
-                    />
-                  </div>
+                  {!isCap && (
+                    <div className="h-1.5 rounded bg-muted overflow-hidden">
+                      <div
+                        className="h-full bg-primary transition-all"
+                        style={{ width: `${Math.min(100, (s.phase_progress.done / s.phase_progress.total) * 100)}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
-              )}
+                );
+              })()}
               <p className="text-sm text-muted-foreground">This page auto-refreshes. Results will appear once the scan completes.</p>
             </CardContent>
           </Card>

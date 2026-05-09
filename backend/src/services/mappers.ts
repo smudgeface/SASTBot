@@ -287,9 +287,40 @@ function toFindingType(value: string): FindingType {
     : "cve";
 }
 
+type IssueFieldsForMapper = {
+  latestLlmSummary: string | null;
+  latestManifestFile: string | null;
+  latestManifestLine: number | null;
+  latestManifestSnippet: string | null;
+  confirmedReachable: boolean;
+  reachableConfidence: number | null;
+  reachableReasoning: string | null;
+  reachableCallSites: unknown;
+  reachableModel: string | null;
+  reachableAssessedAt: Date | null;
+};
+
 export function scanFindingToOut(
-  f: ScanFinding & { component: Pick<SbomComponent, "name" | "version" | "scope" | "isDevOnly"> },
+  f: ScanFinding & {
+    component: Pick<SbomComponent, "name" | "version" | "scope" | "isDevOnly" | "ecosystem">;
+    issue: IssueFieldsForMapper | null;
+  },
 ): ScanFindingOut {
+  // Reachability call sites are stored as JSONB — coerce to the wire shape
+  // and reject obvious garbage so a bad row can't crash the response.
+  const callSites = (() => {
+    const raw = f.issue?.reachableCallSites;
+    if (!Array.isArray(raw)) return null;
+    const cleaned = raw
+      .filter((s): s is { file: string; line: number; snippet: string } =>
+        typeof s === "object" && s !== null
+        && typeof (s as { file?: unknown }).file === "string"
+        && typeof (s as { line?: unknown }).line === "number"
+        && typeof (s as { snippet?: unknown }).snippet === "string",
+      );
+    return cleaned;
+  })();
+
   return {
     id: f.id,
     scan_run_id: f.scanRunId,
@@ -310,6 +341,17 @@ export function scanFindingToOut(
     actively_exploited: f.activelyExploited,
     eol_date: f.eolDate ? f.eolDate.toISOString() : null,
     has_fix: computeHasFix(f.detailJson),
+    ecosystem: f.component.ecosystem,
+    manifest_file: f.issue?.latestManifestFile ?? null,
+    manifest_line: f.issue?.latestManifestLine ?? null,
+    manifest_snippet: f.issue?.latestManifestSnippet ?? null,
+    llm_summary: f.issue?.latestLlmSummary ?? null,
+    confirmed_reachable: f.issue?.confirmedReachable ?? false,
+    reachable_confidence: f.issue?.reachableConfidence ?? null,
+    reachable_reasoning: f.issue?.reachableReasoning ?? null,
+    reachable_call_sites: callSites,
+    reachable_model: f.issue?.reachableModel ?? null,
+    reachable_assessed_at: f.issue?.reachableAssessedAt ? f.issue.reachableAssessedAt.toISOString() : null,
     created_at: f.createdAt.toISOString(),
   };
 }

@@ -36,6 +36,13 @@ const EnvSchema = z.object({
   APP_ORIGIN: z.string().default("http://localhost:5173"),
   SESSION_COOKIE_SECURE: boolString.default(false),
   BOOTSTRAP_ADMIN_EMAIL: z.string().default("admin@sastbot.local"),
+  // DEV-ONLY convenience: when set, bootstrapIfEmpty uses this exact value
+  // for the bootstrap admin password instead of a random base64url string.
+  // Lets the operator restart with a wiped DB and still log in with the
+  // same known credential. Production deployments must leave this UNSET so
+  // the password is random per boot. See "Pre-launch closing tasks" in the
+  // pending-features memory; this stanza is slated for removal at launch.
+  BOOTSTRAP_ADMIN_PASSWORD: z.string().optional(),
   // pino requires lowercase level names ("info" not "INFO").
   LOG_LEVEL: z.string().default("info").transform((v) => v.toLowerCase()),
   PORT: z.coerce.number().int().positive().default(8000),
@@ -52,6 +59,7 @@ export type AppConfig = {
   appOrigin: string;
   sessionCookieSecure: boolean;
   bootstrapAdminEmail: string;
+  bootstrapAdminPassword: string | undefined;
   logLevel: string;
   port: number;
   cloneCacheDir: string;
@@ -102,6 +110,7 @@ export function loadConfig(): AppConfig {
     appOrigin: parsed.data.APP_ORIGIN,
     sessionCookieSecure: parsed.data.SESSION_COOKIE_SECURE,
     bootstrapAdminEmail: parsed.data.BOOTSTRAP_ADMIN_EMAIL,
+    bootstrapAdminPassword: parsed.data.BOOTSTRAP_ADMIN_PASSWORD,
     logLevel: parsed.data.LOG_LEVEL,
     port: parsed.data.PORT,
     cloneCacheDir: parsed.data.CLONE_CACHE_DIR,

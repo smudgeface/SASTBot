@@ -121,7 +121,7 @@ function extractIsDevOnly(c: CdxComponent): boolean {
  *   2. `evidence.identity[].methods[].technique === "manifest-analysis"`
  * We try (1) first, falling back to (2). Returns null if neither is present.
  */
-function extractManifestFile(c: CdxComponent, scopeDir: string): string | null {
+export function extractManifestFile(c: CdxComponent, scopeDir: string): string | null {
   const srcFile = c.properties?.find((p) => p.name === "SrcFile")?.value;
   let abs: string | undefined = srcFile;
   if (!abs && c.evidence?.identity) {
@@ -137,13 +137,56 @@ function extractManifestFile(c: CdxComponent, scopeDir: string): string | null {
     }
   }
   if (!abs) return null;
-  // Strip absolute clone prefix if present so paths are repo-relative.
+  return normalizeManifestPath(abs, scopeDir);
+}
+
+/**
+ * Normalize a cdxgen-emitted path to a scope-relative form (no leading slash,
+ * no clone-root prefix). Callers feed this into `toRepoRelative(scopePath, …)`
+ * to get a repo-rooted path for storage.
+ *
+ * cdxgen 12.x emits paths in several inconsistent shapes depending on the
+ * project type and how it bootstraps its tmp working tree:
+ *   - absolute under scopeDir            (`/app/clones/<uuid>/foo/pkg.lock`)
+ *   - relative under /app                (`clones/<uuid>/foo/pkg.lock`)
+ *   - parent-relative                    (`../clones/<uuid>/foo/pkg.lock`)
+ *   - tmp ephemeral working tree         (`/tmp/sastbot-repo-<uuid>/foo/pkg.lock`)
+ *   - already repo-relative              (`foo/pkg.lock`)
+ *
+ * Strategy: try strict scopeDir prefix first; otherwise look for the canonical
+ * `clones/<UUID>/` segment (or its tmp-root analog) and strip up to and
+ * including it. Falls back to basename as a last resort so the operator never
+ * sees a leaked clone path on the "Declared in" link.
+ */
+export function normalizeManifestPath(abs: string, scopeDir: string): string {
   if (abs.startsWith(scopeDir + "/")) return abs.slice(scopeDir.length + 1);
-  // cdxgen sometimes emits paths under /tmp/sastbot-repo-<uuid>/... (the
-  // ephemeral cdxgen working tree). Strip everything up to the first known
-  // manifest filename so we return e.g. "package-lock.json".
-  const m = abs.match(/\/((?:[^/]+\/)*[^/]+\.(?:json|toml|lock|xml|gradle|kts|txt|yaml|yml|cfg|in|pip|mod|sum|csproj|fsproj|vbproj|sln|gemspec|gemfile))$/i);
-  return m ? m[1]! : abs;
+
+  // /…/clones/<UUID>/<rest>  or  …/clones/<UUID>/<rest>
+  const cloneMatch = abs.match(
+    /(?:^|\/)clones\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(.+)$/i,
+  );
+  if (cloneMatch) {
+    const afterClone = cloneMatch[1]!;
+    // For sub-scopes, scopeDir basename is the scope segment (e.g. "GoWeb");
+    // strip it so the result is scope-relative, mirroring the prefix-strip
+    // branch above.
+    const scopeBase = scopeDir.split("/").pop();
+    if (scopeBase && afterClone.startsWith(scopeBase + "/")) {
+      return afterClone.slice(scopeBase.length + 1);
+    }
+    return afterClone;
+  }
+
+  // …/sastbot-repo-<UUID>/<rest> — cdxgen ephemeral tmp tree.
+  const tmpMatch = abs.match(
+    /(?:^|\/)sastbot-repo-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(.+)$/i,
+  );
+  if (tmpMatch) return tmpMatch[1]!;
+
+  // Last resort: just the basename. Better than leaking a tmp/clone path into
+  // the source-link URL.
+  const lastSlash = abs.lastIndexOf("/");
+  return lastSlash >= 0 ? abs.slice(lastSlash + 1) : abs;
 }
 
 // ---------------------------------------------------------------------------

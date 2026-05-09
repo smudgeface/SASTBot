@@ -9,6 +9,7 @@ import type { Severity } from "../schemas.js";
 import { upsertScaIssueFromDetection } from "./issueService.js";
 import { computeCvss40BaseScore } from "./cvss4.js";
 import { toRepoRelative, toScopeRelative } from "./scopePath.js";
+import { normalizeManifestPath } from "./sbomService.js";
 
 const logger = pino({ level: loadConfig().logLevel, name: "osvService" });
 
@@ -468,8 +469,6 @@ export async function backfillManifestOrigin(db: PrismaClient): Promise<void> {
     const manifestByName = new Map<string, string>();
     for (const c of components) {
       if (!c.name) continue;
-      // Mirror the same extraction logic as sbomService.extractManifestFile,
-      // but read directly here to avoid an import cycle.
       const srcFile = c.properties?.find((p) => p.name === "SrcFile")?.value;
       let abs: string | undefined = srcFile;
       if (!abs && c.evidence?.identity) {
@@ -482,17 +481,16 @@ export async function backfillManifestOrigin(db: PrismaClient): Promise<void> {
         }
       }
       if (!abs) continue;
-      let rel = abs;
-      if (abs.startsWith(scopeDir + "/")) rel = abs.slice(scopeDir.length + 1);
-      else {
-        const m = abs.match(/\/((?:[^/]+\/)*[^/]+\.(?:json|toml|lock|xml|gradle|kts|txt|yaml|yml|cfg|in|pip|mod|sum|csproj|fsproj|vbproj|sln|gemspec|gemfile))$/i);
-        if (m) rel = m[1]!;
-      }
-      manifestByName.set(c.name, rel);
+      manifestByName.set(c.name, normalizeManifestPath(abs, scopeDir));
     }
 
+    // Process any issue that's missing the manifest LINE (or both file and
+    // line). Filtering on `latestManifestFile: null` alone skipped rows whose
+    // file path was set to a leaked-clone path — it wasn't null, so the
+    // line/snippet never got filled. Now that the path-prefix backfill
+    // cleans the file value, this filter catches both cases.
     const issues = await db.scaIssue.findMany({
-      where: { scopeId: scope.id, latestManifestFile: null },
+      where: { scopeId: scope.id, latestManifestLine: null },
       select: { id: true, packageName: true },
     });
     for (const issue of issues) {

@@ -41,7 +41,7 @@ import { useTriggerScan, useCancelScan } from "@/api/queries/scans";
 import { useSettings } from "@/api/queries/settings";
 import { useMe } from "@/api/queries/auth";
 import type { SastIssue, ScaIssue, ScanRunSummary } from "@/api/types";
-import { SCAN_PHASE_LABELS } from "@/api/types";
+import { SCAN_PHASE_LABELS, SCAN_PHASE_UNITS, SCAN_PHASE_CAPS } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -54,8 +54,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { cn } from "@/lib/utils";
 import { formatRelative } from "@/lib/format";
+import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
+import { ContextSnippet } from "@/components/ContextSnippet";
+import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
 
 // ---------------------------------------------------------------------------
 // Severity helpers
@@ -95,7 +97,9 @@ function ScanProgressBanner({ scan }: { scan: ScanRunSummary }) {
     ? (scan.phase_progress?.label ?? SCAN_PHASE_LABELS[phase])
     : "Starting…";
   const progress = scan.phase_progress;
-  const pct = progress && progress.total > 0
+  const unit = phase ? SCAN_PHASE_UNITS[phase] : undefined;
+  const isCap = phase ? SCAN_PHASE_CAPS.has(phase) : false;
+  const pct = progress && progress.total > 0 && !isCap
     ? Math.min(100, (progress.done / progress.total) * 100)
     : null;
   return (
@@ -106,7 +110,8 @@ function ScanProgressBanner({ scan }: { scan: ScanRunSummary }) {
         </span>
         {progress && progress.total > 0 && (
           <span className="text-xs text-muted-foreground">
-            {progress.done} of {progress.total} · {Math.round(pct ?? 0)}%
+            {progress.done} of {progress.total}{unit ? ` ${unit}` : ""}
+            {isCap ? " (max)" : ` · ${Math.round(pct ?? 0)}%`}
           </span>
         )}
       </div>
@@ -255,9 +260,13 @@ function truncateFilePath(path: string): string {
  *  is missing or empty. */
 function buildSourceUrl(template: string | null | undefined, file: string, line?: number | null): string | null {
   if (!template) return null;
-  return template
-    .replace(/\$FILE/g, encodeURI(file))
-    .replace(/\$LINE/g, line != null ? String(line) : "");
+  let url = template.replace(/\$FILE/g, encodeURI(file));
+  if (line != null) {
+    url = url.replace(/\$LINE/g, String(line));
+  } else {
+    url = url.replace(/[#?][^#?]*\$LINE[^#?]*/g, "").replace(/\$LINE/g, "");
+  }
+  return url;
 }
 
 /** Renders a file path; if a sourceUrlTemplate is provided, wraps it in an
@@ -323,270 +332,14 @@ function shortRuleSummary(msg: string | null | undefined): string | null {
   return first.length > 100 ? first.slice(0, 99).trimEnd() + "…" : first;
 }
 
-// ---------------------------------------------------------------------------
-// Code snippet with highlighted match line
-// ---------------------------------------------------------------------------
+// Code snippet renderer (`ContextSnippet`) and reachability verdict are
+// shared with the scan detail page — see @/components/ContextSnippet and
+// @/components/ReachabilityVerdict.
 
-// What the backend SHOULD have stored per the SAST detection prompt
-// (3 lines above match + the match span + 3 lines below). The LLM is
-// inconsistent about following this rule — sometimes it emits 20+
-// lines around the match. We treat 8 (3 + 2-line span + 3) as the
-// canonical short-snippet length and fall back to a keyword-search
-// heuristic when the snippet is longer.
-const STORED_CONTEXT_LINES = 3;
-// Lines of context shown above the first highlighted line and below
-// the last. 3 each gives "before / span / after" visual orientation.
-const DISPLAYED_CONTEXT_LINES = 3;
-
-/**
- * Best-effort: locate ALL snippet lines that look like part of the issue's
- * span. Used when the LLM emitted more context than the prompt asked for,
- * so the simple "match line is at index STORED_CONTEXT_LINES" assumption
- * doesn't hold. We search for distinctive identifiers and content keywords
- * from the issue's summary. Returns the indices of every line that scores
- * at least one keyword hit, in document order. Empty array means nothing
- * matched and the caller should fall back to offset-from-top.
- */
-function findAllKeywordMatchIndices(
-  lines: string[],
-  summary: string | null,
-  ruleMessage: string | null,
-): number[] {
-  const summaryRaw = (summary ?? ruleMessage ?? "").trim();
-  if (!summaryRaw) return [];
-
-  // First pass: distinctive UPPER_SNAKE_CASE identifiers in the summary.
-  // For a finding like "GS_SUPER_USER_PASSWORD ..." this nails every line
-  // that mentions one. Strong signal — return all such hits, in order.
-  const idents = summaryRaw.match(/[A-Z][A-Z0-9_]{3,}/g) ?? [];
-  if (idents.length > 0) {
-    const hits: number[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      if (idents.some((id) => lines[i].includes(id))) hits.push(i);
-    }
-    if (hits.length > 0) return hits;
-  }
-
-  // Second pass: content keywords. Pick distinctive content words ≥5 chars,
-  // skip common verbs/connectors. Naive trailing-s stemming so "passwords"
-  // matches identifiers like GS_SUPER_USER_PASSWORD.
-  const STOPWORDS = new Set([
-    "allows", "enables", "exposes", "exploits", "grants", "leaves", "stores",
-    "device", "system", "access", "remote", "attack", "attacker", "attackers",
-    "unrestricted", "unauthenticated", "unauthorized",
-    "potentially", "improperly", "without", "before", "after",
-    "could", "would", "should", "their", "these", "those", "which",
-    // Stems that fall out after singularizing
-    "attacker", "exploit", "grant", "store",
-  ]);
-  const stem = (w: string): string =>
-    w.length > 4 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w;
-
-  const keywords = (summaryRaw.toLowerCase().match(/\b[a-z][a-z]{4,}\b/g) ?? [])
-    .map(stem)
-    .filter((w) => !STOPWORDS.has(w))
-    .slice(0, 6);
-
-  if (keywords.length === 0) return [];
-
-  // Find the best score, then return every line tied at that score.
-  // For multi-line findings (e.g. two adjacent password #defines) this
-  // returns all of them so the renderer can highlight the full span.
-  const scores: number[] = lines.map((line) => {
-    const lower = line.toLowerCase();
-    let s = 0;
-    for (const kw of keywords) if (lower.includes(kw)) s++;
-    return s;
-  });
-  const bestScore = Math.max(...scores);
-  if (bestScore < 1) return [];
-  return scores.flatMap((s, i) => (s === bestScore ? [i] : []));
-}
-
-/**
- * Renders a multi-line code snippet with the matching span highlighted.
- * `matchLine` is the 1-indexed file line number where the issue starts.
- *
- * Locating the match line within the snippet is hard because the LLM
- * is inconsistent about how much context it includes above the issue.
- * The prompt asks for "3 lines above start_line" but actual snippets
- * have anywhere from 0 to 20+ lines of preamble. Short snippets and
- * long snippets are both affected — so we always try keyword-search
- * first, falling back to "snippet[STORED_CONTEXT_LINES] is the match"
- * only when the search yields no hits.
- */
-function ContextSnippet({
-  snippet,
-  matchLine,
-  className,
-  summary,
-  ruleMessage,
-}: {
-  snippet: string;
-  matchLine: number;
-  className?: string;
-  summary?: string | null;
-  ruleMessage?: string | null;
-}) {
-  const allLines = snippet.split("\n");
-
-  // Determine the full match span as [spanStart, spanEnd] indices into
-  // allLines (inclusive on both ends, single line = start === end).
-  let spanStart: number;
-  let spanEnd: number;
-  if (allLines.length === 1) {
-    spanStart = 0;
-    spanEnd = 0;
-  } else {
-    const hits = findAllKeywordMatchIndices(allLines, summary ?? null, ruleMessage ?? null);
-    if (hits.length === 0) {
-      // No keyword hits — fall back to the prompt-spec assumption.
-      spanStart = Math.min(STORED_CONTEXT_LINES, matchLine - 1);
-      spanEnd = spanStart;
-    } else {
-      // Anchor at the first hit; extend forward through contiguous matches
-      // (allow at most one non-hit line in between, e.g. a blank line).
-      spanStart = hits[0];
-      spanEnd = spanStart;
-      for (let i = 1; i < hits.length; i++) {
-        if (hits[i] - spanEnd <= 2) {
-          spanEnd = hits[i];
-        } else {
-          break;
-        }
-      }
-    }
-  }
-
-  // Display window: 3 lines above span + span + 3 lines below.
-  const startIdx = Math.max(0, spanStart - DISPLAYED_CONTEXT_LINES);
-  const endIdx = Math.min(allLines.length, spanEnd + DISPLAYED_CONTEXT_LINES + 1);
-  const lines = allLines.slice(startIdx, endIdx);
-  // File line of lines[0]: matchLine corresponds to spanStart, so lines[0]
-  // is matchLine - (spanStart - startIdx).
-  const firstLineNumber = matchLine - (spanStart - startIdx);
-  // Range of indices within the displayed slice that should be highlighted.
-  const hlStart = spanStart - startIdx;
-  const hlEnd = spanEnd - startIdx;
-
-  return (
-    <div className={`overflow-x-auto rounded border bg-background text-xs font-mono ${className ?? ""}`}>
-      <table className="w-full border-collapse">
-        <tbody>
-          {lines.map((line, i) => {
-            const isMatch = i >= hlStart && i <= hlEnd;
-            // Show the arrow only on the first highlighted line.
-            const isFirstMatch = i === hlStart;
-            const lineNumber = firstLineNumber + i;
-            return (
-              <tr key={i} className={isMatch ? "bg-yellow-50 dark:bg-yellow-950/40" : ""}>
-                <td className="select-none px-2 py-0.5 text-right text-muted-foreground/50 w-10 border-r border-border tabular-nums">
-                  {lineNumber}
-                </td>
-                <td className="select-none px-1 py-0.5 text-center text-muted-foreground/60 w-4">
-                  {isFirstMatch ? "→" : " "}
-                </td>
-                <td className={`px-3 py-0.5 whitespace-pre ${isMatch ? "font-semibold" : ""}`}>
-                  {line || " "}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
+// (ContextSnippet moved to @/components/ContextSnippet)
 
 // ---------------------------------------------------------------------------
-// Reachability verdict — shown in the expanded SCA row when the LLM has
-// assessed whether the vulnerability is reachable in this codebase.
-// ---------------------------------------------------------------------------
-
-const HIGH_CONFIDENCE_DISMISS_THRESHOLD = 0.85;
-
-function ReachabilityVerdict({
-  issue,
-  isAdmin,
-  onDismiss,
-  isPending,
-  sourceUrlTemplate,
-}: {
-  issue: ScaIssue;
-  isAdmin: boolean;
-  onDismiss: (status: "false_positive" | "suppressed") => void;
-  isPending: boolean;
-  sourceUrlTemplate: string | null;
-}) {
-  const reachable = issue.confirmed_reachable;
-  const conf = issue.reachable_confidence;
-  const sites = issue.reachable_call_sites ?? [];
-
-  // Pre-existing data may have been assessed before we captured confidence —
-  // render a degraded state without the confidence/CTA bits in that case.
-  const hasStructuredVerdict = conf !== null;
-  const highConfidenceNotReachable =
-    hasStructuredVerdict && !reachable && conf! >= HIGH_CONFIDENCE_DISMISS_THRESHOLD;
-
-  const tone = reachable
-    ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30"
-    : "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/30";
-
-  const headlineColor = reachable ? "text-amber-700 dark:text-amber-400" : "text-emerald-700 dark:text-emerald-400";
-
-  const isOpen = issue.dismissed_status !== "false_positive" && issue.dismissed_status !== "suppressed" && issue.dismissed_status !== "fixed";
-
-  return (
-    <div className={`rounded-md border ${tone} px-3 py-2 space-y-2`}>
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className={`text-sm font-semibold ${headlineColor}`}>
-          {reachable ? "Reachable" : "Not reachable"}
-        </span>
-        {hasStructuredVerdict && (
-          <span className="text-xs text-muted-foreground">
-            · {Math.round(conf! * 100)}% confident
-          </span>
-        )}
-        <span className="text-[10px] text-muted-foreground/70 ml-auto">
-          {issue.reachable_model && `via ${issue.reachable_model}`}
-        </span>
-      </div>
-      {issue.reachable_reasoning && (
-        <p className="text-xs">{issue.reachable_reasoning}</p>
-      )}
-      {sites.length > 0 && (
-        <div className="space-y-1">
-          {sites.slice(0, 5).map((s, i) => (
-            <div key={i} className="rounded border bg-background text-xs font-mono overflow-x-auto">
-              <div className="flex items-center justify-between px-2 py-1 border-b text-[10px] text-muted-foreground">
-                <FileLink template={sourceUrlTemplate} file={s.file} line={s.line} className="truncate">
-                  {s.file}
-                </FileLink>
-                <FileLink template={sourceUrlTemplate} file={s.file} line={s.line} className="ml-2 shrink-0">
-                  line {s.line}
-                </FileLink>
-              </div>
-              <pre className="px-2 py-1 whitespace-pre">{s.snippet}</pre>
-            </div>
-          ))}
-        </div>
-      )}
-      {isAdmin && highConfidenceNotReachable && isOpen && (
-        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-emerald-200 dark:border-emerald-900/40">
-          <span className="text-xs text-muted-foreground">
-            High-confidence verdict — apply directly:
-          </span>
-          <Button size="sm" variant="outline" disabled={isPending} onClick={() => onDismiss("false_positive")}>
-            Mark Invalid
-          </Button>
-          <Button size="sm" variant="outline" disabled={isPending} onClick={() => onDismiss("suppressed")}>
-            Mark Won't fix
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
+// (ReachabilityVerdict moved to @/components/ReachabilityVerdict)
 
 // ---------------------------------------------------------------------------
 // Jira ticket components
@@ -725,81 +478,8 @@ function JiraLinkInline({
 // ---------------------------------------------------------------------------
 
 /** Thin vertical line used to separate filter groups. */
-function Pipe() {
-  return <div className="self-stretch w-px bg-border mx-1" />;
-}
-
-/**
- * Segmented control filter group — items share a connected border, no "|" separators.
- * Multiple can be active simultaneously; nothing active = show all.
- */
-function FilterGroup<T extends string>({
-  items,
-  active,
-  onToggle,
-  label,
-  colorFn,
-}: {
-  items: readonly T[];
-  active: ReadonlySet<T>;
-  onToggle: (v: T) => void;
-  label?: (v: T) => string;
-  colorFn?: (v: T) => string;
-}) {
-  return (
-    <div className="flex items-center">
-      {items.map((item, i) => {
-        const isFirst = i === 0;
-        const isLast = i === items.length - 1;
-        const isActive = active.has(item);
-        return (
-          <button
-            key={item}
-            onClick={() => onToggle(item)}
-            className={cn(
-              "relative px-2 py-0.5 text-xs font-medium border transition-colors",
-              isFirst ? "rounded-l-sm" : "-ml-px",
-              isLast ? "rounded-r-sm" : "",
-              isActive
-                ? cn("z-10", colorFn ? colorFn(item) : "bg-accent text-accent-foreground border-border")
-                : "border-border/50 text-muted-foreground hover:bg-muted/30 hover:text-foreground hover:z-10",
-            )}
-          >
-            {label ? label(item) : item}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * A group of independent boolean toggles — multiple can be active at once.
- * No "|" separators; items sit side by side with a small gap.
- */
-function ToggleGroup({
-  items,
-}: {
-  items: { key: string; label: string; active: boolean; onToggle: () => void }[];
-}) {
-  return (
-    <div className="flex items-center gap-1.5">
-      {items.map(({ key, label, active, onToggle }) => (
-        <button
-          key={key}
-          onClick={onToggle}
-          className={`rounded px-2 py-0.5 text-xs border transition-colors ${
-            active
-              ? "bg-accent text-accent-foreground border-border"
-              : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
-          }`}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
+// FilterGroup / Pipe / ToggleGroup live in @/components/filters and are
+// shared with the scan detail page so both surfaces look identical.
 
 // ---------------------------------------------------------------------------
 // Pagination control
@@ -947,18 +627,13 @@ function SastIssueRow({
             </div>
           </div>
         </TableCell>
-        <TableCell className="text-xs text-muted-foreground tabular-nums">
-          {issue.triage_confidence != null
-            ? `${Math.round(issue.triage_confidence * 100)}%`
-            : "—"}
-        </TableCell>
         <TableCell className="text-xs text-muted-foreground">
           {formatRelative(issue.last_seen_at)}
         </TableCell>
       </TableRow>
       {expanded && (
         <TableRow>
-          <TableCell colSpan={7} className="bg-muted/30 p-4">
+          <TableCell colSpan={6} className="bg-muted/30 p-4">
             {issue.latest_llm_summary && (
               <p className="mb-3 text-sm">{issue.latest_llm_summary}</p>
             )}
@@ -977,7 +652,7 @@ function SastIssueRow({
                 {issue.latest_file_path}:{issue.latest_start_line}
               </FileLink>
             </p>
-            {issue.latest_snippet && (
+            {issue.latest_snippet && !issue.latest_snippet.startsWith("__absence__:") && (
               <ContextSnippet
                 snippet={issue.latest_snippet}
                 matchLine={issue.latest_start_line}
@@ -985,6 +660,11 @@ function SastIssueRow({
                 ruleMessage={issue.latest_rule_message}
                 className="mb-3"
               />
+            )}
+            {issue.latest_snippet?.startsWith("__absence__:") && (
+              <p className="mb-3 text-xs italic text-muted-foreground">
+                Observation about absent security controls — no specific code site.
+              </p>
             )}
             {issue.triage_reasoning && (
               <p className="mb-3 text-sm">
@@ -1002,6 +682,12 @@ function SastIssueRow({
               )}
               {issue.latest_cwe_ids?.length > 0 && (
                 <span><span className="font-medium">CWE: </span>{issue.latest_cwe_ids.join(", ")}</span>
+              )}
+              {issue.triage_confidence != null && (
+                <span>
+                  <span className="font-medium">Confidence: </span>
+                  {Math.round(issue.triage_confidence * 100)}%
+                </span>
               )}
             </div>
             {/* Jira */}
@@ -1184,7 +870,6 @@ function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scope
                   <TableHead>Summary</TableHead>
                   <TableHead className="w-64">Location</TableHead>
                   <TableHead className="w-28">Status</TableHead>
-                  <TableHead className="w-20" title="Detection or triage confidence">Conf.</TableHead>
                   <TableHead className="w-24">Last seen</TableHead>
                 </TableRow>
               </TableHeader>
@@ -1272,7 +957,7 @@ function ScaIssueRow({
         <TableCell>
           <div className="flex items-center gap-1 group/summary">
             <span className="text-sm truncate">
-              {issue.latest_llm_summary ?? issue.latest_summary}
+              {issue.latest_summary ?? issue.latest_llm_summary}
             </span>
             <button
               onClick={copyLink}
@@ -1370,14 +1055,8 @@ function ScaIssueRow({
                 </span>
               </div>
             )}
-            {issue.latest_llm_summary && (
+            {issue.latest_llm_summary && issue.latest_llm_summary !== issue.latest_summary && (
               <p className="text-sm">{issue.latest_llm_summary}</p>
-            )}
-            {issue.latest_summary && issue.latest_summary !== issue.latest_llm_summary && (
-              <p className="text-xs text-muted-foreground">
-                <span className="font-medium">Advisory: </span>
-                {issue.latest_summary}
-              </p>
             )}
             {issue.latest_manifest_file && (
               <div className="space-y-1">
@@ -1433,23 +1112,33 @@ function ScaIssueRow({
             </div>
             {issue.reachable_assessed_at && (
               <ReachabilityVerdict
-                issue={issue}
-                isAdmin={isAdmin}
-                onDismiss={(s) => act(s)}
-                isPending={dismiss.isPending}
+                fields={issue}
                 sourceUrlTemplate={sourceUrlTemplate}
+                FileLink={FileLink}
+                admin={isAdmin ? {
+                  isOpen:
+                    issue.dismissed_status !== "false_positive" &&
+                    issue.dismissed_status !== "suppressed" &&
+                    issue.dismissed_status !== "fixed",
+                  isPending: dismiss.isPending,
+                  onDismiss: (s) => act(s),
+                } : undefined}
               />
             )}
-            {issue.latest_aliases.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 items-center text-xs">
-                <span className="text-muted-foreground font-medium">Aliases:</span>
-                {issue.latest_aliases
-                  .filter((a) => a !== issue.osv_id && a !== issue.latest_cve_id)
-                  .map((alias) => (
+            {(() => {
+              const otherAliases = issue.latest_aliases.filter(
+                (a) => a !== issue.osv_id && a !== issue.latest_cve_id,
+              );
+              if (otherAliases.length === 0) return null;
+              return (
+                <div className="flex flex-wrap gap-1.5 items-center text-xs">
+                  <span className="text-muted-foreground font-medium">Aliases:</span>
+                  {otherAliases.map((alias) => (
                     <VulnLink key={alias} id={alias} className="text-xs" />
                   ))}
-              </div>
-            )}
+                </div>
+              );
+            })()}
             {/* Jira */}
             <div>
               {jiraTicket ? (

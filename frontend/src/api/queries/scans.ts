@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 // useQueryClient kept for useTriggerScan
 
 import { apiFetch } from "@/api/client";
-import type { Scan, SastFinding, SbomComponent, ScanFinding } from "@/api/types";
+import type { Scan, SastIssue, SbomComponent, ScanFinding } from "@/api/types";
 
 export const scansKey = ["scans"] as const;
 
@@ -133,19 +133,14 @@ export function useTriggerScan() {
   });
 }
 
-export function useSastFindings(
-  scanId: string | undefined,
-  options?: { severity?: string; file_path?: string },
-) {
-  return useQuery<SastFinding[]>({
-    queryKey: [...scansKey, scanId, "sast-findings", options],
-    queryFn: () => {
-      const params = new URLSearchParams();
-      if (options?.severity) params.set("severity", options.severity);
-      if (options?.file_path) params.set("file_path", options.file_path);
-      const qs = params.toString();
-      return apiFetch<SastFinding[]>(`/scans/${scanId}/sast-findings${qs ? `?${qs}` : ""}`);
-    },
+// Returns the SAST issues observed in this scan run. Backed by the
+// `/scans/:id/sast-findings` endpoint, which now reads `sast_issues` filtered
+// by `lastSeenScanRunId` (post-M6g; the legacy per-scan `sast_findings`
+// table is no longer populated).
+export function useSastFindings(scanId: string | undefined) {
+  return useQuery<SastIssue[]>({
+    queryKey: [...scansKey, scanId, "sast-findings"],
+    queryFn: () => apiFetch<SastIssue[]>(`/scans/${scanId}/sast-findings`),
     enabled: !!scanId,
   });
 }

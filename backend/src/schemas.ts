@@ -420,6 +420,31 @@ export const ScanFindingOutSchema = z.object({
   actively_exploited: z.boolean(),
   eol_date: IsoDateTimeSchema.nullable(),
   has_fix: z.boolean(),
+  /** cdxgen-detected ecosystem ("npm", "nuget", "pypi", …) sourced from
+   *  the joined SbomComponent. Useful for the Ecosystem metadata chip. */
+  ecosystem: z.string().nullable(),
+  /** Manifest path + line + snippet where the dependency is declared.
+   *  All three sourced from the joined SCA issue (latestManifest*). */
+  manifest_file: z.string().nullable(),
+  manifest_line: z.number().int().nullable(),
+  manifest_snippet: z.string().nullable(),
+  /** LLM-generated longer-form description (one or two sentences with
+   *  context); shown in the expanded detail panel. May duplicate `summary`
+   *  on issues where the LLM didn't add useful context. */
+  llm_summary: z.string().nullable(),
+  /** Reachability verdict from the joined SCA issue. assessed_at is the
+   *  truthiness gate — null means "not yet assessed", non-null means the
+   *  rest of the fields carry a real verdict. */
+  confirmed_reachable: z.boolean(),
+  reachable_confidence: z.number().nullable(),
+  reachable_reasoning: z.string().nullable(),
+  reachable_call_sites: z.array(z.object({
+    file: z.string(),
+    line: z.number().int(),
+    snippet: z.string(),
+  })).nullable(),
+  reachable_model: z.string().nullable(),
+  reachable_assessed_at: IsoDateTimeSchema.nullable(),
   created_at: IsoDateTimeSchema,
 });
 export type ScanFindingOut = z.infer<typeof ScanFindingOutSchema>;
