@@ -738,3 +738,94 @@ fields (fingerprints, triage state, lifecycle dates), SCA reachability
 rendered in SARIF too (currently only SAST findings appear), and
 surfacing unparseable-record contents on the warning so operators can
 see what the LLM emitted that didn't conform.
+
+## M6l — SCA accuracy: filter OSV results by component version (2026-05-08)
+
+### Why we did this
+
+The handoff from the previous session flagged a Gocator Classic finding
+that looked wrong: `System.Net.Http@4.3.4` was being reported as
+vulnerable to CVE-2017-0247 and four other CVEs that — by reading the
+OSV records directly — were already fixed in `4.3.4` or only ever
+affected unrelated packages (`Microsoft.AspNetCore.Mvc`).
+
+Investigation showed all 5 findings on that one component were false
+positives, and that the same bug had been silently inflating SCA noise
+on every NuGet-heavy scope.
+
+### Root cause
+
+`backend/src/services/osvService.ts` — `queryOsvForPurl` was POSTing
+`{ package: { purl } }` to `https://api.osv.dev/v1/query`. cdxgen often
+emits **bare purls** (no `@version`), especially for NuGet (60/99
+components in the local DB) and `generic` (27/33). When OSV.dev
+receives a bare purl with no `version` field, it returns *every*
+advisory that has ever affected the package — across all versions —
+and we were persisting all of them. There was no version-vs-affected-
+range comparison anywhere in the pipeline; we relied entirely on OSV
+to filter, then handed it the data needed to do so.
+
+Verified empirically against `pkg:nuget/System.Net.Http`:
+
+| Request body                                                              | OSV returns           |
+|---------------------------------------------------------------------------|-----------------------|
+| `{ package: { purl: "pkg:nuget/System.Net.Http" } }`                      | 5 vulns (all-time)    |
+| `{ version: "4.3.4", package: { purl: "pkg:nuget/System.Net.Http" } }`    | 0 vulns (correct)     |
+| `{ package: { purl: "pkg:nuget/System.Net.Http@4.3.4" } }`                | 0 vulns (correct)     |
+| `{ version: "4.3.4", package: { purl: "pkg:nuget/System.Net.Http@4.3.4" } }` | error: "version specified in params and PURL query" |
+
+So OSV will filter correctly via *either* a versioned purl *or* a
+`version` field — but not both at once.
+
+### What shipped
+
+`queryOsvForPurl(purl, version)` now sends `{ version, package: { purl: bare } }`
+when a version is known on the `SbomComponent`. To avoid the
+"version specified in params and PURL query" rejection from OSV when
+cdxgen *does* emit a versioned purl, a new `purlWithoutVersion(purl)`
+helper strips the `@version` suffix while preserving qualifiers
+(`?type=jar`) and subpath (`#…`). Scoped npm packages
+(`pkg:npm/%40types/node@1.2.3`) are safe — the scope's `@` is
+percent-encoded as `%40`, so `lastIndexOf('@')` only ever finds the
+version separator.
+
+The body construction is split into a pure `buildOsvQueryBody(purl, version)`
+function so unit tests cover the wire format directly without mocking
+fetch. Eight new tests in `backend/tests/osvService.test.ts` (purl
+stripping for bare/versioned/qualified/subpath/scoped-npm shapes,
+plus the three body-shape cases). 26/26 pass; typecheck clean.
+
+### Cleanup of existing false-positive rows
+
+Not done automatically. The existing SCA auto-fix sweep already marks
+issues `fixed` when they're absent from a successful rescan
+(M6i hardened it to gate on `hasErrorWarnings`). Re-scan an affected
+scope and the false positives clear themselves through the standard
+operator-visible path — no surprise mutations to the issue list. The
+Gocator Classic root scope is the obvious first re-scan target;
+`docs/HANDOFF_SCA_ACCURACY.md` was the disposable companion to this
+work and was deleted.
+
+### What we learned
+
+- **"OSV returned it" is not the same as "the version is affected".**
+  We treated `/v1/query` as if it always filtered by version — it does,
+  but only when the request actually carries one. cdxgen's purl format
+  is non-uniform across ecosystems, so relying on the purl alone to
+  encode the version meant 88/3409 components (mostly NuGet) silently
+  bypassed the version filter.
+- **Trust the data, not the upstream API's defaults.** We had
+  `SbomComponent.version` populated correctly the whole time. The fix
+  was to *use* it explicitly rather than to assume the purl encoded it.
+  Future external-API integrations should pass every dimension we
+  ourselves know, not assume the request carries it implicitly.
+- **A pure helper unlocks testability.** Pulling
+  `buildOsvQueryBody` out as a pure function turned a fetch-mocking
+  test into three trivial `expect(...).toEqual(...)` assertions. Worth
+  doing whenever a network call has interesting body construction.
+
+**Next** — Trigger a re-scan on the Gocator Classic root scope to
+clear the five false-positive `System.Net.Http` issues via the
+existing auto-fix sweep. Confirm the scope's SCA count drops by 5,
+then audit other NuGet-heavy scopes the same way.
+

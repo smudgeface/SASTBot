@@ -217,27 +217,65 @@ interface OsvQueryResponse {
   vulns?: OsvVuln[];
 }
 
-async function queryOsvForPurl(purl: string): Promise<OsvVuln[]> {
+/**
+ * Strip the `@version` suffix from a purl, preserving qualifiers (`?…`) and
+ * subpath (`#…`). cdxgen sometimes emits bare purls (especially for NuGet);
+ * the version we know to use is on the SbomComponent. We always pass that
+ * version explicitly to OSV — but OSV rejects requests where the purl ALSO
+ * carries a version (`code: 3, "version specified in params and PURL query"`),
+ * so the canonical request shape is `{ version, package: { purl: bare } }`.
+ *
+ * The version delimiter is the LAST literal `@` before any `?` or `#`. A
+ * literal `@` cannot appear inside a name — scoped npm packages encode it as
+ * `%40` (e.g. `pkg:npm/%40types/node@1.0.0`) — so a single linear scan is safe.
+ */
+export function purlWithoutVersion(purl: string): string {
+  const hashIdx = purl.indexOf("#");
+  const subpath = hashIdx >= 0 ? purl.slice(hashIdx) : "";
+  const beforeHash = hashIdx >= 0 ? purl.slice(0, hashIdx) : purl;
+
+  const qIdx = beforeHash.indexOf("?");
+  const qualifiers = qIdx >= 0 ? beforeHash.slice(qIdx) : "";
+  const head = qIdx >= 0 ? beforeHash.slice(0, qIdx) : beforeHash;
+
+  const atIdx = head.lastIndexOf("@");
+  if (atIdx <= "pkg:".length) return purl;
+  return head.slice(0, atIdx) + qualifiers + subpath;
+}
+
+export function buildOsvQueryBody(
+  purl: string,
+  version: string | null,
+): { version?: string; package: { purl: string } } {
+  const barePurl = version ? purlWithoutVersion(purl) : purl;
+  return version
+    ? { version, package: { purl: barePurl } }
+    : { package: { purl: barePurl } };
+}
+
+async function queryOsvForPurl(purl: string, version: string | null): Promise<OsvVuln[]> {
   const response = await fetch(OSV_QUERY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ package: { purl } }),
+    body: JSON.stringify(buildOsvQueryBody(purl, version)),
   });
   if (!response.ok) {
-    logger.warn({ purl, status: response.status }, "[osvService] OSV query failed — skipping");
+    logger.warn({ purl, version, status: response.status }, "[osvService] OSV query failed — skipping");
     return [];
   }
   const data = (await response.json()) as OsvQueryResponse;
   return data.vulns ?? [];
 }
 
-/** Query OSV.dev for each PURL, throttled to OSV_CONCURRENCY parallel requests. */
-async function queryOsvForPurls(purls: string[]): Promise<OsvVuln[][]> {
-  const results: OsvVuln[][] = new Array(purls.length);
+/** Query OSV.dev for each (purl, version), throttled to OSV_CONCURRENCY parallel requests. */
+async function queryOsvForPurls(
+  queries: { purl: string; version: string | null }[],
+): Promise<OsvVuln[][]> {
+  const results: OsvVuln[][] = new Array(queries.length);
   // Process in windows of OSV_CONCURRENCY to avoid hammering OSV.dev.
-  for (let i = 0; i < purls.length; i += OSV_CONCURRENCY) {
-    const chunk = purls.slice(i, i + OSV_CONCURRENCY);
-    const chunkResults = await Promise.all(chunk.map(queryOsvForPurl));
+  for (let i = 0; i < queries.length; i += OSV_CONCURRENCY) {
+    const chunk = queries.slice(i, i + OSV_CONCURRENCY);
+    const chunkResults = await Promise.all(chunk.map((q) => queryOsvForPurl(q.purl, q.version)));
     for (let j = 0; j < chunk.length; j++) {
       results[i + j] = chunkResults[j];
     }
@@ -273,8 +311,8 @@ export async function queryAndPersistFindings(
   if (withPurl.length === 0) return [];
 
   logger.info({ scanRunId, count: withPurl.length }, "[osvService] querying OSV.dev");
-  const purls = withPurl.map((c) => c.purl);
-  const results = await queryOsvForPurls(purls);
+  const queries = withPurl.map((c) => ({ purl: c.purl, version: c.version || null }));
+  const results = await queryOsvForPurls(queries);
 
   // Deduplicate by (componentId, osvId) then upsert issues + create detections.
   const seen = new Set<string>();
