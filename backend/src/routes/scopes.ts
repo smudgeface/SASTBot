@@ -25,6 +25,17 @@ import {
 import { jiraTicketToOut, sastIssueToOut, scaIssueToOut, scanRunToOut, sbomComponentToOut } from "../services/mappers.js";
 import { linkSastIssueToTicket, linkScaIssueToTicket, refreshTicket, unlinkSastIssue, unlinkScaIssue } from "../services/jiraTicketService.js";
 
+// Query-string boolean parser. `z.coerce.boolean()` is a footgun in query-
+// string contexts because Zod's coerce uses `Boolean(value)`, and
+// `Boolean("false") === true` (any non-empty string is truthy in JS). That
+// silently makes `?flag=false` behave the same as `?flag=true`. This helper
+// parses the literal "true" / "false" strings explicitly. Use everywhere a
+// query parameter might be sent with an explicit "false" value.
+const queryBool = z.preprocess(
+  (v) => (v === "false" ? false : v === "true" ? true : v),
+  z.boolean(),
+);
+
 // ---------------------------------------------------------------------------
 // Scope list / detail schemas
 // ---------------------------------------------------------------------------
@@ -104,7 +115,7 @@ const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
   has_fix: z.coerce.boolean().optional(),
   /** When true (default), hides SCA issues where latestIsDevOnly = true.
    *  Pass false to show build-tool CVEs. Gates on cdxgen 12.2+ dev marker — npm-only signal. */
-  exclude_dev_only: z.coerce.boolean().default(true),
+  exclude_dev_only: queryBool.default(true),
   /** @deprecated Replaced by exclude_dev_only. Accepted but ignored. */
   hide_dev: z.coerce.boolean().optional(),
   seen_since_last_scan: z.enum(["new", "unchanged", "resolved"]).optional(),
@@ -549,7 +560,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         querystring: PaginationQuerySchema.extend({
           has_findings: z.coerce.boolean().optional(),
           /** When true (default), hides components with isDevOnly = true. Pass false to show build-tool packages. */
-          exclude_dev_only: z.coerce.boolean().default(true),
+          exclude_dev_only: queryBool.default(true),
         }),
         response: {
           200: PaginatedSchema(z.object({

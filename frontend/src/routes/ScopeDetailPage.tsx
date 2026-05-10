@@ -62,6 +62,7 @@ import { SeverityBadge, SEVERITY_COLORS } from "@/components/SeverityBadge";
 import { VulnLink } from "@/components/VulnLink";
 import { FileLink, basename } from "@/components/FileLink";
 import { SeveritySummary } from "@/components/SeveritySummary";
+import { HighSeverityCallout } from "@/components/HighSeverityCallout";
 
 function ScanProgressBanner({ scan }: { scan: ScanRunSummary }) {
   const phase = scan.current_phase;
@@ -446,6 +447,18 @@ function SastIssueRow({
               title={issue.latest_rule_id}
             >
               {issue.latest_rule_id.split(".").pop()}
+            </div>
+          )}
+          {issue.latest_cwe_ids.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-0.5">
+              <Badge
+                variant="outline"
+                className="text-[9px] px-1 py-0 text-purple-600 border-purple-400 font-mono"
+                title={issue.latest_cwe_ids.join(", ")}
+              >
+                {issue.latest_cwe_ids[0]}
+                {issue.latest_cwe_ids.length > 1 && ` +${issue.latest_cwe_ids.length - 1}`}
+              </Badge>
             </div>
           )}
         </TableCell>
@@ -880,13 +893,10 @@ function ScaIssueRow({
         <TableRow>
           <TableCell colSpan={6} className="bg-muted/30 p-4 space-y-3">
             {issue.latest_actively_exploited && (
-              <div className="flex items-start gap-2 rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-                <span>
-                  <span className="font-semibold">Actively exploited</span>
-                  {" — "}listed in CISA KEV. Prioritize remediation.
-                </span>
-              </div>
+              <HighSeverityCallout
+                title="Actively exploited"
+                detail="listed in CISA KEV. Prioritize remediation."
+              />
             )}
             {issue.latest_llm_summary && issue.latest_llm_summary !== issue.latest_summary && (
               <p className="text-sm">{issue.latest_llm_summary}</p>
@@ -1228,37 +1238,35 @@ function ComponentsTab({ scopeId }: { scopeId: string }) {
 
   const totalRuntime = data?.total_runtime ?? 0;
   const totalDev = data?.total_dev ?? 0;
+  const totalAll = totalRuntime + totalDev;
+  const visible = data?.total ?? 0;
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          onClick={() => { setHasFindings((v) => !v); setPage(1); }}
-          className={`rounded px-2 py-0.5 text-xs border transition-colors ${
-            hasFindings
-              ? "bg-accent text-accent-foreground border-border"
-              : "border-transparent text-muted-foreground hover:border-border"
-          }`}
-        >
-          Only with findings
-        </button>
-        <button
-          onClick={() => { setExcludeDevOnly((v) => !v); setPage(1); }}
-          className={`rounded px-2 py-0.5 text-xs border transition-colors ${
-            !excludeDevOnly
-              ? "bg-accent text-accent-foreground border-border"
-              : "border-transparent text-muted-foreground hover:border-border"
-          }`}
-        >
-          Show dev-tool packages
-        </button>
-        {(totalRuntime > 0 || totalDev > 0) && (
-          <span className="text-xs text-muted-foreground ml-1">
-            {totalRuntime.toLocaleString()} runtime
-            {totalDev > 0 && <> / <span className="text-blue-600">{totalDev.toLocaleString()} dev</span></>}
-          </span>
-        )}
-      </div>
+      <ToggleGroup
+        items={[
+          {
+            key: "has_findings",
+            label: "Only with findings",
+            active: hasFindings,
+            onToggle: () => { setHasFindings((v) => !v); setPage(1); },
+          },
+          {
+            key: "show_dev",
+            label: "Show dev-tool packages",
+            active: !excludeDevOnly,
+            onToggle: () => { setExcludeDevOnly((v) => !v); setPage(1); },
+          },
+        ]}
+      />
+      {totalAll > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {visible.toLocaleString()} of {totalAll.toLocaleString()} components shown
+          {excludeDevOnly && totalDev > 0 && (
+            <> · {totalDev.toLocaleString()} dev-tool {totalDev === 1 ? "package" : "packages"} hidden</>
+          )}
+        </p>
+      )}
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : !data || data.total === 0 ? (
@@ -1276,8 +1284,6 @@ function ComponentsTab({ scopeId }: { scopeId: string }) {
                   <TableHead>Package</TableHead>
                   <TableHead>Version</TableHead>
                   <TableHead>Ecosystem</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Scope</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1299,10 +1305,6 @@ function ComponentsTab({ scopeId }: { scopeId: string }) {
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{c.version ?? "—"}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{c.ecosystem ?? "—"}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{c.component_type}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {c.scope === "required" ? "runtime" : (c.scope ?? "—")}
-                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

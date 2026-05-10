@@ -46,7 +46,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { useNow } from "@/lib/useNow";
-import { FilterGroup, Pipe } from "@/components/filters";
+import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
 import { SeverityBadge, severityClass } from "@/components/SeverityBadge";
@@ -54,6 +54,7 @@ import { VulnLink } from "@/components/VulnLink";
 import { FileLink, basename } from "@/components/FileLink";
 import { ScanStatusBadge } from "@/components/ScanStatusBadge";
 import { SeveritySummary } from "@/components/SeveritySummary";
+import { HighSeverityCallout } from "@/components/HighSeverityCallout";
 
 const SEVERITY_ORDER: Record<FindingSeverity, number> = {
   critical: 0, high: 1, medium: 2, low: 3, unknown: 4,
@@ -128,13 +129,10 @@ function FindingRow({
         <TableRow>
           <TableCell colSpan={4} className="bg-muted/30 p-4 space-y-3">
             {finding.actively_exploited && (
-              <div className="flex items-start gap-2 rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-                <span>
-                  <span className="font-semibold">Actively exploited</span>
-                  {" — "}listed in CISA KEV. Prioritize remediation.
-                </span>
-              </div>
+              <HighSeverityCallout
+                title="Actively exploited"
+                detail="listed in CISA KEV. Prioritize remediation."
+              />
             )}
             {finding.llm_summary && finding.llm_summary !== finding.summary && (
               <p className="text-sm">{finding.llm_summary}</p>
@@ -268,8 +266,17 @@ function SastRow({
                 {issue.latest_file_path}:{issue.latest_start_line}
               </FileLink>
             </p>
-            {issue.latest_snippet && (
-              <pre className="rounded bg-background border p-3 text-xs overflow-x-auto font-mono whitespace-pre-wrap">{issue.latest_snippet}</pre>
+            {issue.latest_snippet && !issue.latest_snippet.startsWith("__absence__:") && (
+              <ContextSnippet
+                snippet={issue.latest_snippet}
+                matchLine={issue.latest_start_line}
+                matchEndLine={issue.latest_end_line}
+              />
+            )}
+            {issue.latest_snippet?.startsWith("__absence__:") && (
+              <p className="text-xs italic text-muted-foreground">
+                Observation about absent security controls — no specific code site.
+              </p>
             )}
             {issue.latest_rule_message && issue.latest_rule_message !== summary && (
               <p className="text-sm text-muted-foreground">{issue.latest_rule_message}</p>
@@ -312,10 +319,14 @@ function ComponentsTab({ components, findings, isLoading }: {
   return (
     <div className="space-y-3">
       {withFindings.length > 0 && (
-        <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
-          <input type="checkbox" checked={onlyWithFindings} onChange={(e) => setOnlyWithFindings(e.target.checked)} className="rounded" />
-          Only show components with findings ({withFindings.length})
-        </label>
+        <ToggleGroup
+          items={[{
+            key: "only_with_findings",
+            label: `Only with findings (${withFindings.length})`,
+            active: onlyWithFindings,
+            onToggle: () => setOnlyWithFindings((v) => !v),
+          }]}
+        />
       )}
       <Card>
         <Table>
@@ -334,7 +345,20 @@ function ComponentsTab({ components, findings, isLoading }: {
               );
               return (
                 <TableRow key={c.id}>
-                  <TableCell className="font-mono text-sm">{c.name}</TableCell>
+                  <TableCell className="font-mono text-sm">
+                    <span className="inline-flex items-center gap-1.5">
+                      {c.name}
+                      {c.is_dev_only && (
+                        <Badge
+                          variant="outline"
+                          className="text-[9px] px-1 py-0 text-blue-600 border-blue-400"
+                          title="cdxgen flagged this npm package as dev-only (lockfile dev: true)"
+                        >
+                          Dev
+                        </Badge>
+                      )}
+                    </span>
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{c.version ?? "—"}</TableCell>
                   <TableCell className="text-xs text-muted-foreground uppercase">{c.ecosystem ?? "—"}</TableCell>
                   <TableCell>

@@ -405,6 +405,73 @@ SAST calls `useTriageSastIssue`. Don't touch.
 Both use `<ContextSnippet>` (`:656-661` for SAST, `:1072-1077` for SCA).
 That's a regression risk to be mindful of in the next section.
 
+### 2.6 Components tab — bug + UX issues
+
+Caught during Batch B browser review. Five sub-issues, one of them a real
+backend bug that's been silently broken since M6n.
+
+**(a) Backend bug: `exclude_dev_only` filter never goes off.**
+`backend/src/routes/scopes.ts:107` and `:552` declare the param as
+`z.coerce.boolean()`. Zod's `coerce.boolean()` is `Boolean(value)` under
+the hood, and `Boolean("false") === true` in JS — any non-empty string
+coerces to true. So when the frontend sends `?exclude_dev_only=false` the
+backend sees `true` and applies the filter regardless of the toggle state.
+Verified by curl: both `=true` and `=false` return identical 276-row
+results (with 2,174 dev components hidden in both).
+
+This affects the same toggle on the SCA tab as well — it's been a no-op
+since M6n shipped. Other `z.coerce.boolean()` filters in the same file
+happen to work because the frontend only sends them when `true`
+(omitting the param when false), so they never hit the bug path.
+
+**Fix.** Replace `z.coerce.boolean()` with a parser that handles
+`"true"` / `"false"` strings correctly. Zod doesn't ship one, but the
+common pattern is a `z.preprocess` wrapper. Apply to both `exclude_dev_only`
+declarations. Optionally apply to the rest of the `coerce.boolean()`
+filters in the file as defense in depth.
+
+**(b) Toggle's visual active-state is too subtle.**
+The "Show dev-tool packages" / "Show dev-tool CVEs" toggle uses
+`bg-accent text-accent-foreground border-border` for active, which is a
+very subtle gray shift — combined with bug (a), clicking the button
+appears to do nothing.
+
+Fix once (a) is fixed: convert the bare `<button>` to use the existing
+`ToggleGroup` (`components/filters.tsx`) like the "Include resolved"
+toggle next to it. ToggleGroup's active state is the same classes but
+the user is already trained to read them as a filter on this page.
+
+**(c) Count badge looks like a filter button.**
+`{totalRuntime} runtime / {totalDev} dev` sits inline with the toggles,
+in `text-blue-600` for the dev count. Blue is the link color
+(`VulnLink`, file links) so it reads as interactive. The whole text
+reads as a "Runtime / Dev" segmented filter at a glance.
+
+Fix: drop the blue, move the count text to its own subtitle line below
+the filter row, rephrase as a static label
+("276 of 2,450 components shown · 2,174 dev-tool packages hidden").
+
+**(d) "Scope" column is misleading.**
+Shows the raw CycloneDX `scope` value: `required` → relabeled to
+`runtime`; `optional` → shown as-is. The column was added before M6n
+introduced the truthful `is_dev_only` classifier. cdxgen lumps both
+real devDeps and transitive runtime-deps into `optional`, so the column
+mixes apples and oranges. The `Dev` badge already conveys the dev/runtime
+distinction in the Package cell.
+
+Fix: drop the Scope column. The Dev badge stays.
+
+**(e) "Type" column is noise.**
+Shows the cdxgen `component_type` (`library` / `framework` / etc).
+Same package can appear with different types when it shows up in
+multiple manifests (e.g. jQuery once as a library from package-lock.json
+and once as a framework from a vendored .min.js). The values aren't
+operator-relevant — cdxgen's classification is heuristic and frequently
+flaky.
+
+Fix: drop the Type column. If component-type ever becomes load-bearing,
+re-add as a tooltip on the package name.
+
 ---
 
 ## Section 3 — ScanDetailPage SAST/SCA panels
@@ -536,9 +603,10 @@ same story.
 12. Drop the lone `text-muted-foreground` on `ScanDetailPage.tsx:260` so
     SAST summaries match every other Summary cell in the app (§1.10e).
 
-### Batch C — "Polish the SAST/SCA detail panels" (~half day)
+### Batch C — "Polish the SAST/SCA detail panels" (~half day, slightly larger)
 
-The original M6i carry-over.
+The original M6i carry-over plus the Components-tab bug + cleanup caught
+during Batch B review.
 
 13. Replace raw `<pre>` snippet with `ContextSnippet` on `ScanDetailPage`
     SAST view (§3.1).
@@ -548,6 +616,17 @@ The original M6i carry-over.
     Don't add SAST signals yet — just reserve the slot.
 16. On `ScanDetailPage` Components tab: swap checkbox for styled toggle,
     add `Dev` badge (§3.4).
+17. Fix the `z.coerce.boolean()` bug on `exclude_dev_only` (§2.6a). Replace
+    with a `z.preprocess`-based string-aware boolean parser. Apply to both
+    `exclude_dev_only` declarations in `routes/scopes.ts`. Optional: also
+    swap the other `coerce.boolean()` filters as defense in depth.
+18. Components tab (Scope) UX: convert the dev-tool toggle to the existing
+    `ToggleGroup` for clear active-state feedback; drop the blue color on
+    the count text; move counts to a subtitle line beneath the filter row
+    (§2.6b–c).
+19. Drop the "Type" and "Scope" columns from the Scope Components tab — the
+    Dev badge already conveys the runtime/dev distinction, and cdxgen's
+    type/scope values mislead more than they inform (§2.6d–e).
 
 ### Out of scope
 
