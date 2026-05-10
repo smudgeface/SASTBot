@@ -298,10 +298,11 @@ function SastRow({
 // Components tab
 // ---------------------------------------------------------------------------
 
-function ComponentsTab({ components, findings, isLoading }: {
+function ComponentsTab({ components, findings, isLoading, onDisplayedTotalChange }: {
   components: SbomComponent[];
   findings: ScanFinding[];
   isLoading: boolean;
+  onDisplayedTotalChange?: (total: number) => void;
 }) {
   const [onlyWithFindings, setOnlyWithFindings] = useState(false);
   const findingsByComp = new Map<string, ScanFinding[]>();
@@ -312,6 +313,10 @@ function ComponentsTab({ components, findings, isLoading }: {
   }
   const withFindings = components.filter((c) => findingsByComp.has(c.id));
   const visible = onlyWithFindings ? withFindings : components;
+
+  useEffect(() => {
+    onDisplayedTotalChange?.(visible.length);
+  }, [visible.length, onDisplayedTotalChange]);
 
   if (isLoading) return <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading…</CardContent></Card>;
   if (components.length === 0) return <Card><CardContent className="p-6 text-sm text-muted-foreground"><Package className="inline h-4 w-4 mr-1" />No components.</CardContent></Card>;
@@ -405,6 +410,10 @@ export default function ScanDetailPage() {
   const [scaSeverities, setScaSeverities] = useState<Set<string>>(new Set());
   const [scaTypes, setScaTypes]         = useState<Set<string>>(new Set());
   const [sastSeverities, setSastSeverities] = useState<Set<string>>(new Set());
+  // Components inner-tab state lives down in <ComponentsTab>; it publishes
+  // its current displayed count via the callback so the tab pill updates
+  // when the user toggles "Only with findings".
+  const [componentsDisplayed, setComponentsDisplayed] = useState<number | null>(null);
 
   function toggleSet(current: Set<string>, value: string, setter: (s: Set<string>) => void) {
     const next = new Set(current);
@@ -592,15 +601,22 @@ export default function ScanDetailPage() {
             <TabsList>
               <TabsTrigger value="findings" className="gap-1.5">
                 <ShieldAlert className="h-3.5 w-3.5" />Raw SCA Findings
-                {allFindings.length > 0 && <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{allFindings.length}</span>}
+                {filteredFindings.length > 0 && <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{filteredFindings.length}</span>}
               </TabsTrigger>
               <TabsTrigger value="sast" className="gap-1.5">
                 <ScanSearch className="h-3.5 w-3.5" />Raw SAST Detections
-                {allSast.length > 0 && <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{allSast.length}</span>}
+                {filteredSast.length > 0 && <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{filteredSast.length}</span>}
               </TabsTrigger>
               <TabsTrigger value="components" className="gap-1.5">
                 <Package className="h-3.5 w-3.5" />Components
-                {s.component_count > 0 && <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{s.component_count}</span>}
+                {(() => {
+                  // Until <ComponentsTab> mounts (it lacks forceMount), fall
+                  // back to the full unfiltered count so the pill renders on
+                  // initial page load. Once the tab is opened and the inner
+                  // toggle changes, componentsDisplayed takes over.
+                  const n = componentsDisplayed ?? s.component_count;
+                  return n > 0 ? <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{n}</span> : null;
+                })()}
               </TabsTrigger>
             </TabsList>
 
@@ -708,7 +724,7 @@ export default function ScanDetailPage() {
             </TabsContent>
 
             <TabsContent value="components" className="mt-4">
-              <ComponentsTab components={components.data ?? []} findings={findings.data ?? []} isLoading={components.isLoading} />
+              <ComponentsTab components={components.data ?? []} findings={findings.data ?? []} isLoading={components.isLoading} onDisplayedTotalChange={setComponentsDisplayed} />
             </TabsContent>
           </Tabs>
         )}

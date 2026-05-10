@@ -618,7 +618,7 @@ function SastIssueRow({
   );
 }
 
-function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null }) {
+function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplayedTotalChange }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null; onDisplayedTotalChange?: (total: number) => void }) {
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
   const [filters, setFilters] = useState<SastIssueFilters>({ page: 1, page_size: 50 });
@@ -626,6 +626,11 @@ function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scope
   const { data, isLoading } = useScopeSastIssues(scopeId, filters);
   const { data: jiraTickets } = useScopeJiraTickets(scopeId);
   const ticketById = new Map((jiraTickets ?? []).map((t) => [t.id, t]));
+
+  // Publish the filtered total up to the page-level tab pill.
+  useEffect(() => {
+    if (data?.total != null) onDisplayedTotalChange?.(data.total);
+  }, [data?.total, onDisplayedTotalChange]);
 
   const SAST_SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
   const SAST_STATUSES = ["pending", "confirmed", "planned", "fixed", "false_positive", "suppressed"] as const;
@@ -1064,7 +1069,7 @@ function ScaIssueRow({
   );
 }
 
-function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null }) {
+function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplayedTotalChange }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null; onDisplayedTotalChange?: (total: number) => void }) {
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
   const [filters, setFilters] = useState<ScaIssueFilters>({ page: 1, page_size: 50 });
@@ -1073,6 +1078,10 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeI
   const { data, isLoading } = useScopeScaIssues(scopeId, { ...filters, exclude_dev_only: excludeDevOnly });
   const { data: jiraTickets } = useScopeJiraTickets(scopeId);
   const ticketById = new Map((jiraTickets ?? []).map((t) => [t.id, t]));
+
+  useEffect(() => {
+    if (data?.total != null) onDisplayedTotalChange?.(data.total);
+  }, [data?.total, onDisplayedTotalChange]);
 
   const SCA_SEVERITIES = ["critical", "high", "medium", "low"] as const;
   const SCA_TYPES = ["cve", "eol", "deprecated"] as const;
@@ -1230,7 +1239,7 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate }: { scopeI
 // Components tab
 // ---------------------------------------------------------------------------
 
-function ComponentsTab({ scopeId }: { scopeId: string }) {
+function ComponentsTab({ scopeId, onDisplayedTotalChange }: { scopeId: string; onDisplayedTotalChange?: (total: number) => void }) {
   const [page, setPage] = useState(1);
   const [hasFindings, setHasFindings] = useState(false);
   const [excludeDevOnly, setExcludeDevOnly] = useState(true);
@@ -1240,6 +1249,10 @@ function ComponentsTab({ scopeId }: { scopeId: string }) {
   const totalDev = data?.total_dev ?? 0;
   const totalAll = totalRuntime + totalDev;
   const visible = data?.total ?? 0;
+
+  useEffect(() => {
+    if (data?.total != null) onDisplayedTotalChange?.(data.total);
+  }, [data?.total, onDisplayedTotalChange]);
 
   return (
     <div className="space-y-3">
@@ -1425,6 +1438,14 @@ export default function ScopeDetailPage() {
   const activeScanStatus = scans?.[0]?.status;
   const isScanning = activeScanStatus === "pending" || activeScanStatus === "running" || triggerScan.isPending;
 
+  // Tab pills reflect the *displayed* count after each tab's filters land.
+  // Each tab calls back with `data?.total` from its query; null until first
+  // load so the pill stays hidden during initial fetch instead of flashing
+  // a stale scope-level count.
+  const [scaDisplayed, setScaDisplayed] = useState<number | null>(null);
+  const [sastDisplayed, setSastDisplayed] = useState<number | null>(null);
+  const [componentsDisplayed, setComponentsDisplayed] = useState<number | null>(null);
+
   if (isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (isError || !scope) return <p className="text-sm text-destructive">Scope not found.</p>;
 
@@ -1497,25 +1518,25 @@ export default function ScopeDetailPage() {
         <TabsList>
           <TabsTrigger value="sca" className="gap-1.5">
             <ShieldAlert className="h-3.5 w-3.5" />SCA Issues
-            {scope.active_sca_issue_count > 0 && (
+            {scaDisplayed != null && scaDisplayed > 0 && (
               <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
-                {scope.active_sca_issue_count}
+                {scaDisplayed}
               </span>
             )}
           </TabsTrigger>
           <TabsTrigger value="sast" className="gap-1.5">
             <ScanSearch className="h-3.5 w-3.5" />SAST Issues
-            {scope.active_sast_issue_count > 0 && (
+            {sastDisplayed != null && sastDisplayed > 0 && (
               <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
-                {scope.active_sast_issue_count}
+                {sastDisplayed}
               </span>
             )}
           </TabsTrigger>
           <TabsTrigger value="components" className="gap-1.5">
             <Package className="h-3.5 w-3.5" />Components
-            {(scans?.[0]?.component_count ?? 0) > 0 && (
+            {componentsDisplayed != null && componentsDisplayed > 0 && (
               <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
-                {scans?.[0]?.component_count}
+                {componentsDisplayed}
               </span>
             )}
           </TabsTrigger>
@@ -1525,13 +1546,13 @@ export default function ScopeDetailPage() {
             not on first click. data-[state=inactive]:hidden hides inactive panels
             without unmounting them — eliminates the loading-flash layout shift. */}
         <TabsContent forceMount value="sca" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ScaIssuesTab scopeId={id} highlightIssueId={highlightIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} />}
+          {id && <ScaIssuesTab scopeId={id} highlightIssueId={highlightIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setScaDisplayed} />}
         </TabsContent>
         <TabsContent forceMount value="sast" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <SastIssuesTab scopeId={id} highlightIssueId={highlightIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} />}
+          {id && <SastIssuesTab scopeId={id} highlightIssueId={highlightIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setSastDisplayed} />}
         </TabsContent>
         <TabsContent forceMount value="components" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ComponentsTab scopeId={id} />}
+          {id && <ComponentsTab scopeId={id} onDisplayedTotalChange={setComponentsDisplayed} />}
         </TabsContent>
       </Tabs>
 
