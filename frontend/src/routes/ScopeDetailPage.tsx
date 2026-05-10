@@ -54,31 +54,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatRelative } from "@/lib/format";
+import { formatDate, formatRelative } from "@/lib/format";
 import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
-
-// ---------------------------------------------------------------------------
-// Severity helpers
-// ---------------------------------------------------------------------------
-
-const SEVERITY_COLORS: Record<string, string> = {
-  critical: "bg-red-500/20 text-red-600 border-red-400",
-  high: "bg-orange-500/20 text-orange-600 border-orange-400",
-  medium: "bg-yellow-500/20 text-yellow-600 border-yellow-400",
-  low: "bg-blue-500/20 text-blue-600 border-blue-400",
-  info: "bg-slate-500/20 text-slate-600 border-slate-400",
-  unknown: "bg-slate-500/20 text-slate-500 border-slate-300",
-};
-
-function SeverityBadge({ severity }: { severity: string }) {
-  return (
-    <Badge variant="outline" className={`uppercase text-[10px] px-1.5 ${SEVERITY_COLORS[severity] ?? SEVERITY_COLORS.unknown}`}>
-      {severity}
-    </Badge>
-  );
-}
+import { SeverityBadge, SEVERITY_COLORS } from "@/components/SeverityBadge";
+import { VulnLink } from "@/components/VulnLink";
+import { FileLink, basename } from "@/components/FileLink";
 
 // ---------------------------------------------------------------------------
 // Severity summary — stacked bar + legend at top of scope page
@@ -243,81 +225,8 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Vuln link helpers
-// ---------------------------------------------------------------------------
-
-/** Keep the Location column compact — show only the file basename.
- *  The full path is always available in the title tooltip and in the
- *  expanded row detail. */
-function truncateFilePath(path: string): string {
-  const parts = path.replace(/\\/g, "/").split("/");
-  return parts[parts.length - 1] ?? path;
-}
-
-/** Build a clickable source URL from a repo's template (with $FILE / $LINE
- *  placeholders) and the issue's path + line. Returns null if the template
- *  is missing or empty. */
-function buildSourceUrl(template: string | null | undefined, file: string, line?: number | null): string | null {
-  if (!template) return null;
-  let url = template.replace(/\$FILE/g, encodeURI(file));
-  if (line != null) {
-    url = url.replace(/\$LINE/g, String(line));
-  } else {
-    url = url.replace(/[#?][^#?]*\$LINE[^#?]*/g, "").replace(/\$LINE/g, "");
-  }
-  return url;
-}
-
-/** Renders a file path; if a sourceUrlTemplate is provided, wraps it in an
- *  anchor that opens the path in the configured source viewer. */
-function FileLink({
-  template,
-  file,
-  line,
-  className,
-  children,
-}: {
-  template: string | null | undefined;
-  file: string;
-  line?: number | null;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  const url = buildSourceUrl(template, file, line);
-  if (!url) return <span className={className}>{children}</span>;
-  return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={`hover:underline hover:text-foreground ${className ?? ""}`}
-      onClick={(e) => e.stopPropagation()}
-    >
-      {children}
-    </a>
-  );
-}
-
-function vulnUrl(id: string): string {
-  if (id.startsWith("CVE-")) return `https://nvd.nist.gov/vuln/detail/${id}`;
-  if (id.startsWith("GHSA-")) return `https://github.com/advisories/${id}`;
-  return `https://osv.dev/vulnerability/${id}`;
-}
-
-function VulnLink({ id, className }: { id: string; className?: string }) {
-  return (
-    <a
-      href={vulnUrl(id)}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={(e) => e.stopPropagation()}
-      className={`font-mono hover:underline text-blue-600 dark:text-blue-400 ${className ?? ""}`}
-    >
-      {id}
-    </a>
-  );
-}
+// File-path / vuln-id link helpers live in @/components/FileLink and
+// @/components/VulnLink — shared with the scan detail page.
 
 /**
  * Derive a short one-line summary from a verbose rule message. Returns the
@@ -418,7 +327,7 @@ function JiraCard({
           <span><span className="font-medium">Fix version:</span> {ticket.fix_versions.join(", ")}</span>
         )}
         {ticket.last_synced_at && (
-          <span>Synced {formatRelative(ticket.last_synced_at)}</span>
+          <span title={formatDate(ticket.last_synced_at)}>Synced {formatRelative(ticket.last_synced_at)}</span>
         )}
       </div>
       {ticket.sync_error && (
@@ -601,7 +510,7 @@ function SastIssueRow({
             className="truncate text-xs text-muted-foreground font-mono"
             title={`${issue.latest_file_path}:${issue.latest_start_line}`}
           >
-            {truncateFilePath(issue.latest_file_path)}:{issue.latest_start_line}
+            {basename(issue.latest_file_path)}:{issue.latest_start_line}
           </div>
           {/* Opengrep-era rules surface a meaningful rule slug here. LLM-mode
               rule_ids are bare `llm:CWE-XXX` placeholders that just duplicate
@@ -628,7 +537,7 @@ function SastIssueRow({
           </div>
         </TableCell>
         <TableCell className="text-xs text-muted-foreground">
-          {formatRelative(issue.last_seen_at)}
+          <span title={formatDate(issue.last_seen_at)}>{formatRelative(issue.last_seen_at)}</span>
         </TableCell>
       </TableRow>
       {expanded && (
@@ -974,7 +883,7 @@ function ScaIssueRow({
                 className="truncate text-xs text-muted-foreground font-mono"
                 title={`${issue.latest_manifest_file}${issue.latest_manifest_line ? `:${issue.latest_manifest_line}` : ""}`}
               >
-                {truncateFilePath(issue.latest_manifest_file)}
+                {basename(issue.latest_manifest_file)}
                 {issue.latest_manifest_line ? `:${issue.latest_manifest_line}` : ""}
               </div>
               <div
@@ -1039,7 +948,7 @@ function ScaIssueRow({
           </div>
         </TableCell>
         <TableCell className="text-xs text-muted-foreground">
-          {formatRelative(issue.last_seen_at)}
+          <span title={formatDate(issue.last_seen_at)}>{formatRelative(issue.last_seen_at)}</span>
         </TableCell>
       </TableRow>
       {expanded && (
@@ -1522,7 +1431,10 @@ function RecentScansSection({ scopeId }: { scopeId: string }) {
                           : "bg-amber-400"
                       }`}
                     />
-                    <span className="text-muted-foreground text-xs">
+                    <span
+                      className="text-muted-foreground text-xs"
+                      title={s.finished_at ? formatDate(s.finished_at) : undefined}
+                    >
                       {s.status === "running"
                         ? "running…"
                         : s.status === "pending"
@@ -1610,7 +1522,12 @@ export default function ScopeDetailPage() {
           <p className="text-sm text-muted-foreground">
             Branch: {scope.repo_branch}
             {scope.last_scan_completed_at && (
-              <> · Last scan: {formatRelative(scope.last_scan_completed_at)}</>
+              <>
+                {" · Last scan: "}
+                <span title={formatDate(scope.last_scan_completed_at)}>
+                  {formatRelative(scope.last_scan_completed_at)}
+                </span>
+              </>
             )}
           </p>
         </div>

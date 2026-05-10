@@ -44,103 +44,26 @@ import {
 } from "@/components/ui/table";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { severityChipClass, formatDate } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { useNow } from "@/lib/useNow";
 import { FilterGroup, Pipe } from "@/components/filters";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
-
-function VulnLink({ id, className }: { id: string; className?: string }) {
-  return (
-    <a
-      href={vulnUrl(id)}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={(e) => e.stopPropagation()}
-      className={cn("font-mono hover:underline text-blue-600 dark:text-blue-400", className)}
-    >
-      {id}
-    </a>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function vulnUrl(id: string): string {
-  if (id.startsWith("CVE-")) return `https://nvd.nist.gov/vuln/detail/${id}`;
-  if (id.startsWith("GHSA-")) return `https://github.com/advisories/${id}`;
-  return `https://osv.dev/vulnerability/${id}`;
-}
+import { SeverityBadge, severityClass, severityTextClass } from "@/components/SeverityBadge";
+import { VulnLink } from "@/components/VulnLink";
+import { FileLink, basename } from "@/components/FileLink";
+import { ScanStatusBadge } from "@/components/ScanStatusBadge";
 
 const SEVERITY_ORDER: Record<FindingSeverity, number> = {
   critical: 0, high: 1, medium: 2, low: 3, unknown: 4,
 };
-
-function SeverityBadge({ severity }: { severity: string }) {
-  return (
-    <span className={cn(
-      "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase",
-      severityChipClass(severity),
-    )}>
-      {severity}
-    </span>
-  );
-}
-
-function basename(path: string): string {
-  const parts = path.replace(/\\/g, "/").split("/");
-  return parts[parts.length - 1] ?? path;
-}
-
-function buildSourceUrl(template: string | null | undefined, file: string, line?: number | null): string | null {
-  if (!template) return null;
-  let url = template.replace(/\$FILE/g, encodeURI(file));
-  if (line != null) {
-    url = url.replace(/\$LINE/g, String(line));
-  } else {
-    // Drop the entire fragment / query segment that holds `$LINE` when there
-    // is no line — otherwise we'd leave an orphan `#` or `?line=` in the URL.
-    url = url.replace(/[#?][^#?]*\$LINE[^#?]*/g, "").replace(/\$LINE/g, "");
-  }
-  return url;
-}
-
-function FileLink({
-  template,
-  file,
-  line,
-  className,
-  children,
-}: {
-  template: string | null | undefined;
-  file: string;
-  line?: number | null;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  const url = buildSourceUrl(template, file, line);
-  if (!url) return <span className={className}>{children}</span>;
-  return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={cn("hover:underline hover:text-foreground", className)}
-      onClick={(e) => e.stopPropagation()}
-    >
-      {children}
-    </a>
-  );
-}
 
 function SummaryCard({ label, value, severity }: { label: string; value: number; severity?: FindingSeverity }) {
   return (
     <Card>
       <CardContent className="p-4">
         <p className="text-xs uppercase text-muted-foreground mb-1">{label}</p>
-        <p className={cn("text-2xl font-bold", severity ? severityChipClass(severity).split(" ").find((c) => c.startsWith("text-")) : "")}>
+        <p className={cn("text-2xl font-bold", severity ? severityTextClass(severity) : "")}>
           {value}
         </p>
       </CardContent>
@@ -427,7 +350,7 @@ function ComponentsTab({ components, findings, isLoading }: {
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
                       {cFindings.length === 0 ? <span className="text-xs text-muted-foreground">—</span> : cFindings.map((f) => (
-                        <span key={f.id} className={cn("inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase", severityChipClass(f.severity))}>
+                        <span key={f.id} className={cn("inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase", severityClass(f.severity))}>
                           {f.finding_type === "cve" ? (f.cve_id ?? f.osv_id) : f.finding_type.toUpperCase()}
                         </span>
                       ))}
@@ -562,13 +485,9 @@ export default function ScanDetailPage() {
               )}
             </h1>
             <div className="space-y-0.5">
-              <p className={cn("text-base uppercase font-semibold tracking-wide",
-                s.status === "failed" ? "text-destructive" : "",
-                s.status === "success" ? "text-emerald-600 dark:text-emerald-400" : "",
-                s.status === "running" || s.status === "pending" ? "text-amber-600 dark:text-amber-400" : "",
-                s.status === "cancelled" ? "text-muted-foreground" : "")}>
-                {s.status === "success" ? "Complete" : s.status}
-              </p>
+              <div>
+                <ScanStatusBadge status={s.status} />
+              </div>
               {s.llm_request_count > 0 && (
                 <p className="text-sm text-muted-foreground" title={`${s.llm_input_tokens.toLocaleString()} input + ${s.llm_output_tokens.toLocaleString()} output tokens. Cache read/creation tokens aren't included.`}>
                   {s.llm_request_count} LLM {s.llm_request_count === 1 ? "call" : "calls"}
@@ -657,15 +576,15 @@ export default function ScanDetailPage() {
             <TabsList>
               <TabsTrigger value="findings" className="gap-1.5">
                 <ShieldAlert className="h-3.5 w-3.5" />Raw SCA Findings
-                {allFindings.length > 0 && <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs">{allFindings.length}</span>}
+                {allFindings.length > 0 && <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{allFindings.length}</span>}
               </TabsTrigger>
               <TabsTrigger value="sast" className="gap-1.5">
                 <ScanSearch className="h-3.5 w-3.5" />Raw SAST Detections
-                {allSast.length > 0 && <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs">{allSast.length}</span>}
+                {allSast.length > 0 && <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{allSast.length}</span>}
               </TabsTrigger>
               <TabsTrigger value="components" className="gap-1.5">
                 <Package className="h-3.5 w-3.5" />Components
-                {s.component_count > 0 && <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs">{s.component_count}</span>}
+                {s.component_count > 0 && <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{s.component_count}</span>}
               </TabsTrigger>
             </TabsList>
 
@@ -676,7 +595,7 @@ export default function ScanDetailPage() {
                   active={scaSeverities as ReadonlySet<"critical" | "high" | "medium" | "low">}
                   onToggle={(s) => toggleSet(scaSeverities, s, setScaSeverities)}
                   label={(s) => s.charAt(0).toUpperCase() + s.slice(1)}
-                  colorFn={(s) => severityChipClass(s)}
+                  colorFn={(s) => severityClass(s)}
                 />
                 <Pipe />
                 <FilterGroup
@@ -733,7 +652,7 @@ export default function ScanDetailPage() {
                   active={sastSeverities as ReadonlySet<"critical" | "high" | "medium" | "low" | "info">}
                   onToggle={(s) => toggleSet(sastSeverities, s, setSastSeverities)}
                   label={(s) => s.charAt(0).toUpperCase() + s.slice(1)}
-                  colorFn={(s) => severityChipClass(s)}
+                  colorFn={(s) => severityClass(s)}
                 />
                 {sastSeverities.size > 0 && (
                   <>

@@ -5,8 +5,6 @@ import { useNavigate } from "react-router-dom";
 import { useMe } from "@/api/queries/auth";
 import { useRepos } from "@/api/queries/repos";
 import { useScans, useCancelScan } from "@/api/queries/scans";
-import type { ScanStatus } from "@/api/types";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -17,31 +15,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { severityChipClass } from "@/lib/format";
-
-const STATUS_STYLE: Record<ScanStatus, string> = {
-  pending: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
-  running: "bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200",
-  success: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
-  failed: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200",
-  cancelled: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
-};
-
-const STATUS_LABEL: Record<ScanStatus, string> = {
-  pending: "pending",
-  running: "running",
-  success: "complete",
-  failed: "failed",
-  cancelled: "cancelled",
-};
-
-function StatusBadge({ status }: { status: ScanStatus }) {
-  return (
-    <Badge variant="secondary" className={cn("uppercase", STATUS_STYLE[status])}>
-      {STATUS_LABEL[status]}
-    </Badge>
-  );
-}
+import { formatDate } from "@/lib/format";
+import { severityClass } from "@/components/SeverityBadge";
+import { ScanStatusBadge } from "@/components/ScanStatusBadge";
 
 function FindingsSummary({
   critical,
@@ -70,7 +46,7 @@ function FindingsSummary({
           key={label}
           className={cn(
             "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold",
-            severityChipClass(sev),
+            severityClass(sev),
           )}
         >
           {label}:{count}
@@ -78,11 +54,6 @@ function FindingsSummary({
       ))}
     </span>
   );
-}
-
-function formatTimestamp(iso: string | null): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString();
 }
 
 function formatDuration(startedAt: string | null, finishedAt: string | null): string {
@@ -173,7 +144,7 @@ export default function ScansPage() {
                     ) : null}
                   </TableCell>
                   <TableCell>
-                    <StatusBadge status={scan.status} />
+                    <ScanStatusBadge status={scan.status} />
                   </TableCell>
                   <TableCell>
                     <FindingsSummary
@@ -190,7 +161,7 @@ export default function ScansPage() {
                     {scan.triggered_by}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {formatTimestamp(scan.started_at ?? scan.created_at)}
+                    {formatDate(scan.started_at ?? scan.created_at)}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {formatDuration(scan.started_at, scan.finished_at)}

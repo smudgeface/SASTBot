@@ -1,25 +1,18 @@
 /**
  * Formatting helpers.
  *
- * `severityChipClass` returns Tailwind classes for a colored chip used in the
- * findings UI. The real severity scale lands in Milestone 3 — the palette here
- * is a placeholder.
+ * `severityChipClass` is a thin wrapper around the canonical SEVERITY_COLORS
+ * map in `components/SeverityBadge.tsx` — kept for callsites that style
+ * non-Badge elements (filter buttons, finding chips, summary card text).
+ * The palette itself lives in one place.
  */
+
+import { severityClass } from "@/components/SeverityBadge";
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info" | "unknown";
 
-const SEVERITY_CLASSES: Record<Severity, string> = {
-  critical: "bg-red-100 text-red-800 border-red-200 dark:bg-red-950 dark:text-red-200 dark:border-red-900",
-  high: "bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-950 dark:text-orange-200 dark:border-orange-900",
-  medium: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900",
-  low: "bg-sky-100 text-sky-800 border-sky-200 dark:bg-sky-950 dark:text-sky-200 dark:border-sky-900",
-  info: "bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-800",
-  unknown: "bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-800",
-};
-
 export function severityChipClass(severity: string | null | undefined): string {
-  const key = (severity ?? "unknown").toLowerCase() as Severity;
-  return SEVERITY_CLASSES[key] ?? SEVERITY_CLASSES.unknown;
+  return severityClass(severity);
 }
 
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {

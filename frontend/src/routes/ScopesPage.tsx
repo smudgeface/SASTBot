@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatRelative } from "@/lib/format";
+import { formatDate, formatRelative } from "@/lib/format";
 import type { ActiveScan } from "@/api/types";
 import { SCAN_PHASE_LABELS, SCAN_PHASE_UNITS, SCAN_PHASE_CAPS } from "@/api/types";
 
@@ -111,7 +111,7 @@ export default function ScopesPage() {
                       {scope.active_scan ? (
                         <ActiveScanCell scan={scope.active_scan} />
                       ) : scope.last_scan_completed_at ? (
-                        <span className="text-muted-foreground" title={scope.last_scan_completed_at}>
+                        <span className="text-muted-foreground" title={formatDate(scope.last_scan_completed_at)}>
                           {formatRelative(scope.last_scan_completed_at)}
                         </span>
                       ) : (
