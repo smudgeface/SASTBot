@@ -236,6 +236,75 @@ passes the local `SEVERITY_COLORS` map (vivid) while `ScanDetailPage` passes
 the active-state colors differ between pages. Falls out automatically once
 §1.1 is fixed.
 
+### 1.10b Tab triggers — icons present on Scan, missing on Scope
+
+- `ScanDetailPage.tsx:577-588`: each tab trigger has a leading icon
+  (`<ShieldAlert>` for Raw SCA Findings, `<ScanSearch>` for Raw SAST
+  Detections, `<Package>` for Components) plus the count pill.
+- `ScopeDetailPage.tsx:1654-1670`: tab triggers are plain text — no icons.
+
+The icons are a strong wayfinding cue and the Scope page has all three of
+the same concepts (SCA / SAST / Components). Trivial alignment.
+
+**Recommendation.** Add the same three icons to ScopeDetailPage's tab
+triggers, with the same `gap-1.5` and `h-3.5 w-3.5` sizing.
+
+### 1.10c Components tab counter — missing on Scope
+
+- `ScanDetailPage.tsx:587`: Components tab shows `{s.component_count}` in
+  the canonical pill counter.
+- `ScopeDetailPage.tsx:1670`: Components tab is bare — no count, even
+  though the scope summary endpoint exposes the same data.
+
+Operators flipping between tabs lose visibility into "how many components
+were on the most recent scan" — the answer is one click away (open the
+tab, look at the table footer pager) but a header-level count is faster.
+
+**Recommendation.** Add a count pill to ScopeDetailPage's Components tab,
+matching the SCA/SAST tabs above it. The latest-scan total is
+`scope.last_component_count` (already on the response) — falls back to
+nothing while no scan has finished.
+
+### 1.10d Table layout — `table-fixed` + truncation on Scan tables
+
+Visible symptom: long Summary text on `/scans/:id` "Raw SAST Detections"
+overflows its column and pushes Severity / Location wider than they
+should be. The same SAST issue on `/scopes/:id` doesn't overflow — its
+table is `<Table className="table-fixed">` with `<TableCell>` width hints
+and `truncate` / `line-clamp-1` on the summary cell.
+
+- `ScopeDetailPage.tsx:773` (SAST) + `:1264` (SCA): `<Table className="table-fixed">`.
+- `ScanDetailPage.tsx:686` + `:743`: plain `<Table>` (no `table-fixed`).
+
+Without `table-fixed`, the browser auto-sizes columns based on content.
+A long single-line summary string blows past the implicit 24/64-px column
+hints we set on Severity / Location, ending in horizontal overflow.
+
+**Recommendation.** Apply `<Table className="table-fixed">` to both Scan
+tables (SCA findings + SAST detections). Add `w-6 / w-24 / w-64` cell
+widths matching ScopeDetailPage. Wrap the summary cell content in
+`truncate` (single-line) — the audit view doesn't need full text in the
+row; the expanded panel shows it complete.
+
+### 1.10e Summary cell foreground color — SAST inconsistency
+
+- `ScopeDetailPage.tsx:867` (SAST row) and `:1037` (SCA row): summary
+  rendered in a `<span className="text-sm truncate">` — defaults to the
+  full foreground color (dark text in light mode).
+- `ScanDetailPage.tsx:108` (SCA row): `<div className="line-clamp-1">` —
+  also full foreground. ✓ matches.
+- `ScanDetailPage.tsx:260` (SAST row): `<TableCell className="text-sm
+  text-muted-foreground line-clamp-1">{summary}` — uses **muted**
+  foreground. Visibly grayer than every other Summary cell in the app.
+
+So three out of four summary renderings agree on full foreground; the
+SAST row on ScanDetailPage is the outlier.
+
+**Recommendation.** Drop `text-muted-foreground` from
+`ScanDetailPage.tsx:260`. Optional follow-up: extract a tiny
+`<RowSummary>` helper so future drift can't reappear, but a one-class
+delete is fine for now.
+
 ### 1.11 Duplicated helpers
 
 `ScopeDetailPage.tsx:253-320` and `ScanDetailPage.tsx:71-136` contain
@@ -443,7 +512,7 @@ no behavior change.
 4. Fix tab counter pill (§1.9) — change `ScanDetailPage` to `rounded-full
    text-[10px]`.
 
-### Batch B — "Tighten cross-page parity" (~half day)
+### Batch B — "Tighten cross-page parity" (~half day, slightly larger now)
 
 Where the pages tell different stories of the same data — make them tell the
 same story.
@@ -456,18 +525,28 @@ same story.
    reused from ScopeDetailPage (§1.8). Move `SeveritySummary` to a shared
    component file in the process.
 8. Align detail-page header path styling (`font-mono` everywhere) (§1.7).
+9. Add the three tab-trigger icons (ShieldAlert / ScanSearch / Package) to
+   `ScopeDetailPage`'s tabs, matching `ScanDetailPage` (§1.10b).
+10. Add a count pill to `ScopeDetailPage`'s Components tab using the latest
+    scan's component count (§1.10c).
+11. Apply `<Table className="table-fixed">` and matching `w-6 / w-24 / w-64`
+    cell hints + `truncate` on the summary cell to both `ScanDetailPage`
+    tables (Raw SCA Findings + Raw SAST Detections), to fix the SAST
+    overflow visible on `/scans/:id` (§1.10d).
+12. Drop the lone `text-muted-foreground` on `ScanDetailPage.tsx:260` so
+    SAST summaries match every other Summary cell in the app (§1.10e).
 
 ### Batch C — "Polish the SAST/SCA detail panels" (~half day)
 
 The original M6i carry-over.
 
-9. Replace raw `<pre>` snippet with `ContextSnippet` on `ScanDetailPage`
-   SAST view (§3.1).
-10. Add a CWE chip to SAST issue rows on `ScopeDetailPage` (§2.2).
-11. Promote SCA's `actively_exploited` banner into a generic
+13. Replace raw `<pre>` snippet with `ContextSnippet` on `ScanDetailPage`
+    SAST view (§3.1).
+14. Add a CWE chip to SAST issue rows on `ScopeDetailPage` (§2.2).
+15. Promote SCA's `actively_exploited` banner into a generic
     `HighSeverityCallout` slot at the top of both expanded panels (§2.3a).
     Don't add SAST signals yet — just reserve the slot.
-12. On `ScanDetailPage` Components tab: swap checkbox for styled toggle,
+16. On `ScanDetailPage` Components tab: swap checkbox for styled toggle,
     add `Dev` badge (§3.4).
 
 ### Out of scope

@@ -49,27 +49,15 @@ import { useNow } from "@/lib/useNow";
 import { FilterGroup, Pipe } from "@/components/filters";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
-import { SeverityBadge, severityClass, severityTextClass } from "@/components/SeverityBadge";
+import { SeverityBadge, severityClass } from "@/components/SeverityBadge";
 import { VulnLink } from "@/components/VulnLink";
 import { FileLink, basename } from "@/components/FileLink";
 import { ScanStatusBadge } from "@/components/ScanStatusBadge";
+import { SeveritySummary } from "@/components/SeveritySummary";
 
 const SEVERITY_ORDER: Record<FindingSeverity, number> = {
   critical: 0, high: 1, medium: 2, low: 3, unknown: 4,
 };
-
-function SummaryCard({ label, value, severity }: { label: string; value: number; severity?: FindingSeverity }) {
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <p className="text-xs uppercase text-muted-foreground mb-1">{label}</p>
-        <p className={cn("text-2xl font-bold", severity ? severityTextClass(severity) : "")}>
-          {value}
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // SCA findings tab (raw detections)
@@ -257,7 +245,9 @@ function SastRow({
           {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
         </TableCell>
         <TableCell className="w-24"><SeverityBadge severity={issue.latest_severity} /></TableCell>
-        <TableCell className="text-sm text-muted-foreground line-clamp-1">{summary}</TableCell>
+        <TableCell className="text-sm">
+          <div className="line-clamp-1">{summary}</div>
+        </TableCell>
         <TableCell
           className="w-64 font-mono text-xs text-muted-foreground truncate"
           title={`${issue.latest_file_path}:${issue.latest_start_line}`}
@@ -481,7 +471,7 @@ export default function ScanDetailPage() {
             <h1 className="text-xl font-semibold tracking-tight">
               {repoName ?? s.repo_id}
               {s.scope_path && s.scope_path !== "/" && (
-                <span className="ml-2 text-base font-normal text-muted-foreground font-mono">{s.scope_path}</span>
+                <span className="text-base font-normal text-muted-foreground font-mono"> · {s.scope_path}</span>
               )}
             </h1>
             <div className="space-y-0.5">
@@ -559,15 +549,17 @@ export default function ScanDetailPage() {
           );
         })()}
 
-        {/* Summary cards */}
+        {/* Summary */}
         {showResults && (
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            <SummaryCard label="Components" value={s.component_count} />
-            <SummaryCard label="Critical" value={s.critical_count} severity="critical" />
-            <SummaryCard label="High" value={s.high_count} severity="high" />
-            <SummaryCard label="Medium" value={s.medium_count} severity="medium" />
-            <SummaryCard label="Low" value={s.low_count} severity="low" />
-          </div>
+          <SeveritySummary
+            critical={s.critical_count}
+            high={s.high_count}
+            medium={s.medium_count}
+            low={s.low_count}
+            sca={allFindings.length}
+            sast={allSast.length}
+            components={s.component_count}
+          />
         )}
 
         {/* Tabs */}
@@ -622,7 +614,7 @@ export default function ScanDetailPage() {
                 <Card><CardContent className="p-6 text-sm text-muted-foreground">No findings match.</CardContent></Card>
               ) : (
                 <Card>
-                  <Table>
+                  <Table className="table-fixed">
                     <TableHeader>
                       <TableRow>
                         <TableHead className="w-6" />
@@ -672,7 +664,7 @@ export default function ScanDetailPage() {
                 <Card><CardContent className="p-6 text-sm text-muted-foreground">No SAST detections match.</CardContent></Card>
               ) : (
                 <Card>
-                  <Table>
+                  <Table className="table-fixed">
                     <TableHeader>
                       <TableRow>
                         <TableHead className="w-6" />

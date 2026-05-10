@@ -14,47 +14,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
-import { severityClass } from "@/components/SeverityBadge";
 import { ScanStatusBadge } from "@/components/ScanStatusBadge";
-
-function FindingsSummary({
-  critical,
-  high,
-  medium,
-  low,
-}: {
-  critical: number;
-  high: number;
-  medium: number;
-  low: number;
-}) {
-  const total = critical + high + medium + low;
-  if (total === 0) return <span className="text-muted-foreground text-xs">—</span>;
-
-  const chips: { label: string; count: number; sev: string }[] = [];
-  if (critical > 0) chips.push({ label: "C", count: critical, sev: "critical" });
-  if (high > 0) chips.push({ label: "H", count: high, sev: "high" });
-  if (medium > 0) chips.push({ label: "M", count: medium, sev: "medium" });
-  if (low > 0) chips.push({ label: "L", count: low, sev: "low" });
-
-  return (
-    <span className="inline-flex gap-1">
-      {chips.map(({ label, count, sev }) => (
-        <span
-          key={label}
-          className={cn(
-            "inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold",
-            severityClass(sev),
-          )}
-        >
-          {label}:{count}
-        </span>
-      ))}
-    </span>
-  );
-}
+import { SeverityCountChips } from "@/components/SeverityCountChips";
 
 function formatDuration(startedAt: string | null, finishedAt: string | null): string {
   if (!startedAt) return "—";
@@ -113,6 +75,13 @@ export default function ScansPage() {
 
       {items.length > 0 ? (
         <Card>
+          <CardHeader className="pb-0">
+            <CardTitle className="text-base flex items-center gap-2">
+              <FileSearch className="h-4 w-4" />
+              {items.length} scan{items.length !== 1 ? "s" : ""}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-4">
           <Table>
             <TableHeader>
               <TableRow>
@@ -147,7 +116,7 @@ export default function ScansPage() {
                     <ScanStatusBadge status={scan.status} />
                   </TableCell>
                   <TableCell>
-                    <FindingsSummary
+                    <SeverityCountChips
                       critical={scan.critical_count}
                       high={scan.high_count}
                       medium={scan.medium_count}
@@ -183,6 +152,7 @@ export default function ScansPage() {
               })}
             </TableBody>
           </Table>
+          </CardContent>
         </Card>
       ) : null}
     </div>

@@ -13,17 +13,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDate, formatRelative } from "@/lib/format";
+import { SeverityCountChips } from "@/components/SeverityCountChips";
 import type { ActiveScan } from "@/api/types";
 import { SCAN_PHASE_LABELS, SCAN_PHASE_UNITS, SCAN_PHASE_CAPS } from "@/api/types";
-
-function SeverityChip({ n, label }: { n: number; label: string }) {
-  if (n === 0) return null;
-  return (
-    <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs font-medium bg-destructive/15 text-destructive">
-      {n} {label}
-    </span>
-  );
-}
 
 function ActiveScanCell({ scan }: { scan: ActiveScan }) {
   const phaseLabel = scan.current_phase
@@ -87,7 +79,7 @@ export default function ScopesPage() {
                 <TableRow>
                   <TableHead>Repo · Branch · Path</TableHead>
                   <TableHead className="text-right">Last scan</TableHead>
-                  <TableHead className="text-right">Critical / High</TableHead>
+                  <TableHead className="text-right">Findings</TableHead>
                   <TableHead className="text-right">SCA</TableHead>
                   <TableHead className="text-right">SAST</TableHead>
                   <TableHead className="text-right">Pending</TableHead>
@@ -119,11 +111,16 @@ export default function ScopesPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <SeverityChip n={scope.critical_count} label="C" />
-                        <SeverityChip n={scope.high_count} label="H" />
-                        {scope.critical_count === 0 && scope.high_count === 0 && (
+                      <div className="flex justify-end">
+                        {scope.critical_count + scope.high_count + scope.medium_count + scope.low_count === 0 ? (
                           <CheckCircle2 className="h-4 w-4 text-muted-foreground/40" />
+                        ) : (
+                          <SeverityCountChips
+                            critical={scope.critical_count}
+                            high={scope.high_count}
+                            medium={scope.medium_count}
+                            low={scope.low_count}
+                          />
                         )}
                       </div>
                     </TableCell>

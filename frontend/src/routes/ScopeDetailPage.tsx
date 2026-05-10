@@ -3,15 +3,15 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowLeft,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Clock,
   ExternalLink,
   Link2,
   Loader2,
+  Package,
   RefreshCw,
+  ScanSearch,
   ShieldAlert,
   Unlink,
   Zap,
@@ -44,7 +44,7 @@ import type { SastIssue, ScaIssue, ScanRunSummary } from "@/api/types";
 import { SCAN_PHASE_LABELS, SCAN_PHASE_UNITS, SCAN_PHASE_CAPS } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -61,17 +61,7 @@ import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
 import { SeverityBadge, SEVERITY_COLORS } from "@/components/SeverityBadge";
 import { VulnLink } from "@/components/VulnLink";
 import { FileLink, basename } from "@/components/FileLink";
-
-// ---------------------------------------------------------------------------
-// Severity summary — stacked bar + legend at top of scope page
-// ---------------------------------------------------------------------------
-
-const SEVERITY_BAR_COLOR: Record<"critical" | "high" | "medium" | "low", string> = {
-  critical: "bg-red-500",
-  high:     "bg-orange-500",
-  medium:   "bg-yellow-500",
-  low:      "bg-blue-500",
-};
+import { SeveritySummary } from "@/components/SeveritySummary";
 
 function ScanProgressBanner({ scan }: { scan: ScanRunSummary }) {
   const phase = scan.current_phase;
@@ -106,71 +96,6 @@ function ScanProgressBanner({ scan }: { scan: ScanRunSummary }) {
         </div>
       )}
     </div>
-  );
-}
-
-function SeveritySummary({
-  critical, high, medium, low, sca, sast, pending,
-}: {
-  critical: number; high: number; medium: number; low: number;
-  sca: number; sast: number; pending: number;
-}) {
-  const total = critical + high + medium + low;
-  const segments: { key: "critical" | "high" | "medium" | "low"; label: string; count: number }[] = [
-    { key: "critical", label: "Critical", count: critical },
-    { key: "high",     label: "High",     count: high },
-    { key: "medium",   label: "Medium",   count: medium },
-    { key: "low",      label: "Low",      count: low },
-  ];
-
-  return (
-    <Card>
-      <CardContent className="px-5 py-4 space-y-3">
-        {total === 0 ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            No open issues in this scope.
-          </div>
-        ) : (
-          <>
-            <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
-              {segments.filter(s => s.count > 0).map((s) => (
-                <div
-                  key={s.key}
-                  className={SEVERITY_BAR_COLOR[s.key]}
-                  style={{ width: `${(s.count / total) * 100}%` }}
-                  title={`${s.count} ${s.label}`}
-                />
-              ))}
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold leading-none">{total}</span>
-              <span className="text-sm text-muted-foreground">Open Issues</span>
-            </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-              {segments.map((s) => (
-                <span key={s.key} className="inline-flex items-center gap-1.5">
-                  <span className={`inline-block h-2.5 w-2.5 rounded-sm ${SEVERITY_BAR_COLOR[s.key]} ${s.count === 0 ? "opacity-30" : ""}`} />
-                  <span className={s.count === 0 ? "text-muted-foreground/60" : ""}>
-                    {s.count} {s.label}
-                  </span>
-                </span>
-              ))}
-            </div>
-          </>
-        )}
-        <div className="flex flex-wrap gap-x-4 gap-y-1 pt-2 text-xs text-muted-foreground border-t">
-          <span><span className="font-medium text-foreground">{sca}</span> SCA</span>
-          <span><span className="font-medium text-foreground">{sast}</span> SAST</span>
-          {pending > 0 && (
-            <span className="inline-flex items-center gap-1">
-              <Clock className="h-3 w-3 text-amber-500" />
-              <span className="font-medium text-foreground">{pending}</span> Pending triage
-            </span>
-          )}
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -1516,7 +1441,7 @@ export default function ScopeDetailPage() {
           <h1 className="text-xl font-semibold tracking-tight">
             {scope.repo_name}
             {scope.path !== "/" && (
-              <span className="text-muted-foreground font-normal"> · {scope.path}</span>
+              <span className="text-base font-normal text-muted-foreground font-mono"> · {scope.path}</span>
             )}
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -1568,23 +1493,30 @@ export default function ScopeDetailPage() {
       {/* Main tabs */}
       <Tabs defaultValue="sca">
         <TabsList>
-          <TabsTrigger value="sca">
-            SCA Issues
+          <TabsTrigger value="sca" className="gap-1.5">
+            <ShieldAlert className="h-3.5 w-3.5" />SCA Issues
             {scope.active_sca_issue_count > 0 && (
               <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
                 {scope.active_sca_issue_count}
               </span>
             )}
           </TabsTrigger>
-          <TabsTrigger value="sast">
-            SAST Issues
+          <TabsTrigger value="sast" className="gap-1.5">
+            <ScanSearch className="h-3.5 w-3.5" />SAST Issues
             {scope.active_sast_issue_count > 0 && (
               <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
                 {scope.active_sast_issue_count}
               </span>
             )}
           </TabsTrigger>
-          <TabsTrigger value="components">Components</TabsTrigger>
+          <TabsTrigger value="components" className="gap-1.5">
+            <Package className="h-3.5 w-3.5" />Components
+            {(scans?.[0]?.component_count ?? 0) > 0 && (
+              <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
+                {scans?.[0]?.component_count}
+              </span>
+            )}
+          </TabsTrigger>
         </TabsList>
 
         {/* forceMount keeps all panels in the DOM so queries fire at page load,
