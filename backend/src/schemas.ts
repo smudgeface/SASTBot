@@ -412,6 +412,12 @@ const LlmEvidenceSchema = z.object({
   llmReason: z.string(),
 }).nullable();
 
+/** M6q: single location where a component is used. */
+export const ComponentOccurrenceSchema = z.object({
+  path: z.string(),
+  line: z.number().int().nullable(),
+});
+
 export const SbomComponentOutSchema = z.object({
   id: UuidSchema,
   scan_run_id: UuidSchema,
@@ -424,6 +430,12 @@ export const SbomComponentOutSchema = z.object({
   scope: z.string().nullable(),
   /** True iff cdxgen 12.2+ found `dev: true` in the npm lockfile entry. */
   is_dev_only: z.boolean(),
+  /** Representative manifest file (single path shortcut for FileLink). */
+  manifest_file: z.string().nullable().optional(),
+  /** How the component was discovered: "manifest" | "llm_augmentation". */
+  discovery_method: z.string().nullable().optional(),
+  /** M6q: full list of locations where this component is used (path + optional line number). */
+  occurrences: z.array(ComponentOccurrenceSchema).optional(),
   /** M6p Stage 2: evidence from LLM augmentation pass for added/kept-with-rationale components. */
   llm_evidence: LlmEvidenceSchema.optional(),
 });

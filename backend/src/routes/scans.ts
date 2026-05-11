@@ -11,8 +11,9 @@ import {
   ScanFindingListSchema,
   ScanRunListSchema,
   ScanRunOutSchema,
+  SbomComponentOutSchema,
 } from "../schemas.js";
-import { scanFindingToOut, scanRunToOut, sastIssueToOut } from "../services/mappers.js";
+import { scanFindingToOut, scanRunToOut, sastIssueToOut, sbomComponentToOut } from "../services/mappers.js";
 import { cancelScanRun, ScanRunNotFoundError } from "../services/scanService.js";
 
 const scansRoutes: FastifyPluginAsync = async (app) => {
@@ -238,6 +239,8 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
 
   // Trigger a scan — kept here to minimise route file count.
   // (Previously lived in adminRepos.ts but it's really a scan operation.)
+  // M6q: now returns occurrences[], manifest_file, discovery_method (per plan §2).
+  // No linked_issue_ids — that's a scope-level concept only.
   typed.get(
     "/scans/:id/components",
     {
@@ -247,20 +250,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         summary: "List SBOM components for a scan run",
         params: IdParamsSchema,
         response: {
-          200: z.array(
-            z.object({
-              id: z.string(),
-              name: z.string(),
-              version: z.string().nullable(),
-              purl: z.string(),
-              ecosystem: z.string().nullable(),
-              licenses: z.array(z.string()),
-              component_type: z.string(),
-              scope: z.string().nullable(),
-              is_dev_only: z.boolean(),
-              manifest_file: z.string().nullable(),
-            }),
-          ),
+          200: z.array(SbomComponentOutSchema),
           401: ErrorSchema,
           404: ErrorSchema,
         },
@@ -278,18 +268,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         where: { scanRunId: req.params.id },
         orderBy: { name: "asc" },
       });
-      return comps.map((c) => ({
-        id: c.id,
-        name: c.name,
-        version: c.version,
-        purl: c.purl,
-        ecosystem: c.ecosystem,
-        licenses: c.licenses,
-        component_type: c.componentType,
-        scope: c.scope,
-        is_dev_only: c.isDevOnly,
-        manifest_file: c.manifestFile,
-      }));
+      return comps.map(sbomComponentToOut);
     },
   );
   // ── SAST findings ──────────────────────────────────────────────────────────

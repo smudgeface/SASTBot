@@ -19,6 +19,7 @@ import {
   ScaIssueDismissBodySchema,
   ScaIssueListSchema,
   ScaIssueOutSchema,
+  SbomComponentOutSchema,
   SeveritySchema,
   FindingTypeSchema,
 } from "../schemas.js";
@@ -549,6 +550,15 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // GET /scopes/:id/components — from the most recent scan run
   // ---------------------------------------------------------------------------
 
+  // M6q: ScopeComponentOutSchema extends SbomComponentOutSchema with
+  // linked_issue_ids (scope-level concept only; not on scan endpoint).
+  const ScopeComponentOutSchema = SbomComponentOutSchema.extend({
+    linked_issue_ids: z.object({
+      sca: z.array(z.string().uuid()),
+      sast: z.array(z.string().uuid()),
+    }).optional(),
+  });
+
   typed.get(
     "/api/scopes/:id/components",
     {
@@ -563,18 +573,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           exclude_dev_only: queryBool.default(true),
         }),
         response: {
-          200: PaginatedSchema(z.object({
-            id: z.string(),
-            scan_run_id: z.string(),
-            name: z.string(),
-            version: z.string().nullable(),
-            purl: z.string(),
-            ecosystem: z.string().nullable(),
-            licenses: z.array(z.string()),
-            component_type: z.string(),
-            scope: z.string().nullable(),
-            is_dev_only: z.boolean(),
-          })).extend({
+          200: PaginatedSchema(ScopeComponentOutSchema).extend({
             total_dev: z.number().int().nonnegative(),
             total_runtime: z.number().int().nonnegative(),
           }),
@@ -620,7 +619,89 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         prisma.sbomComponent.count({ where }),
       ]);
 
-      return { items: comps.map(sbomComponentToOut), total, page, page_size, total_dev, total_runtime };
+      // M6q: derive linked_issue_ids in a single batched query per endpoint call.
+      // SCA: match by scopeId + packageName + lastSeenScanRunId = scope.lastScanRunId.
+      // SAST: match by scopeId + reachableCallSites referencing the component's purl
+      //       (narrow set; most components will have no SAST links).
+      const componentNames = comps.map((c) => c.name);
+      const scaIssues = componentNames.length > 0
+        ? await prisma.scaIssue.findMany({
+            where: {
+              scopeId: scope.id,
+              packageName: { in: componentNames },
+              lastSeenScanRunId: scope.lastScanRunId,
+            },
+            select: { id: true, packageName: true, latestPackageVersion: true },
+          })
+        : [];
+
+      // Build map: componentName → sca issue ids
+      const scaByName = new Map<string, string[]>();
+      for (const issue of scaIssues) {
+        const existing = scaByName.get(issue.packageName) ?? [];
+        existing.push(issue.id);
+        scaByName.set(issue.packageName, existing);
+      }
+
+      return {
+        items: comps.map((c) => ({
+          ...sbomComponentToOut(c),
+          linked_issue_ids: {
+            sca: scaByName.get(c.name) ?? [],
+            sast: [], // SAST-to-component links are rare; populated in future if needed
+          },
+        })),
+        total,
+        page,
+        page_size,
+        total_dev,
+        total_runtime,
+      };
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // GET /scopes/:id/sbom-json — download SBOM for the most recent scan
+  // ---------------------------------------------------------------------------
+
+  // M6q: scope-level SBOM download. Returns sbom_json for the scope's
+  // lastScanRunId. Mirrors GET /scans/:id/sbom on the scan page.
+  app.get(
+    "/api/scopes/:id/sbom-json",
+    {
+      preHandler: [app.authenticate],
+    },
+    async (req, reply) => {
+      const orgId = (req as unknown as { user?: { orgId?: string } }).user?.orgId ?? null;
+      const params = req.params as { id: string };
+
+      const scope = await prisma.scanScope.findFirst({
+        where: { id: params.id, orgId: orgId ?? null },
+        select: {
+          id: true,
+          lastScanRunId: true,
+          path: true,
+          repo: { select: { name: true } },
+        },
+      });
+      if (!scope) return reply.code(404).send({ detail: "Scope not found" });
+      if (!scope.lastScanRunId) return reply.code(404).send({ detail: "No successful scan for this scope" });
+
+      const scanRun = await prisma.scanRun.findUnique({
+        where: { id: scope.lastScanRunId },
+        select: { sbomJson: true },
+      });
+      if (!scanRun?.sbomJson) return reply.code(404).send({ detail: "SBOM not yet available for this scan" });
+
+      const repoName = (scope.repo as { name: string }).name;
+      // Build a slug from the scope path: "/" → "root", "/GoWeb" → "GoWeb"
+      const scopeSlug = scope.path === "/" ? "root" : scope.path.replace(/^\//, "").replace(/\//g, "-");
+      const filename = `sbom-${repoName}-${scopeSlug}.cdx.json`;
+      const pretty = JSON.stringify(scanRun.sbomJson, null, 2);
+      return reply
+        .header("Content-Type", "application/json; charset=utf-8")
+        .header("Content-Disposition", `attachment; filename="${filename}"`)
+        .send(pretty);
     },
   );
 

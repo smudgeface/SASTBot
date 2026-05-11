@@ -263,6 +263,20 @@ export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
       };
     }
   }
+
+  // Parse occurrences from JSONB. Shape: {path: string, line: number | null}[].
+  // Default to [] when missing or null (pre-M6q rows will be backfilled).
+  let occurrences: Array<{ path: string; line: number | null }> = [];
+  if (Array.isArray(c.occurrences)) {
+    occurrences = (c.occurrences as unknown[])
+      .filter((o): o is Record<string, unknown> => o !== null && typeof o === "object")
+      .map((o) => ({
+        path: typeof o.path === "string" ? o.path : "",
+        line: typeof o.line === "number" ? o.line : null,
+      }))
+      .filter((o) => o.path !== "");
+  }
+
   return {
     id: c.id,
     scan_run_id: c.scanRunId,
@@ -274,6 +288,9 @@ export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
     component_type: c.componentType,
     scope: c.scope,
     is_dev_only: c.isDevOnly,
+    manifest_file: c.manifestFile ?? null,
+    discovery_method: c.discoveryMethod ?? null,
+    occurrences,
     ...(llmEvidence ? { llm_evidence: llmEvidence } : {}),
   };
 }
