@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useMatch, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowLeft,
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Download,
   ExternalLink,
-  Info,
   Link2,
   Loader2,
   Package,
@@ -48,12 +48,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import {
   Table,
   TableBody,
   TableCell,
@@ -62,6 +56,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDate, formatRelative } from "@/lib/format";
+import { prettyEcosystem } from "@/lib/componentLabels";
 import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
@@ -1246,11 +1241,232 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplaye
 // Components tab
 // ---------------------------------------------------------------------------
 
-function ComponentsTab({ scopeId, sourceUrlTemplate, onDisplayedTotalChange }: { scopeId: string; sourceUrlTemplate?: string | null; onDisplayedTotalChange?: (total: number) => void }) {
+/** Single expandable row in the scope-page ComponentsTab. */
+function ScopeComponentRow({
+  component, scopeId, sourceUrlTemplate, expandedId, scaIssueMap,
+}: {
+  component: import("@/api/types").SbomComponent;
+  scopeId: string;
+  sourceUrlTemplate: string | null;
+  expandedId: string | undefined;
+  scaIssueMap: Map<string, import("@/api/types").ScaIssue>;
+}) {
+  const navigate = useNavigate();
+  const rowRef = useRef<HTMLTableRowElement>(null);
+  const isExpanded = expandedId === component.id;
+
+  // Scroll into view when this row is the routed-to component
+  useEffect(() => {
+    if (isExpanded && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [isExpanded]);
+
+  const toggle = () => {
+    if (isExpanded) {
+      navigate(`/scopes/${scopeId}/components`, { replace: true });
+    } else {
+      navigate(`/scopes/${scopeId}/components/${component.id}`, { replace: true });
+    }
+  };
+
+  const eco = prettyEcosystem(component.ecosystem, component.discovery_method);
+  const occurrences = component.occurrences ?? [];
+  const linkedScaIds = component.linked_issue_ids?.sca ?? [];
+
+  // First license for inline display; rest go in expand panel
+  const firstLicense = component.licenses[0] ?? null;
+  const extraLicenses = component.licenses.length > 1 ? component.licenses.length - 1 : 0;
+
+  return (
+    <>
+      <TableRow
+        ref={rowRef}
+        className="group cursor-pointer hover:bg-muted/40"
+        onClick={toggle}
+      >
+        <TableCell className="w-6 text-muted-foreground">
+          {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </TableCell>
+        <TableCell className="font-mono text-sm">
+          <span className="inline-flex items-center gap-1.5">
+            {component.name}
+            {component.is_dev_only && (
+              <Badge
+                variant="outline"
+                className="text-[9px] px-1 py-0 text-blue-600 border-blue-400"
+                title="cdxgen flagged this npm package as dev-only (lockfile dev: true)"
+              >
+                Dev
+              </Badge>
+            )}
+          </span>
+        </TableCell>
+        <TableCell className="text-sm text-muted-foreground">{component.version ?? "—"}</TableCell>
+        <TableCell className="text-sm text-muted-foreground">
+          {eco.variant === "vendored" ? (
+            <Badge variant="outline" className="text-[9px] px-1 py-0 text-violet-600 border-violet-400">
+              Vendored
+            </Badge>
+          ) : (
+            eco.label
+          )}
+        </TableCell>
+        <TableCell className="text-sm text-muted-foreground">
+          {firstLicense ? (
+            <span>{firstLicense}{extraLicenses > 0 && <span className="text-xs text-muted-foreground ml-1">+{extraLicenses} more</span>}</span>
+          ) : "—"}
+        </TableCell>
+        <TableCell>
+          {linkedScaIds.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {linkedScaIds.slice(0, 3).map((issueId) => {
+                const issue = scaIssueMap.get(issueId);
+                if (!issue) return null;
+                const sev = issue.latest_severity;
+                const sevColor = sev === "critical" ? "text-destructive border-destructive/60"
+                  : sev === "high" ? "text-orange-600 border-orange-400"
+                  : sev === "medium" ? "text-amber-600 border-amber-400"
+                  : sev === "low" ? "text-blue-600 border-blue-400"
+                  : "text-muted-foreground border-border";
+                return (
+                  <Link
+                    key={issueId}
+                    to={`/scopes/${scopeId}/sca/${issueId}`}
+                    onClick={(e) => e.stopPropagation()}
+                    title={issue.latest_cve_id ?? issue.osv_id}
+                  >
+                    <Badge variant="outline" className={`text-[9px] px-1 py-0 cursor-pointer hover:bg-muted ${sevColor}`}>
+                      {issue.latest_cve_id ?? issue.osv_id}
+                    </Badge>
+                  </Link>
+                );
+              })}
+              {linkedScaIds.length > 3 && (
+                <span className="text-[10px] text-muted-foreground">+{linkedScaIds.length - 3}</span>
+              )}
+            </div>
+          )}
+        </TableCell>
+      </TableRow>
+      {isExpanded && (
+        <TableRow className="bg-muted/20 hover:bg-muted/20">
+          <TableCell colSpan={6} className="py-4 px-6">
+            <div className="space-y-4 text-sm">
+              {/* License details */}
+              {component.licenses.length > 0 && (
+                <div>
+                  <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">Licenses</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {component.licenses.map((lic, i) => (
+                      <Badge key={i} variant="secondary" className="text-xs font-normal">{lic}</Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Found in */}
+              {occurrences.length > 0 && (
+                <div>
+                  <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                    Found in ({occurrences.length} location{occurrences.length !== 1 ? "s" : ""})
+                  </p>
+                  <ol className="space-y-0.5 font-mono text-xs">
+                    {occurrences.slice(0, 15).map((occ, i) => (
+                      <li key={i} className="text-muted-foreground">
+                        <FileLink template={sourceUrlTemplate} file={occ.path} line={occ.line ?? undefined}>
+                          {occ.path}{occ.line ? `:${occ.line}` : ""}
+                        </FileLink>
+                      </li>
+                    ))}
+                    {occurrences.length > 15 && (
+                      <li className="text-muted-foreground italic">…and {occurrences.length - 15} more</li>
+                    )}
+                  </ol>
+                </div>
+              )}
+
+              {/* LLM augmentation evidence */}
+              {component.llm_evidence && (
+                <div>
+                  <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">LLM augmentation</p>
+                  <p className="text-xs text-muted-foreground mb-1">{component.llm_evidence.llmReason}</p>
+                  {component.llm_evidence.path && (
+                    <p className="font-mono text-xs text-muted-foreground">
+                      <FileLink template={sourceUrlTemplate} file={component.llm_evidence.path}>
+                        {component.llm_evidence.path}
+                      </FileLink>
+                    </p>
+                  )}
+                  {component.llm_evidence.excerpt && (
+                    <pre className="text-[10px] whitespace-pre-wrap bg-muted rounded px-2 py-1 mt-1 overflow-hidden max-h-32">
+                      {component.llm_evidence.excerpt}
+                    </pre>
+                  )}
+                </div>
+              )}
+
+              {/* Linked SCA issues */}
+              {linkedScaIds.length > 0 && (
+                <div>
+                  <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                    Linked issues ({linkedScaIds.length})
+                  </p>
+                  <div className="space-y-1">
+                    {linkedScaIds.map((issueId) => {
+                      const issue = scaIssueMap.get(issueId);
+                      if (!issue) return null;
+                      const sev = issue.latest_severity;
+                      const sevColor = sev === "critical" ? "text-destructive"
+                        : sev === "high" ? "text-orange-600"
+                        : sev === "medium" ? "text-amber-600"
+                        : sev === "low" ? "text-blue-600"
+                        : "text-muted-foreground";
+                      return (
+                        <div key={issueId} className="flex items-center gap-2">
+                          <span className={`text-xs font-medium w-14 shrink-0 ${sevColor}`}>{sev.toUpperCase()}</span>
+                          <Link
+                            to={`/scopes/${scopeId}/sca/${issueId}`}
+                            className="text-xs hover:underline font-mono"
+                          >
+                            {issue.latest_cve_id ?? issue.osv_id}
+                          </Link>
+                          {issue.latest_summary && (
+                            <span className="text-xs text-muted-foreground truncate">{issue.latest_summary}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  );
+}
+
+function ComponentsTab({
+  scopeId,
+  sourceUrlTemplate,
+  onDisplayedTotalChange,
+  expandedId,
+}: {
+  scopeId: string;
+  sourceUrlTemplate?: string | null;
+  onDisplayedTotalChange?: (total: number) => void;
+  expandedId?: string;
+}) {
   const [page, setPage] = useState(1);
   const [hasFindings, setHasFindings] = useState(false);
   const [excludeDevOnly, setExcludeDevOnly] = useState(true);
   const { data, isLoading } = useScopeComponents(scopeId, { page, page_size: 50, has_findings: hasFindings || undefined, exclude_dev_only: excludeDevOnly });
+
+  // Fetch current SCA issues so we can show linked issue details in expand panels
+  const { data: scaData } = useScopeScaIssues(scopeId, { page: 1, page_size: 500 });
+  const scaIssueMap = new Map((scaData?.items ?? []).map((i) => [i.id, i]));
 
   const totalRuntime = data?.total_runtime ?? 0;
   const totalDev = data?.total_dev ?? 0;
@@ -1301,61 +1517,24 @@ function ComponentsTab({ scopeId, sourceUrlTemplate, onDisplayedTotalChange }: {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-6" />
                   <TableHead>Package</TableHead>
-                  <TableHead>Version</TableHead>
-                  <TableHead>Ecosystem</TableHead>
+                  <TableHead className="w-28">Version</TableHead>
+                  <TableHead className="w-28">Ecosystem</TableHead>
+                  <TableHead className="w-40">License</TableHead>
+                  <TableHead>Issues</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {data.items.map((c) => (
-                  <TableRow key={c.id}>
-                    <TableCell className="font-mono text-sm">
-                      <span className="inline-flex items-center gap-1.5">
-                        {c.name}
-                        {c.is_dev_only && (
-                          <Badge
-                            variant="outline"
-                            className="text-[9px] px-1 py-0 text-blue-600 border-blue-400"
-                            title="cdxgen flagged this npm package as dev-only (lockfile dev: true)"
-                          >
-                            Dev
-                          </Badge>
-                        )}
-                        {c.llm_evidence && (
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="inline-flex cursor-help text-muted-foreground hover:text-foreground">
-                                  <Info className="h-3.5 w-3.5" />
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent className="max-w-sm text-xs space-y-1">
-                                <p className="font-semibold">LLM augmentation</p>
-                                <p>{c.llm_evidence.llmReason}</p>
-                                {c.llm_evidence.path && (
-                                  <p className="text-muted-foreground font-mono">
-                                    <FileLink
-                                      template={sourceUrlTemplate ?? null}
-                                      file={c.llm_evidence.path}
-                                    >
-                                      {c.llm_evidence.path}
-                                    </FileLink>
-                                  </p>
-                                )}
-                                {c.llm_evidence.excerpt && (
-                                  <pre className="text-[10px] whitespace-pre-wrap bg-muted rounded px-1 py-0.5 overflow-hidden max-h-20">
-                                    {c.llm_evidence.excerpt}
-                                  </pre>
-                                )}
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        )}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{c.version ?? "—"}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{c.ecosystem ?? "—"}</TableCell>
-                  </TableRow>
+                  <ScopeComponentRow
+                    key={c.id}
+                    component={c}
+                    scopeId={scopeId}
+                    sourceUrlTemplate={sourceUrlTemplate ?? null}
+                    expandedId={expandedId}
+                    scaIssueMap={scaIssueMap}
+                  />
                 ))}
               </TableBody>
             </Table>
@@ -1466,7 +1645,30 @@ function RecentScansSection({ scopeId }: { scopeId: string }) {
 export default function ScopeDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
-  const highlightIssueId = searchParams.get("issue") ?? undefined;
+  // Legacy: support ?issue= search param for back-compat with existing links
+  const highlightIssueIdLegacy = searchParams.get("issue") ?? undefined;
+  const navigate = useNavigate();
+
+  // M6q: URL-driven tab + row state via route matching
+  const scaMatch = useMatch("/scopes/:id/sca");
+  const scaRowMatch = useMatch("/scopes/:id/sca/:issueId");
+  const sastMatch = useMatch("/scopes/:id/sast");
+  const sastRowMatch = useMatch("/scopes/:id/sast/:issueId");
+  const componentsMatch = useMatch("/scopes/:id/components");
+  const componentsRowMatch = useMatch("/scopes/:id/components/:componentId");
+
+  // Derive active tab from route match. Default to "sca".
+  const activeTab = (
+    scaMatch || scaRowMatch ? "sca"
+    : sastMatch || sastRowMatch ? "sast"
+    : componentsMatch || componentsRowMatch ? "components"
+    : "sca"
+  );
+
+  // Derive expanded row ID from route match or legacy search param
+  const expandedIssueId = scaRowMatch?.params.issueId ?? sastRowMatch?.params.issueId ?? highlightIssueIdLegacy;
+  const expandedComponentId = componentsRowMatch?.params.componentId;
+
   const { data: scope, isLoading, isError } = useScopeDetail(id);
   const { data: appSettings } = useSettings();
   const { data: scans } = useScopeScans(id, 1);
@@ -1476,9 +1678,6 @@ export default function ScopeDetailPage() {
   const isScanning = activeScanStatus === "pending" || activeScanStatus === "running" || triggerScan.isPending;
 
   // Tab pills reflect the *displayed* count after each tab's filters land.
-  // Each tab calls back with `data?.total` from its query; null until first
-  // load so the pill stays hidden during initial fetch instead of flashing
-  // a stale scope-level count.
   const [scaDisplayed, setScaDisplayed] = useState<number | null>(null);
   const [sastDisplayed, setSastDisplayed] = useState<number | null>(null);
   const [componentsDisplayed, setComponentsDisplayed] = useState<number | null>(null);
@@ -1489,6 +1688,15 @@ export default function ScopeDetailPage() {
   const handleTriggerScan = () => {
     triggerScan.mutate(scope.repo_id);
   };
+
+  // Navigate to a tab URL when the Radix Tabs value changes
+  const handleTabChange = (tab: string) => {
+    if (!id) return;
+    navigate(`/scopes/${id}/${tab}`, { replace: true });
+  };
+
+  // SBOM download URL
+  const sbomUrl = id && scope.last_scan_run_id ? `/api/scopes/${id}/sbom-json` : null;
 
   return (
     <div className="space-y-6">
@@ -1516,21 +1724,37 @@ export default function ScopeDetailPage() {
             )}
           </p>
         </div>
-        <Button
-          size="sm"
-          onClick={handleTriggerScan}
-          disabled={isScanning || !llmConfigured}
-          title={!llmConfigured ? "LLM not configured — set up LLM settings before scanning" : undefined}
-        >
-          {isScanning ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Scanning…
-            </>
-          ) : (
-            "Scan now"
+        <div className="flex items-center gap-2">
+          {/* M6q: Scope SBOM download button */}
+          {sbomUrl && (
+            <Button
+              size="sm"
+              variant="outline"
+              asChild
+              title="Download the CycloneDX SBOM for the most recent scan of this scope"
+            >
+              <a href={sbomUrl} download>
+                <Download className="h-3.5 w-3.5" />
+                SBOM
+              </a>
+            </Button>
           )}
-        </Button>
+          <Button
+            size="sm"
+            onClick={handleTriggerScan}
+            disabled={isScanning || !llmConfigured}
+            title={!llmConfigured ? "LLM not configured — set up LLM settings before scanning" : undefined}
+          >
+            {isScanning ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Scanning…
+              </>
+            ) : (
+              "Scan now"
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Live progress banner — only while a scan is running */}
@@ -1549,9 +1773,8 @@ export default function ScopeDetailPage() {
         pending={scope.pending_triage_count}
       />
 
-
-      {/* Main tabs */}
-      <Tabs defaultValue="sca">
+      {/* Main tabs — M6q: value driven by URL route match */}
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList>
           <TabsTrigger value="sca" className="gap-1.5">
             <ShieldAlert className="h-3.5 w-3.5" />SCA Issues
@@ -1583,13 +1806,13 @@ export default function ScopeDetailPage() {
             not on first click. data-[state=inactive]:hidden hides inactive panels
             without unmounting them — eliminates the loading-flash layout shift. */}
         <TabsContent forceMount value="sca" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ScaIssuesTab scopeId={id} highlightIssueId={highlightIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setScaDisplayed} />}
+          {id && <ScaIssuesTab scopeId={id} highlightIssueId={expandedIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setScaDisplayed} />}
         </TabsContent>
         <TabsContent forceMount value="sast" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <SastIssuesTab scopeId={id} highlightIssueId={highlightIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setSastDisplayed} />}
+          {id && <SastIssuesTab scopeId={id} highlightIssueId={expandedIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setSastDisplayed} />}
         </TabsContent>
         <TabsContent forceMount value="components" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ComponentsTab scopeId={id} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setComponentsDisplayed} />}
+          {id && <ComponentsTab scopeId={id} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setComponentsDisplayed} expandedId={expandedComponentId} />}
         </TabsContent>
       </Tabs>
 

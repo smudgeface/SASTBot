@@ -45,6 +45,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
+import { prettyEcosystem } from "@/lib/componentLabels";
 import { useNow } from "@/lib/useNow";
 import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
 import { ContextSnippet } from "@/components/ContextSnippet";
@@ -298,11 +299,154 @@ function SastRow({
 // Components tab
 // ---------------------------------------------------------------------------
 
-function ComponentsTab({ components, findings, isLoading, onDisplayedTotalChange }: {
+/** Single expandable row in the scan-page ComponentsTab. */
+function ScanComponentRow({
+  component, findings, expandedId, sourceUrlTemplate,
+}: {
+  component: SbomComponent;
+  findings: ScanFinding[];
+  expandedId: string | undefined;
+  sourceUrlTemplate: string | null;
+}) {
+  const rowRef = useRef<HTMLTableRowElement>(null);
+  const [expanded, setExpanded] = useState(expandedId === component.id);
+
+  useEffect(() => {
+    if (expandedId === component.id && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [expandedId, component.id]);
+
+  const eco = prettyEcosystem(component.ecosystem, component.discovery_method);
+  const occurrences = component.occurrences ?? [];
+  const firstLicense = component.licenses[0] ?? null;
+  const extraLicenses = component.licenses.length > 1 ? component.licenses.length - 1 : 0;
+
+  return (
+    <>
+      <TableRow
+        ref={rowRef}
+        className="group cursor-pointer hover:bg-muted/40"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <TableCell className="w-6 text-muted-foreground">
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </TableCell>
+        <TableCell className="font-mono text-sm">
+          <span className="inline-flex items-center gap-1.5">
+            {component.name}
+            {component.is_dev_only && (
+              <Badge
+                variant="outline"
+                className="text-[9px] px-1 py-0 text-blue-600 border-blue-400"
+                title="cdxgen flagged this npm package as dev-only (lockfile dev: true)"
+              >
+                Dev
+              </Badge>
+            )}
+          </span>
+        </TableCell>
+        <TableCell className="text-sm text-muted-foreground">{component.version ?? "—"}</TableCell>
+        <TableCell className="text-sm text-muted-foreground">
+          {eco.variant === "vendored" ? (
+            <Badge variant="outline" className="text-[9px] px-1 py-0 text-violet-600 border-violet-400">
+              Vendored
+            </Badge>
+          ) : (
+            eco.label
+          )}
+        </TableCell>
+        <TableCell className="text-sm text-muted-foreground">
+          {firstLicense ? (
+            <span>{firstLicense}{extraLicenses > 0 && <span className="text-xs ml-1">+{extraLicenses}</span>}</span>
+          ) : "—"}
+        </TableCell>
+        <TableCell>
+          {/* Non-clickable static finding chips — scan page is an audit view */}
+          <div className="flex flex-wrap gap-1">
+            {findings.length === 0
+              ? <span className="text-xs text-muted-foreground">—</span>
+              : findings.map((f) => (
+                  <span key={f.id} className={cn("inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase", severityClass(f.severity))}>
+                    {f.finding_type === "cve" ? (f.cve_id ?? f.osv_id) : f.finding_type.toUpperCase()}
+                  </span>
+                ))}
+          </div>
+        </TableCell>
+      </TableRow>
+      {expanded && (
+        <TableRow className="bg-muted/20 hover:bg-muted/20">
+          <TableCell colSpan={6} className="py-4 px-6">
+            <div className="space-y-4 text-sm">
+              {/* License details */}
+              {component.licenses.length > 0 && (
+                <div>
+                  <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">Licenses</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {component.licenses.map((lic, i) => (
+                      <Badge key={i} variant="secondary" className="text-xs font-normal">{lic}</Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Found in */}
+              {occurrences.length > 0 && (
+                <div>
+                  <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                    Found in ({occurrences.length} location{occurrences.length !== 1 ? "s" : ""})
+                  </p>
+                  <ol className="space-y-0.5 font-mono text-xs">
+                    {occurrences.slice(0, 15).map((occ, i) => (
+                      <li key={i} className="text-muted-foreground">
+                        <FileLink template={sourceUrlTemplate} file={occ.path} line={occ.line ?? undefined}>
+                          {occ.path}{occ.line ? `:${occ.line}` : ""}
+                        </FileLink>
+                      </li>
+                    ))}
+                    {occurrences.length > 15 && (
+                      <li className="text-muted-foreground italic">…and {occurrences.length - 15} more</li>
+                    )}
+                  </ol>
+                </div>
+              )}
+
+              {/* LLM augmentation evidence */}
+              {component.llm_evidence && (
+                <div>
+                  <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">LLM augmentation</p>
+                  <p className="text-xs text-muted-foreground mb-1">{component.llm_evidence.llmReason}</p>
+                  {component.llm_evidence.path && (
+                    <p className="font-mono text-xs text-muted-foreground">
+                      <FileLink template={sourceUrlTemplate} file={component.llm_evidence.path}>
+                        {component.llm_evidence.path}
+                      </FileLink>
+                    </p>
+                  )}
+                  {component.llm_evidence.excerpt && (
+                    <pre className="text-[10px] whitespace-pre-wrap bg-muted rounded px-2 py-1 mt-1 overflow-hidden max-h-32">
+                      {component.llm_evidence.excerpt}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  );
+}
+
+function ComponentsTab({
+  components, findings, isLoading, onDisplayedTotalChange, expandedId, sourceUrlTemplate,
+}: {
   components: SbomComponent[];
   findings: ScanFinding[];
   isLoading: boolean;
   onDisplayedTotalChange?: (total: number) => void;
+  expandedId?: string;
+  sourceUrlTemplate?: string | null;
 }) {
   const [onlyWithFindings, setOnlyWithFindings] = useState(false);
   const findingsByComp = new Map<string, ScanFinding[]>();
@@ -337,9 +481,11 @@ function ComponentsTab({ components, findings, isLoading, onDisplayedTotalChange
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-6" />
               <TableHead>Package</TableHead>
-              <TableHead>Version</TableHead>
-              <TableHead>Ecosystem</TableHead>
+              <TableHead className="w-28">Version</TableHead>
+              <TableHead className="w-28">Ecosystem</TableHead>
+              <TableHead className="w-40">License</TableHead>
               <TableHead>Findings</TableHead>
             </TableRow>
           </TableHeader>
@@ -349,33 +495,13 @@ function ComponentsTab({ components, findings, isLoading, onDisplayedTotalChange
                 (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
               );
               return (
-                <TableRow key={c.id}>
-                  <TableCell className="font-mono text-sm">
-                    <span className="inline-flex items-center gap-1.5">
-                      {c.name}
-                      {c.is_dev_only && (
-                        <Badge
-                          variant="outline"
-                          className="text-[9px] px-1 py-0 text-blue-600 border-blue-400"
-                          title="cdxgen flagged this npm package as dev-only (lockfile dev: true)"
-                        >
-                          Dev
-                        </Badge>
-                      )}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{c.version ?? "—"}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground uppercase">{c.ecosystem ?? "—"}</TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {cFindings.length === 0 ? <span className="text-xs text-muted-foreground">—</span> : cFindings.map((f) => (
-                        <span key={f.id} className={cn("inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-semibold uppercase", severityClass(f.severity))}>
-                          {f.finding_type === "cve" ? (f.cve_id ?? f.osv_id) : f.finding_type.toUpperCase()}
-                        </span>
-                      ))}
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <ScanComponentRow
+                  key={c.id}
+                  component={c}
+                  findings={cFindings}
+                  expandedId={expandedId}
+                  sourceUrlTemplate={sourceUrlTemplate ?? null}
+                />
               );
             })}
           </TableBody>
@@ -724,7 +850,7 @@ export default function ScanDetailPage() {
             </TabsContent>
 
             <TabsContent value="components" className="mt-4">
-              <ComponentsTab components={components.data ?? []} findings={findings.data ?? []} isLoading={components.isLoading} onDisplayedTotalChange={setComponentsDisplayed} />
+              <ComponentsTab components={components.data ?? []} findings={findings.data ?? []} isLoading={components.isLoading} onDisplayedTotalChange={setComponentsDisplayed} sourceUrlTemplate={sourceUrlTemplate} />
             </TabsContent>
           </Tabs>
         )}

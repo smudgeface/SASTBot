@@ -316,6 +316,12 @@ export interface LlmEvidence {
   llmReason: string;
 }
 
+/** M6q: single location where a component is used. */
+export interface ComponentOccurrence {
+  path: string;
+  line: number | null;
+}
+
 export interface SbomComponent {
   id: string;
   scan_run_id: string;
@@ -329,6 +335,12 @@ export interface SbomComponent {
   /** True iff cdxgen 12.2+ flagged this npm package as dev-only (lockfile dev: true). */
   is_dev_only: boolean;
   manifest_file?: string | null;
+  /** How the component was discovered: "manifest" | "llm_augmentation". */
+  discovery_method?: string | null;
+  /** M6q: full list of locations where this component is used. */
+  occurrences?: ComponentOccurrence[];
+  /** M6q (scope endpoint only): linked SCA/SAST issue IDs. */
+  linked_issue_ids?: { sca: string[]; sast: string[] };
   /** M6p Stage 2: evidence from LLM augmentation, set for added/kept-with-rationale components. */
   llm_evidence?: LlmEvidence | null;
 }

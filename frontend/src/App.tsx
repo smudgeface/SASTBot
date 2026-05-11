@@ -31,9 +31,28 @@ export default function App() {
         <Route index element={<Navigate to="/scopes" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/scopes" element={<ScopesPage />} />
+        {/* M6q: nested routes for scope detail — tab + row state driven by URL.
+            /scopes/:id                       → SCA tab, no row expanded
+            /scopes/:id/sca                   → SCA tab
+            /scopes/:id/sca/:issueId          → SCA tab, row expanded
+            /scopes/:id/sast                  → SAST tab
+            /scopes/:id/sast/:issueId         → SAST tab, row expanded
+            /scopes/:id/components            → Components tab
+            /scopes/:id/components/:componentId → Components tab, row expanded */}
         <Route path="/scopes/:id" element={<ScopeDetailPage />} />
+        <Route path="/scopes/:id/sca" element={<ScopeDetailPage />} />
+        <Route path="/scopes/:id/sca/:issueId" element={<ScopeDetailPage />} />
+        <Route path="/scopes/:id/sast" element={<ScopeDetailPage />} />
+        <Route path="/scopes/:id/sast/:issueId" element={<ScopeDetailPage />} />
+        <Route path="/scopes/:id/components" element={<ScopeDetailPage />} />
+        <Route path="/scopes/:id/components/:componentId" element={<ScopeDetailPage />} />
         <Route path="/scans" element={<ScansPage />} />
+        {/* M6q: nested routes for scan detail */}
         <Route path="/scans/:id" element={<ScanDetailPage />} />
+        <Route path="/scans/:id/findings" element={<ScanDetailPage />} />
+        <Route path="/scans/:id/sast" element={<ScanDetailPage />} />
+        <Route path="/scans/:id/components" element={<ScanDetailPage />} />
+        <Route path="/scans/:id/components/:componentId" element={<ScanDetailPage />} />
         <Route path="/scans/:id/sbom" element={<SbomViewerPage />} />
         <Route path="/scans/:id/sast-sarif" element={<SastSarifViewerPage />} />
         <Route
