@@ -280,6 +280,10 @@ export interface paths {
                             llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             /** @enum {string} */
                             llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            first_party_namespaces: string[];
+                            vendored_dirs: string[];
+                            /** @enum {string} */
+                            llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             last_cloned_at: string | null;
                             created_at: string;
                         }[];
@@ -361,6 +365,21 @@ export interface paths {
                          * @enum {string}
                          */
                         llm_recheck_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        /** @default [] */
+                        first_party_namespaces?: string[];
+                        /**
+                         * @default [
+                         *       "extern/",
+                         *       "third-party/",
+                         *       "vendor/"
+                         *     ]
+                         */
+                        vendored_dirs?: string[];
+                        /**
+                         * @default medium
+                         * @enum {string}
+                         */
+                        llm_sbom_effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -437,6 +456,10 @@ export interface paths {
                             llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             /** @enum {string} */
                             llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            first_party_namespaces: string[];
+                            vendored_dirs: string[];
+                            /** @enum {string} */
+                            llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -533,6 +556,10 @@ export interface paths {
                             llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             /** @enum {string} */
                             llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            first_party_namespaces: string[];
+                            vendored_dirs: string[];
+                            /** @enum {string} */
+                            llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -604,6 +631,10 @@ export interface paths {
                         llm_sast_effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         /** @enum {string} */
                         llm_recheck_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        first_party_namespaces?: string[];
+                        vendored_dirs?: string[];
+                        /** @enum {string} */
+                        llm_sbom_effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -680,6 +711,10 @@ export interface paths {
                             llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             /** @enum {string} */
                             llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            first_party_namespaces: string[];
+                            vendored_dirs: string[];
+                            /** @enum {string} */
+                            llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -848,6 +883,10 @@ export interface paths {
                             llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             /** @enum {string} */
                             llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            first_party_namespaces: string[];
+                            vendored_dirs: string[];
+                            /** @enum {string} */
+                            llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             last_cloned_at: string | null;
                             created_at: string;
                         };

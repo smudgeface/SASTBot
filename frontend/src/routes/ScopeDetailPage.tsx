@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ChevronUp,
   ExternalLink,
+  Info,
   Link2,
   Loader2,
   Package,
@@ -46,6 +47,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -1239,7 +1246,7 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplaye
 // Components tab
 // ---------------------------------------------------------------------------
 
-function ComponentsTab({ scopeId, onDisplayedTotalChange }: { scopeId: string; onDisplayedTotalChange?: (total: number) => void }) {
+function ComponentsTab({ scopeId, sourceUrlTemplate, onDisplayedTotalChange }: { scopeId: string; sourceUrlTemplate?: string | null; onDisplayedTotalChange?: (total: number) => void }) {
   const [page, setPage] = useState(1);
   const [hasFindings, setHasFindings] = useState(false);
   const [excludeDevOnly, setExcludeDevOnly] = useState(true);
@@ -1313,6 +1320,36 @@ function ComponentsTab({ scopeId, onDisplayedTotalChange }: { scopeId: string; o
                           >
                             Dev
                           </Badge>
+                        )}
+                        {c.llm_evidence && (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-flex cursor-help text-muted-foreground hover:text-foreground">
+                                  <Info className="h-3.5 w-3.5" />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-sm text-xs space-y-1">
+                                <p className="font-semibold">LLM augmentation</p>
+                                <p>{c.llm_evidence.llmReason}</p>
+                                {c.llm_evidence.path && (
+                                  <p className="text-muted-foreground font-mono">
+                                    <FileLink
+                                      template={sourceUrlTemplate ?? null}
+                                      file={c.llm_evidence.path}
+                                    >
+                                      {c.llm_evidence.path}
+                                    </FileLink>
+                                  </p>
+                                )}
+                                {c.llm_evidence.excerpt && (
+                                  <pre className="text-[10px] whitespace-pre-wrap bg-muted rounded px-1 py-0.5 overflow-hidden max-h-20">
+                                    {c.llm_evidence.excerpt}
+                                  </pre>
+                                )}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
                         )}
                       </span>
                     </TableCell>
@@ -1552,7 +1589,7 @@ export default function ScopeDetailPage() {
           {id && <SastIssuesTab scopeId={id} highlightIssueId={highlightIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setSastDisplayed} />}
         </TabsContent>
         <TabsContent forceMount value="components" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ComponentsTab scopeId={id} onDisplayedTotalChange={setComponentsDisplayed} />}
+          {id && <ComponentsTab scopeId={id} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setComponentsDisplayed} />}
         </TabsContent>
       </Tabs>
 

@@ -619,3 +619,82 @@ export async function persistComponents(
     where: { scanRunId },
   });
 }
+
+// ---------------------------------------------------------------------------
+// M6p Stage 2 helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Run Stage-1 post-processing on a CycloneDX document and return the cleaned
+ * CdxComponent list WITHOUT persisting to the database. Used by the worker so
+ * it can pass the cleaned list to the LLM augmentation pass before writing to
+ * the DB.
+ */
+export function extractCleanedComponents(doc: CycloneDxDocument): CdxComponent[] {
+  return postProcessComponents(doc.components ?? []);
+}
+
+/**
+ * Persist a pre-augmented component list to the database.
+ *
+ * This is an alternative to `persistComponents` for when the caller has
+ * already run Stage 1 and Stage 2 (LLM augmentation). Evidence from the LLM
+ * pass is stored in the `llmEvidence` column. The raw SBOM and componentCount
+ * are written to the ScanRun row by the caller before invoking this.
+ *
+ * `evidenceMap` is keyed by canonical component name (output of
+ * canonicalPackageName). Components not in the map get null llmEvidence.
+ */
+export async function persistAugmentedComponents(
+  scanRunId: string,
+  components: CdxComponent[],
+  evidenceMap: Map<string, { path: string; excerpt: string | null; llmReason: string }>,
+  client: Tx,
+  scopeDir = "",
+  scopePath = "/",
+): Promise<SbomComponent[]> {
+  const unique = new Map<string, CdxComponent>();
+
+  for (const c of components) {
+    // LLM-added components may not have a purl; synthesise one so dedup works.
+    const purl = c.purl ?? `pkg:generic/${encodeURIComponent(c.name ?? "unknown")}${c.version ? `@${encodeURIComponent(c.version)}` : ""}`;
+    if (!unique.has(purl)) unique.set(purl, { ...c, purl });
+  }
+
+  if (unique.size === 0) {
+    logger.warn({ scanRunId }, "[sbomService] augmented component list is empty");
+    return [];
+  }
+
+  await (client as PrismaClient).sbomComponent.createMany({
+    data: Array.from(unique.values()).map((c) => {
+      const ecosystem = extractEcosystem(c.purl);
+      const canonicalName = canonicalPackageName(c, ecosystem);
+      const evidence = evidenceMap.get(canonicalName) ?? null;
+      return {
+        scanRunId,
+        name: canonicalName,
+        version: c.version ?? null,
+        purl: c.purl!,
+        ecosystem,
+        licenses: extractLicenses(c.licenses),
+        componentType: c.type ?? "library",
+        scope: c.scope ?? null,
+        isDevOnly: extractIsDevOnly(c),
+        manifestFile: (() => {
+          const sr = extractManifestFile(c, scopeDir);
+          return sr ? toRepoRelative(scopePath, sr) : null;
+        })(),
+        // M6p Stage 2: discoveryMethod is "llm_augmentation" for LLM-added
+        // components, "manifest" for cdxgen-sourced ones that survived.
+        discoveryMethod: (c as CdxComponent & { discoveryMethod?: string }).discoveryMethod ?? "manifest",
+        llmEvidence: evidence ? (evidence as unknown as Prisma.InputJsonValue) : undefined,
+      };
+    }),
+    skipDuplicates: true,
+  });
+
+  return (client as PrismaClient).sbomComponent.findMany({
+    where: { scanRunId },
+  });
+}

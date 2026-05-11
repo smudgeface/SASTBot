@@ -141,6 +141,12 @@ export interface Repo {
   reachability_include_dev_deps: boolean;
   llm_sast_effort: LlmEffort;
   llm_recheck_effort: LlmEffort;
+  /** M6p Stage 2: first-party namespace prefixes the LLM drops. */
+  first_party_namespaces: string[];
+  /** M6p Stage 2: vendored directories the LLM inspects for missed libs. */
+  vendored_dirs: string[];
+  /** M6p Stage 2: effort level for the SBOM augmentation LLM pass. */
+  llm_sbom_effort: LlmEffort;
   source_url_template: string | null;
   last_cloned_at: string | null;
   created_at?: string;
@@ -160,6 +166,12 @@ export interface RepoUpsertInput {
   reachability_include_dev_deps?: boolean;
   llm_sast_effort?: LlmEffort;
   llm_recheck_effort?: LlmEffort;
+  /** M6p Stage 2: first-party namespace prefixes. */
+  first_party_namespaces?: string[];
+  /** M6p Stage 2: vendored directories to scan. */
+  vendored_dirs?: string[];
+  /** M6p Stage 2: effort for the SBOM augmentation pass. */
+  llm_sbom_effort?: LlmEffort;
   source_url_template?: string | null;
   /** Existing credential to link. Ignored if `credential` (inline) is supplied. */
   credential_id?: string | null;
@@ -251,6 +263,7 @@ export interface Scan {
 export type ScanPhase =
   | "cloning"
   | "cdxgen"
+  | "llm_sbom"
   | "osv"
   | "eol"
   | "llm_detection"
@@ -261,6 +274,7 @@ export type ScanPhase =
 export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
   cloning: "Cloning repo",
   cdxgen: "Building SBOM",
+  llm_sbom: "LLM SBOM augmentation",
   osv: "Querying OSV.dev",
   eol: "Checking EOL / deprecation",
   llm_detection: "LLM SAST detection",
@@ -275,6 +289,7 @@ export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
 export const SCAN_PHASE_UNITS: Partial<Record<ScanPhase, string>> = {
   osv: "components",
   eol: "components",
+  llm_sbom: "tokens",
   llm_detection: "tokens",
   llm_recheck: "tokens",
   sca_summaries: "summaries",
@@ -284,7 +299,7 @@ export const SCAN_PHASE_UNITS: Partial<Record<ScanPhase, string>> = {
 // advances toward the cap as a "still moving" signal but isn't expected to
 // reach it. Render with `(max)` suffix and no percentage / bar so the UI
 // doesn't suggest filling to 100% is the objective.
-export const SCAN_PHASE_CAPS = new Set<ScanPhase>(["llm_detection", "llm_recheck"]);
+export const SCAN_PHASE_CAPS = new Set<ScanPhase>(["llm_sbom", "llm_detection", "llm_recheck"]);
 
 // ---------------------------------------------------------------------------
 // SCA — SBOM components and findings (M3)
@@ -292,6 +307,14 @@ export const SCAN_PHASE_CAPS = new Set<ScanPhase>(["llm_detection", "llm_recheck
 
 export type FindingSeverity = "critical" | "high" | "medium" | "low" | "unknown";
 export type FindingType = "cve" | "eol" | "deprecated";
+
+export interface LlmEvidence {
+  /** Repo-relative file path where the LLM found the evidence. */
+  path: string;
+  excerpt: string | null;
+  /** One-sentence rationale from the LLM. */
+  llmReason: string;
+}
 
 export interface SbomComponent {
   id: string;
@@ -306,6 +329,8 @@ export interface SbomComponent {
   /** True iff cdxgen 12.2+ flagged this npm package as dev-only (lockfile dev: true). */
   is_dev_only: boolean;
   manifest_file?: string | null;
+  /** M6p Stage 2: evidence from LLM augmentation, set for added/kept-with-rationale components. */
+  llm_evidence?: LlmEvidence | null;
 }
 
 export interface ScanFinding {

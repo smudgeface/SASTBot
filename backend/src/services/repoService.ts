@@ -97,6 +97,9 @@ export async function createRepo(
           reachabilityIncludeDevDeps: input.reachability_include_dev_deps ?? false,
           llmSastEffort: input.llm_sast_effort ?? "xhigh",
           llmRecheckEffort: input.llm_recheck_effort ?? "medium",
+          firstPartyNamespaces: input.first_party_namespaces ?? [],
+          vendoredDirs: input.vendored_dirs ?? ["extern/", "third-party/", "vendor/"],
+          llmSbomEffort: input.llm_sbom_effort ?? "medium",
         },
       });
 
@@ -164,6 +167,9 @@ export async function updateRepo(
       if (input.reachability_include_dev_deps !== undefined) data.reachabilityIncludeDevDeps = input.reachability_include_dev_deps;
       if (input.llm_sast_effort !== undefined) data.llmSastEffort = input.llm_sast_effort;
       if (input.llm_recheck_effort !== undefined) data.llmRecheckEffort = input.llm_recheck_effort;
+      if (input.first_party_namespaces !== undefined) data.firstPartyNamespaces = input.first_party_namespaces;
+      if (input.vendored_dirs !== undefined) data.vendoredDirs = input.vendored_dirs;
+      if (input.llm_sbom_effort !== undefined) data.llmSbomEffort = input.llm_sbom_effort;
 
       const updated = await tx.repo.update({ where: { id }, data });
 

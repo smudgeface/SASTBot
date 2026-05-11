@@ -169,6 +169,9 @@ export function repoToOut(repo: Repo): RepoOut {
     reachability_include_dev_deps: repo.reachabilityIncludeDevDeps,
     llm_sast_effort: repo.llmSastEffort as "low" | "medium" | "high" | "xhigh" | "max",
     llm_recheck_effort: repo.llmRecheckEffort as "low" | "medium" | "high" | "xhigh" | "max",
+    first_party_namespaces: repo.firstPartyNamespaces,
+    vendored_dirs: repo.vendoredDirs,
+    llm_sbom_effort: repo.llmSbomEffort as "low" | "medium" | "high" | "xhigh" | "max",
     last_cloned_at: repo.lastClonedAt ? repo.lastClonedAt.toISOString() : null,
     created_at: repo.createdAt.toISOString(),
   };
@@ -248,6 +251,18 @@ export function scanScopeToOut(s: ScanScope): ScanScopeOut {
 }
 
 export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
+  // Parse llmEvidence from JSONB if present.
+  let llmEvidence: { path: string; excerpt: string | null; llmReason: string } | null = null;
+  if (c.llmEvidence && typeof c.llmEvidence === "object") {
+    const ev = c.llmEvidence as Record<string, unknown>;
+    if (typeof ev.llmReason === "string") {
+      llmEvidence = {
+        path: typeof ev.path === "string" ? ev.path : "",
+        excerpt: typeof ev.excerpt === "string" ? ev.excerpt : null,
+        llmReason: ev.llmReason,
+      };
+    }
+  }
   return {
     id: c.id,
     scan_run_id: c.scanRunId,
@@ -259,6 +274,7 @@ export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
     component_type: c.componentType,
     scope: c.scope,
     is_dev_only: c.isDevOnly,
+    ...(llmEvidence ? { llm_evidence: llmEvidence } : {}),
   };
 }
 

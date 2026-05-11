@@ -9,7 +9,12 @@ import { prisma } from "./db.js";
 import { closeRedis, getRedis } from "./queue/connection.js";
 import { SCAN_QUEUE_NAME, type ScanJobData } from "./queue/scanQueue.js";
 import { cloneOrRefresh, RemoteUnreachableError } from "./services/repoCache.js";
-import { persistComponents, runCdxgen } from "./services/sbomService.js";
+import {
+  extractCleanedComponents,
+  persistAugmentedComponents,
+  persistComponents,
+  runCdxgen,
+} from "./services/sbomService.js";
 import { queryAndPersistFindings, backfillCvssScores, backfillManifestOrigin } from "./services/osvService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { backfillReachability } from "./services/reachabilityService.js";
@@ -25,6 +30,11 @@ import {
   runRecheck,
   type ScaHintInput,
 } from "./services/llmSastService.js";
+import {
+  applySbomAugmentation,
+  cleanupSbomTmp,
+  runSbomAugmentation,
+} from "./services/llmSbomService.js";
 import type { ScanWarning } from "./schemas.js";
 import { Prisma } from "@prisma/client";
 
@@ -73,6 +83,7 @@ async function hasErrorWarnings(scanRunId: string): Promise<boolean> {
 type ScanPhase =
   | "cloning"
   | "cdxgen"
+  | "llm_sbom"
   | "osv"
   | "eol"
   | "llm_detection"
@@ -941,20 +952,114 @@ const worker = new Worker<ScanJobData>(
         }
       }
 
-      // ── Step 3: persist components + raw SBOM ───────────────────────────
+      // ── Step 3: Stage-1 post-processing ─────────────────────────────────
+      // Extract cleaned components without persisting yet — Stage 2 (LLM
+      // augmentation) may add or remove entries before the DB write.
+      const cleanedComponents = extractCleanedComponents(sbomDoc);
+      log.info({ cleaned: cleanedComponents.length }, "[worker] Stage-1 post-processing done");
+
+      // ── Step 3.5: LLM SBOM augmentation (Stage 2) ───────────────────────
+      // Runs between cdxgen+Stage-1 and OSV. On failure, emits an error
+      // warning and falls back to the Stage-1-only component list so the scan
+      // can still complete. A failed augmentation never aborts the scan.
+      let finalComponents = cleanedComponents;
+      let sbomEvidenceMap = new Map<string, { path: string; excerpt: string | null; llmReason: string }>();
+      const sbomTokenBudget = 200_000;
+
+      try {
+        await setPhase(scanRunId, "llm_sbom", {
+          done: 0,
+          total: sbomTokenBudget,
+          label: "LLM SBOM augmentation",
+        });
+        const augResult = await runSbomAugmentation({
+          scanRunId,
+          scopeDir: scanDir,
+          scopePath,
+          components: cleanedComponents,
+          firstPartyNamespaces: repo.firstPartyNamespaces ?? [],
+          vendoredDirs:
+            repo.vendoredDirs?.length > 0
+              ? repo.vendoredDirs
+              : ["extern/", "third-party/", "vendor/"],
+          tokenBudget: sbomTokenBudget,
+          effortLevel: repo.llmSbomEffort ?? "medium",
+          orgId: run.orgId,
+          onProgress: (usage) => {
+            void setPhase(scanRunId, "llm_sbom", {
+              done: usage.inputTokens + usage.outputTokens,
+              total: sbomTokenBudget,
+              label: "LLM SBOM augmentation",
+            });
+          },
+        });
+
+        if (augResult.parseErrors.length > 0) {
+          log.warn(
+            { count: augResult.parseErrors.length, samples: augResult.parseErrors.slice(0, 3) },
+            "[worker] LLM SBOM augmentation parse errors",
+          );
+          await appendWarning(scanRunId, {
+            code: "llm_sbom_parse_errors",
+            severity: "info",
+            message: `LLM SBOM augmentation emitted ${augResult.parseErrors.length} unparseable records. Partial results applied.`,
+          });
+        }
+
+        if (augResult.exitCode !== 0 && augResult.records.length === 0) {
+          throw new Error(`claude -p exited ${augResult.exitCode} with no records`);
+        }
+
+        const applied = applySbomAugmentation(cleanedComponents, augResult);
+        finalComponents = applied.components;
+        sbomEvidenceMap = applied.evidenceMap;
+
+        log.info(
+          {
+            before: cleanedComponents.length,
+            after: finalComponents.length,
+            keeps: augResult.records.filter((r) => r.type === "keep").length,
+            drops: augResult.records.filter((r) => r.type === "drop").length,
+            adds: augResult.records.filter((r) => r.type === "add").length,
+            evidenceEntries: sbomEvidenceMap.size,
+          },
+          "[worker] LLM SBOM augmentation applied",
+        );
+      } catch (err) {
+        log.error({ err: (err as Error).message }, "[worker] LLM SBOM augmentation failed — using Stage-1 output");
+        await appendWarning(scanRunId, {
+          code: "llm_sbom_augmentation_failed",
+          severity: "error",
+          message: `LLM SBOM augmentation failed: ${(err as Error).message}. Using Stage-1-only output.`,
+        });
+        // Fall back to Stage-1 output; evidence map stays empty.
+        finalComponents = cleanedComponents;
+        sbomEvidenceMap = new Map();
+      } finally {
+        await cleanupSbomTmp(scanRunId);
+      }
+
+      // ── Step 3.9: persist augmented components + raw SBOM ────────────────
       const components = await prisma.$transaction(async (tx) => {
-        // Store the raw SBOM and the component count on the run row now so
-        // partial failures still leave the SBOM downloadable.
+        // Store the raw SBOM and the augmented component count on the run row
+        // now so partial failures still leave the SBOM downloadable.
         await tx.scanRun.update({
           where: { id: scanRunId },
           data: {
             sbomJson: sbomDoc as object,
-            componentCount,
+            componentCount: finalComponents.length,
           },
         });
-        return persistComponents(scanRunId, sbomDoc, tx, scanDir, scopePath);
+        return persistAugmentedComponents(
+          scanRunId,
+          finalComponents,
+          sbomEvidenceMap,
+          tx,
+          scanDir,
+          scopePath,
+        );
       });
-      log.info({ inserted: components.length }, "[worker] components persisted");
+      log.info({ inserted: components.length }, "[worker] augmented components persisted");
 
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");

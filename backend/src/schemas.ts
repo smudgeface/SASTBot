@@ -214,6 +214,13 @@ export const RepoCreateSchema = z.object({
    *  Opus-only — Sonnet silently degrades it. */
   llm_sast_effort: LlmEffortSchema.default("xhigh"),
   llm_recheck_effort: LlmEffortSchema.default("medium"),
+  /** M6p Stage 2: operator-curated name prefixes the LLM treats as first-party
+   *  (e.g. ["GoSdkNet","kApiNet","LMI"]). Matched case-insensitively as prefixes. */
+  first_party_namespaces: z.array(z.string()).default([]),
+  /** M6p Stage 2: directories the LLM scans for vendored libs cdxgen missed. */
+  vendored_dirs: z.array(z.string()).default(["extern/", "third-party/", "vendor/"]),
+  /** M6p Stage 2: effort level for the SBOM augmentation pass. */
+  llm_sbom_effort: LlmEffortSchema.default("medium"),
   credential_id: UuidSchema.nullable().optional(),
   // NOTE: the contract names the inline field `credential`, NOT `new_credential`.
   credential: CredentialCreateSchema.nullable().optional(),
@@ -236,6 +243,9 @@ export const RepoUpdateSchema = z.object({
   reachability_include_dev_deps: z.boolean().optional(),
   llm_sast_effort: LlmEffortSchema.optional(),
   llm_recheck_effort: LlmEffortSchema.optional(),
+  first_party_namespaces: z.array(z.string()).optional(),
+  vendored_dirs: z.array(z.string()).optional(),
+  llm_sbom_effort: LlmEffortSchema.optional(),
   credential_id: UuidSchema.nullable().optional(),
   credential: CredentialCreateSchema.nullable().optional(),
 });
@@ -260,6 +270,12 @@ export const RepoOutSchema = z.object({
   reachability_include_dev_deps: z.boolean(),
   llm_sast_effort: LlmEffortSchema,
   llm_recheck_effort: LlmEffortSchema,
+  /** M6p Stage 2: first-party namespace prefixes. */
+  first_party_namespaces: z.array(z.string()),
+  /** M6p Stage 2: vendored-code directories the LLM inspects. */
+  vendored_dirs: z.array(z.string()),
+  /** M6p Stage 2: effort level for the SBOM augmentation pass. */
+  llm_sbom_effort: LlmEffortSchema,
   /** Set whenever the worker finishes a clone/fetch for this repo. Null
    *  means no local cache exists — "Purge cache" should be disabled. */
   last_cloned_at: IsoDateTimeSchema.nullable(),
@@ -390,6 +406,12 @@ export type ScanScopeOut = z.infer<typeof ScanScopeOutSchema>;
 export const SeveritySchema = z.enum(["critical", "high", "medium", "low", "unknown"]);
 export type Severity = z.infer<typeof SeveritySchema>;
 
+const LlmEvidenceSchema = z.object({
+  path: z.string(),
+  excerpt: z.string().nullable(),
+  llmReason: z.string(),
+}).nullable();
+
 export const SbomComponentOutSchema = z.object({
   id: UuidSchema,
   scan_run_id: UuidSchema,
@@ -402,6 +424,8 @@ export const SbomComponentOutSchema = z.object({
   scope: z.string().nullable(),
   /** True iff cdxgen 12.2+ found `dev: true` in the npm lockfile entry. */
   is_dev_only: z.boolean(),
+  /** M6p Stage 2: evidence from LLM augmentation pass for added/kept-with-rationale components. */
+  llm_evidence: LlmEvidenceSchema.optional(),
 });
 export type SbomComponentOut = z.infer<typeof SbomComponentOutSchema>;
 

@@ -145,6 +145,20 @@ model Repo {
   // Caveat: cdxgen issue #3927 — `devOptional: true` lockfile entries miss
   // the dev marker, so a small fraction of dev-only deps still slip through.
   reachabilityIncludeDevDeps Boolean @default(false) @map("reachability_include_dev_deps")
+  // M6p Stage 2: LLM SBOM augmentation pass.
+  // firstPartyNamespaces — operator-curated name prefixes the LLM treats as
+  //   first-party (e.g. ["GoSdkNet", "kApiNet", "LMI"]). Matched as string
+  //   prefixes (case-insensitive) against component names. Default empty = no
+  //   first-party filtering. Set per-repo since "first-party" is org-specific.
+  firstPartyNamespaces String[] @default([]) @map("first_party_namespaces")
+  // vendoredDirs — directories the LLM scans for vendored third-party C/C++
+  //   (or other) libraries that cdxgen missed. Default covers the conventional
+  //   locations. Override per repo when the tree uses a different layout.
+  vendoredDirs  String[] @default(["extern/", "third-party/", "vendor/"]) @map("vendored_dirs")
+  // llmSbomEffort — effort level for `claude -p --effort` in the augmentation
+  //   pass. Default medium because it's classification work, not open-ended
+  //   vulnerability search. Mirrors llmSastEffort/llmRecheckEffort from M6m.
+  llmSbomEffort String  @default("medium") @map("llm_sbom_effort")
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
@@ -251,6 +265,10 @@ model SbomComponent {
   // pass identified a checked-in vendored library by directory + content.
   discoveryMethod String? @default("manifest") @map("discovery_method")
   evidenceLine    Int?    @map("evidence_line")
+  // M6p Stage 2: set by the LLM augmentation pass on components it added or
+  // kept with a rationale. Shape: {path, excerpt, llmReason}. Stored so the
+  // Components tab can show a tooltip explaining why the component is there.
+  llmEvidence     Json?   @map("llm_evidence")
 
   scanRun  ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
   findings ScanFinding[]

@@ -392,6 +392,13 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   const [reachabilityIncludeDevDeps, setReachabilityIncludeDevDeps] = useState<boolean>(repo?.reachability_include_dev_deps ?? true);
   const [llmSastEffort, setLlmSastEffort] = useState<LlmEffort>(repo?.llm_sast_effort ?? "xhigh");
   const [llmRecheckEffort, setLlmRecheckEffort] = useState<LlmEffort>(repo?.llm_recheck_effort ?? "medium");
+  const [llmSbomEffort, setLlmSbomEffort] = useState<LlmEffort>(repo?.llm_sbom_effort ?? "medium");
+  const [firstPartyNamespacesText, setFirstPartyNamespacesText] = useState<string>(
+    (repo?.first_party_namespaces ?? []).join(", "),
+  );
+  const [vendoredDirsText, setVendoredDirsText] = useState<string>(
+    (repo?.vendored_dirs ?? ["extern/", "third-party/", "vendor/"]).join(", "),
+  );
   const [sourceUrlTemplate, setSourceUrlTemplate] = useState<string>(repo?.source_url_template ?? "");
 
   const [credentialChoice, setCredentialChoice] = useState<CredentialChoice>(
@@ -428,6 +435,15 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       .map((p) => p.trim())
       .filter(Boolean);
 
+    const first_party_namespaces = firstPartyNamespacesText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const vendored_dirs = vendoredDirsText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
     const payload: RepoUpsertInput = {
       name: name.trim(),
       url: url.trim(),
@@ -441,6 +457,9 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       reachability_include_dev_deps: reachabilityIncludeDevDeps,
       llm_sast_effort: llmSastEffort,
       llm_recheck_effort: llmRecheckEffort,
+      first_party_namespaces,
+      vendored_dirs,
+      llm_sbom_effort: llmSbomEffort,
       source_url_template: sourceUrlTemplate.trim() || null,
     };
 
@@ -693,7 +712,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
 
           <div className="space-y-1.5">
             <Label>LLM effort</Label>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               <div className="space-y-1">
                 <Label htmlFor="llm-sast-effort" className="text-xs text-muted-foreground">
                   SAST detection
@@ -728,12 +747,59 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                   <option value="max">max</option>
                 </select>
               </div>
+              <div className="space-y-1">
+                <Label htmlFor="llm-sbom-effort" className="text-xs text-muted-foreground">
+                  SBOM augmentation
+                </Label>
+                <select
+                  id="llm-sbom-effort"
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={llmSbomEffort}
+                  onChange={(e) => setLlmSbomEffort(e.target.value as LlmEffort)}
+                >
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="xhigh">xhigh (Opus only)</option>
+                  <option value="max">max</option>
+                </select>
+              </div>
             </div>
             <p className="text-xs text-muted-foreground">
               Passed to <code className="font-mono">claude -p --effort</code>. Detection is
-              open-ended search and benefits from <code>xhigh</code> on Opus 4.7; recheck is
-              narrow verification and is fine at <code>medium</code>. <code>xhigh</code> is
-              Opus-only — Sonnet silently degrades it.
+              open-ended search and benefits from <code>xhigh</code> on Opus 4.7; recheck and
+              SBOM augmentation are classification/verification work and are fine at{" "}
+              <code>medium</code>. <code>xhigh</code> is Opus-only — Sonnet silently degrades it.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="first-party-namespaces">First-party namespaces</Label>
+            <Input
+              id="first-party-namespaces"
+              value={firstPartyNamespacesText}
+              onChange={(e) => setFirstPartyNamespacesText(e.target.value)}
+              placeholder="GoSdkNet, kApiNet, LMI, MyOrg"
+            />
+            <p className="text-xs text-muted-foreground">
+              Comma-separated name prefixes the LLM SBOM augmentation pass treats as first-party
+              code and drops from the SBOM. Case-insensitive prefix match. Leave blank if all
+              packages are third-party.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="vendored-dirs">Vendored directories</Label>
+            <Input
+              id="vendored-dirs"
+              value={vendoredDirsText}
+              onChange={(e) => setVendoredDirsText(e.target.value)}
+              placeholder="extern/, third-party/, vendor/"
+            />
+            <p className="text-xs text-muted-foreground">
+              Comma-separated directories the LLM inspects for vendored third-party libraries that
+              cdxgen missed. Defaults to <code>extern/, third-party/, vendor/</code>. Paths are
+              relative to the scope root.
             </p>
           </div>
 

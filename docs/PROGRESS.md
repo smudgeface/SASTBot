@@ -1106,3 +1106,62 @@ dimension. The 0-fixed/all-still-present pattern across recheck runs
 also wants more data points before we trust the recheck phase
 unconditionally.
 
+---
+
+## M6p Stage 2 — LLM SBOM augmentation pass (2026-05-10)
+
+**What shipped:**
+
+- **Prisma migration `m6p_llm_sbom_augmentation`**: three new `Repo` fields
+  (`firstPartyNamespaces`, `vendoredDirs`, `llmSbomEffort`) and a new
+  `SbomComponent.llmEvidence` JSONB column.
+- **`llmSbomService.ts`** — new service that mirrors `llmSastService`:
+  `runSbomAugmentation` writes the Stage-1-cleaned SBOM to a tmp file, spawns
+  `claude -p`, parses JSON-Lines keep/drop/add records. `applySbomAugmentation`
+  applies the records to the in-memory CdxComponent list and returns a final list
+  + evidence map.
+- **`sbomService.ts` extensions**: `extractCleanedComponents` (Stage-1 without
+  persisting) and `persistAugmentedComponents` (persist pre-augmented list with
+  evidence). The old `persistComponents` is still available for code paths that
+  don't need augmentation.
+- **New prompts** `sbom_system.md` + `sbom_augmentation.md`: role + ground rules
+  (conservative keep-bias, first-party + test-only exclusion criteria), task
+  steps (review SBOM → inspect vendored dirs → check csproj toolset refs →
+  verify singletons).
+- **Worker phase `llm_sbom`** wired between cdxgen and OSV. On failure, emits
+  `llm_sbom_augmentation_failed` error warning and falls back to Stage-1 output
+  — scan still completes.
+- **Admin form** (ReposPage): new `firstPartyNamespaces`, `vendoredDirs`, and
+  `llmSbomEffort` fields. Arrays entered as comma-separated text.
+- **Components tab tooltip**: info icon on rows with `llm_evidence`; hover shows
+  LLM rationale + evidence path + excerpt. Uses existing `FileLink` component.
+- **Frontend types updated**: `Repo`, `RepoUpsertInput`, `SbomComponent` + new
+  `LlmEvidence` interface; `ScanPhase` union + `SCAN_PHASE_LABELS/UNITS/CAPS`
+  updated with `llm_sbom`.
+- All 50 backend tests still passing. TypeScript strict mode clean on both sides.
+- Gocator Classic `firstPartyNamespaces` pre-set to `{GoSdkNet,kApiNet,GoAccelerator,LMI}` via psql for the first live verification scan.
+
+**What we learned:**
+
+- **cdxgen SBOM file as LLM input, not prompt text.** Writing the SBOM to a tmp
+  file and telling the LLM to `Read` it keeps the prompt short and avoids
+  token-per-component overhead. The prompt body stays fixed cost regardless of
+  how many components there are.
+- **Conservative keep-bias matters more than recall.** The prompt instructs the
+  LLM to only drop when confident (first-party prefix match, confirmed test-only,
+  or obvious BCL assembly). A missed drop is auditable; a spurious drop silently
+  removes a real dep from CVE monitoring.
+- **Evidence for adds is non-negotiable.** Every `add` record requires an
+  `evidence_path` in the protocol. This gates the LLM's creative speculation —
+  it can't add MSVC Runtime unless it found a concrete `<PlatformToolset>`
+  reference in a file it read.
+- **Failure graceful by design.** The augmentation wraps in try/catch and falls
+  back to Stage-1 on any error. The scan completes; the operator sees the warning
+  and can investigate. This was the right call — the SBOM augmentation pass is
+  value-add, not load-bearing for the scan record.
+- **Open question for next time:** The first live scan will tell us whether the
+  prompt's Step 2 (vendored dirs) and Step 3 (csproj toolset detection) produce
+  the expected MSVC Runtime / gettext / IpToCountry adds. The prompt may need
+  iteration based on actual model output — watch the `llm_sbom_parse_errors`
+  warning count and the keeps/drops/adds log line after the first scan.
+
