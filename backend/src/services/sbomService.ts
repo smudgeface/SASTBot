@@ -43,7 +43,7 @@ interface CdxProperty {
   value?: string;
 }
 
-interface CdxComponent {
+export interface CdxComponent {
   type?: string;
   group?: string;
   name?: string;
@@ -190,6 +190,276 @@ export function normalizeManifestPath(abs: string, scopeDir: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Stage 1 — Mechanical post-processing (M6p)
+//
+// A pure function over the raw cdxgen CdxComponent array. No I/O, no DB,
+// no LLM calls. Called from `persistComponents` (and optionally from the
+// Stage-2 service) before any writes. Each rule is a separate function so
+// they can be unit-tested in isolation.
+// ---------------------------------------------------------------------------
+
+/**
+ * (a) CMake-internal / MSBuild pseudo-packages that appear as find_package()
+ * results but are not real third-party components. Match on `name` exactly
+ * (case-insensitive), ecosystem = "generic" or null.
+ *
+ * M6p — extend this list when new pseudo-packages appear; each entry has a
+ * one-line comment so future maintainers know why it's here.
+ */
+const CMAKE_INTERNAL_BLOCKLIST = new Set([
+  "threads",          // CMake built-in: pthread / win32 threads abstraction
+  "pythoninterp",     // CMake FindPythonInterp.cmake — build-tool dep, not shipped
+  "python",           // bare "Python" from FindPython.cmake (not python3-* packages)
+  "sanitizers",       // CMake sanitizer helper — compile-time, not shipped
+  "packagetest",      // CMake CTest package entry — test runner, not a dep
+  "googletest-distribution", // CMake FetchContent entry for googletest — test-only
+]);
+
+/**
+ * (b) .NET BCL assemblies that ship with the .NET Framework runtime, not as
+ * separate NuGet packages. They show up in old-style .csproj files but are
+ * part of the runtime install, not third-party deps.
+ *
+ * Allowlist exceptions live in BCL_ALLOWLIST_EXCEPTIONS below.
+ */
+const BCL_BLOCKLIST = new Set([
+  "system",                     // System.dll — BCL core
+  "system.core",                // System.Core.dll — LINQ etc.
+  "system.xml",                 // System.Xml.dll
+  "system.xml.linq",            // System.Xml.Linq.dll
+  "system.data",                // System.Data.dll — ADO.NET
+  "system.data.datasetextensions", // System.Data.DataSetExtensions.dll
+  "system.deployment",          // ClickOnce deployment — BCL
+  "system.drawing",             // System.Drawing.dll — GDI+, BCL
+  "system.windows.forms",       // WinForms BCL
+  "system.xaml",                // System.Xaml.dll — WPF BCL
+  "system.configuration",       // System.Configuration.dll — BCL
+  "presentationcore",           // PresentationCore.dll — WPF BCL
+  "presentationframework",      // PresentationFramework.dll — WPF BCL
+  "windowsbase",                // WindowsBase.dll — WPF BCL
+  "microsoft.csharp",           // Microsoft.CSharp.dll — dynamic/runtime BCL
+]);
+
+/**
+ * BCL names that look like BCL but ARE separately distributed as NuGet packages
+ * and should not be dropped. These override BCL_BLOCKLIST when present.
+ */
+const BCL_ALLOWLIST_EXCEPTIONS = new Set([
+  "system.net.http",      // Separate NuGet pre-.NET 4.5; Gocator targets .NET 4.0
+  "system.data.sqlclient", // Separate NuGet for SQL client
+  "system.memory",        // Separate NuGet (Memory/Span backport for older targets)
+]);
+
+/**
+ * (c) Test-only frameworks — not shipped in the product binary.
+ */
+const TEST_FRAMEWORK_BLOCKLIST = new Set([
+  "microsoft.visualstudio.qualitytools.unittestframework", // VS MSTest framework
+  "gtest",    // GoogleTest C++ — test-only
+  "gmock",    // GoogleMock C++ — test-only
+  "googletest", // googletest friendly-name variant
+  "nunit",    // NUnit test framework
+  "xunit",    // xUnit test framework
+  "mstest.testframework", // MSTest v2
+]);
+
+/**
+ * (d) Naming alias map for rule (g): when cdxgen emits both a "friendly name"
+ * and a "package id" for the same component, prefer the package id (the
+ * dotted/hyphen NuGet/npm id) and drop the friendly name variant.
+ *
+ * Key: lowercase friendly name → canonical package id (will be looked up
+ * case-insensitively against the component's name).
+ */
+const NAMING_ALIAS_MAP: Record<string, string> = {
+  // WPF notification tray icon — friendly vs NuGet id
+  "hardcodet wpf notifyicon": "Hardcodet.Wpf.TaskbarNotification",
+  // Xceed WPF toolkit — friendly vs NuGet id
+  "xceed extended wpf toolkit": "Xceed.Wpf.Toolkit",
+  // cli11 / CLI11 — different word-casing of the exact same name; handled by
+  // rule (f) normalisation, not here (the alias map is for genuinely different
+  // name strings, not pure capitalisation variants).
+};
+
+// ---- helpers ----------------------------------------------------------------
+
+function isGenericOrNull(ecosystem: string | null | undefined): boolean {
+  return ecosystem === "generic" || ecosystem == null || ecosystem === "";
+}
+
+// ---- rules ------------------------------------------------------------------
+
+/** Rule (a): drop entries with placeholder version strings. */
+function dropPlaceholderVersions(components: CdxComponent[]): CdxComponent[] {
+  return components.filter((c) => {
+    if (!c.version) return true; // no version → not a placeholder
+    const v = c.version.trim();
+    // CMake ${VAR} and MSBuild @{VAR} unresolved placeholders
+    return !/^\$\{[^}]+\}$/.test(v) && !/^@\{[^}]+\}$/.test(v);
+  });
+}
+
+/** Rule (b): drop CMake-internal pseudo-packages (exact name, generic/null ecosystem). */
+function dropCmakeInternals(components: CdxComponent[]): CdxComponent[] {
+  return components.filter((c) => {
+    const name = (c.name ?? "").trim().toLowerCase();
+    if (!CMAKE_INTERNAL_BLOCKLIST.has(name)) return true;
+    // Only drop if ecosystem is generic or null — a real "python3-dev" rpm package
+    // would have ecosystem="rpm" and should pass through.
+    return !isGenericOrNull(extractEcosystem(c.purl));
+  });
+}
+
+/** Rule (c): drop .NET BCL / runtime assemblies (nuget ecosystem), with allowlist. */
+function dropBclAssemblies(components: CdxComponent[]): CdxComponent[] {
+  return components.filter((c) => {
+    const eco = extractEcosystem(c.purl);
+    if (eco !== "nuget") return true; // only applies to NuGet entries
+    const name = (c.name ?? "").trim().toLowerCase();
+    if (BCL_ALLOWLIST_EXCEPTIONS.has(name)) return true; // explicit keep
+    if (!BCL_BLOCKLIST.has(name)) return true;
+    // Extra check: if the version looks like a -preview suffix, keep it
+    // (separately-distributed preview package, not an in-box assembly).
+    if (c.version?.includes("-preview")) return true;
+    return false;
+  });
+}
+
+/** Rule (d): drop test-only frameworks. */
+function dropTestFrameworks(components: CdxComponent[]): CdxComponent[] {
+  return components.filter((c) => {
+    const name = (c.name ?? "").trim().toLowerCase();
+    // Exact match
+    if (TEST_FRAMEWORK_BLOCKLIST.has(name)) return false;
+    // Prefix matches for xunit.*, nunit.*, mstest.*
+    if (name.startsWith("xunit.") || name.startsWith("nunit.") || name.startsWith("mstest.")) return false;
+    return true;
+  });
+}
+
+/** Rule (e): coalesce versionless + versioned pairs — drop the versionless rows. */
+function coalesceVersionlessPairs(components: CdxComponent[]): CdxComponent[] {
+  // Group by (lowercase name, ecosystem)
+  const groups = new Map<string, CdxComponent[]>();
+  for (const c of components) {
+    const eco = extractEcosystem(c.purl) ?? "";
+    const key = `${(c.name ?? "").toLowerCase()}::${eco}`;
+    const group = groups.get(key);
+    if (group) group.push(c);
+    else groups.set(key, [c]);
+  }
+
+  const result: CdxComponent[] = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      result.push(group[0]!);
+      continue;
+    }
+    const hasVersioned = group.some((c) => c.version && c.version.trim() !== "");
+    if (!hasVersioned) {
+      // All versionless — keep them all (nothing to collapse)
+      result.push(...group);
+    } else {
+      // Drop versionless; keep all versioned (multiple versioned = different
+      // Visual Studio projects pinning different versions — all real).
+      result.push(...group.filter((c) => c.version && c.version.trim() !== ""));
+    }
+  }
+  return result;
+}
+
+/**
+ * Rule (f): normalize name capitalization within a canonical-key group.
+ * When multiple capitalization variants of the same name exist, prefer
+ * the one that appears in the NAMING_ALIAS_MAP canonical form, then the
+ * one that matches the purl package segment, then the first occurrence.
+ *
+ * Rule (g): apply NAMING_ALIAS_MAP — drop "friendly name" variants when a
+ * "package id" variant exists for the same component.
+ *
+ * Both rules operate on the same grouping pass, so they're combined here.
+ */
+function normalizeNamesAndAliases(components: CdxComponent[]): CdxComponent[] {
+  // First pass: resolve alias map entries.
+  // If any component's lowercase name is in NAMING_ALIAS_MAP and the
+  // canonical-id variant exists, drop the alias entry.
+  const canonicalNamesPresent = new Set(
+    components.map((c) => (c.name ?? "").toLowerCase()),
+  );
+
+  const afterAlias = components.filter((c) => {
+    const lower = (c.name ?? "").toLowerCase();
+    const canonical = NAMING_ALIAS_MAP[lower];
+    if (!canonical) return true; // not an alias → keep
+    // If the canonical package-id variant is present (by lowercase), drop this
+    // friendly-name entry. If the canonical doesn't exist yet, keep the alias
+    // (avoid losing the component entirely).
+    return !canonicalNamesPresent.has(canonical.toLowerCase());
+  });
+
+  // Second pass: within groups sharing the same lowercase name, pick one
+  // canonical casing (purl-derived if possible, else first occurrence).
+  const groups = new Map<string, CdxComponent[]>();
+  for (const c of afterAlias) {
+    const key = (c.name ?? "").toLowerCase();
+    const group = groups.get(key);
+    if (group) group.push(c);
+    else groups.set(key, [c]);
+  }
+
+  const result: CdxComponent[] = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      result.push(group[0]!);
+      continue;
+    }
+    // All share the same lowercase name but differ in casing.
+    // Pick the "best" representative: prefer the one with a real purl package
+    // segment (non-generic), else the one matching the alias map's casing, else
+    // first occurrence.
+    const canonical = NAMING_ALIAS_MAP[(group[0]!.name ?? "").toLowerCase()];
+    const best =
+      group.find((c) => {
+        const eco = extractEcosystem(c.purl);
+        return eco && eco !== "generic";
+      }) ??
+      (canonical ? group.find((c) => c.name === canonical) : undefined) ??
+      group[0]!;
+
+    // Re-emit each component but with the canonical name attached (simple reassign).
+    result.push(...group.map((c) => ({ ...c, name: best!.name })));
+  }
+
+  // De-duplicate by purl after name normalization (two entries may now share
+  // the same purl after renaming).
+  const seen = new Set<string>();
+  return result.filter((c) => {
+    const key = c.purl ?? `${c.name}::${c.version}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Top-level post-processing pipeline. Call this on the raw cdxgen
+ * `doc.components` array before persisting to the database. Each rule
+ * is applied in the order specified in the M6p plan (§1.1).
+ *
+ * Returns a new array; input is not mutated.
+ */
+export function postProcessComponents(components: CdxComponent[]): CdxComponent[] {
+  let result = components;
+  result = dropPlaceholderVersions(result);   // (a)
+  result = dropCmakeInternals(result);         // (b)
+  result = dropBclAssemblies(result);          // (c)
+  result = dropTestFrameworks(result);         // (d)
+  result = coalesceVersionlessPairs(result);   // (e)
+  result = normalizeNamesAndAliases(result);   // (f) + (g)
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // cdxgen invocation
 // ---------------------------------------------------------------------------
 
@@ -297,10 +567,18 @@ export async function persistComponents(
   scopeDir = "",
   scopePath = "/",
 ): Promise<SbomComponent[]> {
-  const components = doc.components ?? [];
+  // Stage 1: mechanical post-processing (M6p §1.1) — runs before any DB
+  // writes so the stored component list is already cleaned.
+  const rawComponents = doc.components ?? [];
+  const cleaned = postProcessComponents(rawComponents);
+  logger.info(
+    { raw: rawComponents.length, cleaned: cleaned.length },
+    "[sbomService] Stage-1 post-processing complete",
+  );
+
   const unique = new Map<string, CdxComponent>();
 
-  for (const c of components) {
+  for (const c of cleaned) {
     if (c.purl && !unique.has(c.purl)) unique.set(c.purl, c);
   }
 
