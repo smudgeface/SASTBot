@@ -85,23 +85,11 @@ const ReachabilityRecord = z.object({
 });
 export type ReachabilityRecord = z.infer<typeof ReachabilityRecord>;
 
-const VendoredLibRecord = z.object({
-  kind: z.literal("vendored_lib"),
-  path: z.string(),
-  library_name: z.string(),
-  version: z.string().nullable(),
-  evidence_file: z.string(),
-  evidence_line: z.number().int().nonnegative().optional(),
-  license: z.string().nullable().optional(),
-});
-export type VendoredLibRecord = z.infer<typeof VendoredLibRecord>;
-
 const CompleteRecord = z.object({
   kind: z.literal("complete"),
   sast_count: z.number().int().nonnegative().optional(),
   sast_absence_count: z.number().int().nonnegative().optional(),
   reachability_count: z.number().int().nonnegative().optional(),
-  vendored_lib_count: z.number().int().nonnegative().optional(),
   summary: z.string().optional(),
 });
 export type CompleteRecord = z.infer<typeof CompleteRecord>;
@@ -110,7 +98,6 @@ const DetectionRecord = z.discriminatedUnion("kind", [
   SastRecord,
   SastAbsenceRecord,
   ReachabilityRecord,
-  VendoredLibRecord,
   CompleteRecord,
 ]);
 export type DetectionRecord = z.infer<typeof DetectionRecord>;
@@ -825,7 +812,6 @@ export interface PersistDetectionResult {
   sastAbsenceUpserted: number;
   reachabilityUpdated: number;
   reachabilitySkipped: number;
-  vendoredLibsAdded: number;
 }
 
 /** Whitespace-collapse normalization shared with sastService.normalizeSnippet
@@ -885,13 +871,6 @@ function computeAbsenceFingerprint(cwe: string): string {
   return createHash("sha256").update(`__absence__:${cwe}`).digest("hex").slice(0, 16);
 }
 
-/** Best-effort generic PURL for an LLM-discovered vendored library. */
-function syntheticPurl(name: string, version: string | null): string {
-  const safeName = encodeURIComponent(name.toLowerCase().replace(/\s+/g, "-"));
-  const safeVer = version ? encodeURIComponent(version) : "unknown";
-  return `pkg:generic/${safeName}@${safeVer}`;
-}
-
 export async function persistDetection(
   client: Tx,
   input: PersistDetectionInput,
@@ -902,7 +881,6 @@ export async function persistDetection(
     sastAbsenceUpserted: 0,
     reachabilityUpdated: 0,
     reachabilitySkipped: 0,
-    vendoredLibsAdded: 0,
   };
 
   // The LLM emits paths relative to scopeDir (its cwd). Translate them to
@@ -997,42 +975,6 @@ export async function persistDetection(
         },
       });
       result.reachabilityUpdated++;
-    } else if (r.kind === "vendored_lib") {
-      // Skip if cdxgen already discovered this component via a manifest in
-      // the same scan run — defends against the LLM mis-classifying
-      // node_modules/ contents as "vendored." Match on (name, version) since
-      // synthetic purls won't equal the manifest-derived purl.
-      const existing = await db.sbomComponent.findFirst({
-        where: {
-          scanRunId: input.scanRunId,
-          name: r.library_name,
-          version: r.version ?? null,
-        },
-        select: { id: true, discoveryMethod: true },
-      });
-      if (existing) {
-        logger.debug(
-          { name: r.library_name, version: r.version, existingMethod: existing.discoveryMethod },
-          "[llmSastService] vendored_lib record duplicates cdxgen finding — skipped",
-        );
-        continue;
-      }
-      await db.sbomComponent.create({
-        data: {
-          scanRunId: input.scanRunId,
-          name: r.library_name,
-          version: r.version,
-          purl: syntheticPurl(r.library_name, r.version),
-          ecosystem: null,
-          licenses: r.license ? [r.license] : [],
-          componentType: "library",
-          scope: "required",
-          manifestFile: toRepoRelative(input.scopePath, r.evidence_file),
-          discoveryMethod: "vendored_inspection",
-          evidenceLine: r.evidence_line ?? null,
-        },
-      });
-      result.vendoredLibsAdded++;
     }
     // kind === "complete" — caller logs separately, no persistence.
   }

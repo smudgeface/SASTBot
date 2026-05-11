@@ -35,23 +35,30 @@ that cdxgen missed:
 
 ### Step 1 — Review the SBOM
 
-Read `{{SBOM_FILE}}`. For each component:
+Read `{{SBOM_FILE}}`. **Silence means keep** — components you don't emit a
+record for are kept as-is. Do NOT emit a bare `keep` record for every
+component; only emit records when you have something to say:
 
-- Emit `{"type":"keep","component_id":"<id>"}` if it's a legitimate
-  third-party runtime dependency.
 - Emit `{"type":"drop","component_id":"<id>","reason":"<reason>","evidence_path":"<optional>"}` if:
   - Its name starts with a FIRST_PARTY_NAMESPACES prefix, OR
   - It's test-only, build-only, or a .NET BCL assembly, OR
   - You read the source and confirmed it doesn't ship in the product.
-- Add an optional `"llm_reason"` field to a `keep` record when you inspected
-  the source and can confirm the component's role in one sentence.
+- Emit `{"type":"keep","component_id":"<id>","llm_reason":"<one-sentence rationale>"}`
+  **only** when you inspected the source and can confirm the component's
+  role in one sentence (this becomes the evidence tooltip in the UI). A
+  `keep` without `llm_reason` is wasted output — skip it.
 
-Only drop if you're confident. When in doubt, keep.
+Only drop if you're confident. When in doubt, stay silent (= keep).
 
 ### Step 2 — Inspect vendored directories
 
-For each directory listed in VENDORED_DIRS, use Glob to list its immediate
-subdirectories. For each subdirectory that looks like a vendored library:
+Inspect each directory listed in VENDORED_DIRS. **Additionally**, do a quick
+Glob check at the repo root for common vendored-dir conventions even if they
+weren't listed: `libs/`, `extlib/`, `third_party/`, `externals/`, `ext/`,
+`deps/`, `lib/external/`. If any exist, treat them the same as
+VENDORED_DIRS entries.
+
+For each subdirectory that looks like a vendored library:
 
 1. Read `README`, `CHANGELOG`, `version.h`, `CMakeLists.txt`,
    `package.json`, or similar version-bearing files to determine:
@@ -83,8 +90,9 @@ already in the SBOM.
 
 Components that look unusual (a single Boost reference, a database file
 dependency, a very old version) — briefly grep for them. If you can confirm
-they're real (found in a build file or #include), keep. If you can't find
-any evidence, drop with `reason: "no evidence found in source tree"`.
+they're real (found in a build file or #include), stay silent (= keep). If
+you can't find any evidence, emit a drop with
+`reason: "no evidence found in source tree"`.
 
 ## Token budget
 

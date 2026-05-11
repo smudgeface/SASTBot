@@ -23,8 +23,8 @@ findings. This is the primary SAST pass; you replace Opengrep entirely.
 
 ## Goals
 
-Three concurrent goals. Don't serialize them — let your file reading inform all
-three at once.
+Two concurrent goals. Don't serialize them — let your file reading inform both
+at once.
 
 ### Goal 1: SAST findings
 
@@ -62,34 +62,6 @@ sites of the vulnerable component or its known-affected APIs. Emit a
 `reachability` record per SCA id, including verdicts of "not reachable" — the
 absence is useful signal too. Skip records only if you genuinely couldn't
 assess (e.g., couldn't determine the affected APIs).
-
-### Goal 3: Vendored libraries (only those cdxgen cannot see)
-
-Inspect directories like `extern/`, `vendor/`, `third_party/`, `libs/`,
-`extlib/`, and any other checked-in copies of upstream code. For each
-vendored library you can identify, emit a `vendored_lib` record.
-
-**Important — do NOT re-emit packages cdxgen already covered.** cdxgen reads
-package manifests (`package.json`, `package-lock.json`, `requirements.txt`,
-`go.mod`, `Cargo.toml`, etc.) and infers components from them. You are
-filling the gap for libraries that lack a manifest entirely.
-
-Concretely, **skip** these — cdxgen already has them:
-- Anything under `node_modules/` (cdxgen reads the parent `package.json`).
-- Anything under `vendor/` in a Go module (cdxgen reads `go.mod`).
-- Anything under `.cargo/`, `target/`, virtualenvs (`.venv/`, `venv/`),
-  Python `site-packages/`.
-- Any directory that contains a `package.json`, `pyproject.toml`,
-  `Cargo.toml`, `go.mod`, or similar manifest at its root.
-
-**Emit `vendored_lib` only** for raw checked-in copies of upstream code that
-have no package manifest — e.g., a `extern/jquery-1.11.0.min.js`, an
-`extern/openssl/` source tree, an `extern/openssl/include/openssl/opensslv.h`
-defining a version, a `third_party/zlib-1.2.6/` directory.
-
-Identify name and version by reading README, CHANGELOG, version-string
-source files, license headers, or any other in-tree evidence. If you cannot
-determine a version, set `"version": null`.
 
 ## Output format (JSON-Lines)
 
@@ -160,23 +132,6 @@ the wrong line creates duplicate findings on the next scan.
 For `reachable: false`, omit `call_sites` (or pass an empty array) and explain
 in `reasoning` what you searched for.
 
-### `kind: "vendored_lib"` — undeclared vendored dependency
-
-```json
-{
-  "kind": "vendored_lib",
-  "path": "extern/openssl",
-  "library_name": "OpenSSL",
-  "version": "1.1.1f",
-  "evidence_file": "extern/openssl/include/openssl/opensslv.h",
-  "evidence_line": 40,
-  "license": "Apache-2.0"
-}
-```
-
-`version` and `license` may be `null` if undetermined. `path` is relative to
-the scope root.
-
 ### `kind: "complete"` — terminating record
 
 ```json
@@ -185,7 +140,6 @@ the scope root.
   "sast_count": 42,
   "sast_absence_count": 3,
   "reachability_count": 12,
-  "vendored_lib_count": 18,
   "summary": "Done. 3 critical, 14 high. 12 high+critical SCA issues had reachable call sites."
 }
 ```
@@ -194,8 +148,7 @@ Always emit this as your final line, even if all counts are zero.
 
 ## Methodology
 
-1. Start with `find . -type f` and a quick `ls` to map the project layout. Note
-   directories matching vendored-lib heuristics; queue them for Goal 3.
+1. Start with `find . -type f` and a quick `ls` to map the project layout.
 2. Run targeted `grep` / `rg` passes for known-dangerous identifiers
    (`strcpy`, `eval(`, `password\s*=`, `#define\s+\w*PASSWORD`, `innerHTML`,
    etc.). Read matching files in full when context warrants.
