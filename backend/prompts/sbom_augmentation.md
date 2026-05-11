@@ -43,6 +43,12 @@ component; only emit records when you have something to say:
   - Its name starts with a FIRST_PARTY_NAMESPACES prefix, OR
   - It's test-only, build-only, or a .NET BCL assembly, OR
   - You read the source and confirmed it doesn't ship in the product.
+
+  **Do not drop a component whose origin is cdxgen `manifest` discovery
+  unless you can point to disconfirming evidence in the source tree.**
+  cdxgen sourced it from a real package manifest (package.json, .csproj,
+  .vcxproj, etc.) — that's stronger evidence than your guess. If you're
+  unsure whether a manifest-sourced component is "really" used, keep.
 - Emit `{"type":"keep","component_id":"<id>","llm_reason":"<one-sentence rationale>"}`
   **only** when you inspected the source and can confirm the component's
   role in one sentence (this becomes the evidence tooltip in the UI). A
@@ -65,9 +71,15 @@ For each subdirectory that looks like a vendored library:
    - Library name
    - Version (or "unknown" if you can't determine it)
    - License (optional; skip if not obvious from a header)
-2. Emit an `add` record **only** if the library is NOT already in the SBOM
+2. **Then list the directory's top-level files.** Vendored directories
+   often ship bundled binaries from multiple upstream projects — e.g.,
+   `extern/gettext/` typically contains `libexpat-*.dll`, `libiconv-*.dll`,
+   `WinSparkle.dll` etc. alongside the main `gettext` binaries. Each
+   bundled `.dll` / `.js` / `.so` / standalone tool is its own component;
+   emit a separate `add` record for each one you can name.
+3. Emit an `add` record **only** if the library is NOT already in the SBOM
    (check `component_id` values from the file you read in Step 1).
-3. If the subdirectory is clearly first-party code (matches
+4. If the subdirectory is clearly first-party code (matches
    FIRST_PARTY_NAMESPACES or has the org's own copyright header), skip it.
 
 ### Step 3 — Check for runtime SDK/toolset dependencies
