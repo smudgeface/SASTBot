@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { toRepoRelative } from "./scopePath.js";
+import { extractOccurrences } from "./sbomOccurrences.js";
 
 import type { Prisma, PrismaClient, SbomComponent } from "@prisma/client";
 import { pino } from "pino";
@@ -498,10 +499,17 @@ export async function runCdxgen(workingDir: string, excludes: string[] = []): Pr
 
     let execError: unknown = null;
     try {
+      // Phase 1.1 (M6q): set cwd to workingDir so cdxgen emits repo-relative
+      // paths in evidence.identity.methods[].value and properties.SrcFile —
+      // no more "../clones/<uuid>/..." prefix leaking into stored paths.
+      // Pass "." as the scan root (since cwd is already the scope dir).
+      // Pass --evidence explicitly so evidence.occurrences[] is a guaranteed
+      // contract, not an accident of project-type defaults.
       await execFileAsync(
         cdxgenBin,
-        ["-o", outputPath, ...excludeArgs, workingDir],
+        ["-o", outputPath, "--evidence", ...excludeArgs, "."],
         {
+          cwd: workingDir,           // ← M6q: scope dir is the process root
           timeout: 5 * 60 * 1000, // 5-minute hard cap
           env: {
             ...process.env,
@@ -610,6 +618,8 @@ export async function persistComponents(
         const sr = extractManifestFile(c, scopeDir);
         return sr ? toRepoRelative(scopePath, sr) : null;
       })(),
+      // M6q: full occurrence list (repo-relative paths + line numbers)
+      occurrences: extractOccurrences(c, null, false) as unknown as Prisma.InputJsonValue,
       };
     }),
     skipDuplicates: true,
@@ -689,6 +699,9 @@ export async function persistAugmentedComponents(
         // components, "manifest" for cdxgen-sourced ones that survived.
         discoveryMethod: (c as CdxComponent & { discoveryMethod?: string }).discoveryMethod ?? "manifest",
         llmEvidence: evidence ? (evidence as unknown as Prisma.InputJsonValue) : undefined,
+        // M6q: full occurrence list; for LLM-augmented components, also
+        // include the evidence path as a guaranteed occurrence entry.
+        occurrences: extractOccurrences(c, evidence?.path ?? null, false) as unknown as Prisma.InputJsonValue,
       };
     }),
     skipDuplicates: true,

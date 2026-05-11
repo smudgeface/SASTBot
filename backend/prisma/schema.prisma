@@ -269,6 +269,14 @@ model SbomComponent {
   // kept with a rationale. Shape: {path, excerpt, llmReason}. Stored so the
   // Components tab can show a tooltip explaining why the component is there.
   llmEvidence     Json?   @map("llm_evidence")
+  // M6q: full list of locations where this component is used. Each entry is
+  // {path: string, line: number | null}. `evidence.occurrences[]` is the gold
+  // source (repo-relative, with line numbers); falls back to
+  // `evidence.identity[].methods[].value` (repo-relative after M6q CWD fix,
+  // no line numbers). SrcFile properties are always redundant — skipped.
+  // Default [] means "not yet extracted" and is populated on first write or
+  // by the backfillSbomOccurrences worker boot hook.
+  occurrences     Json    @default("[]") @map("occurrences")
 
   scanRun  ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
   findings ScanFinding[]

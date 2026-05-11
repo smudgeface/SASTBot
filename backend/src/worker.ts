@@ -852,6 +852,12 @@ backfillDevOnlyScaIssues().catch((err) => {
   logger.warn({ err }, "[worker] dev-only SCA backfill failed");
 });
 
+// M6q: populate sbom_components.occurrences for rows that pre-date the column.
+import { backfillSbomOccurrences } from "./services/sbomOccurrences.js";
+backfillSbomOccurrences().catch((err) => {
+  logger.warn({ err }, "[worker] sbom-occurrences backfill failed");
+});
+
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {
