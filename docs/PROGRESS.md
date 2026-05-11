@@ -1165,3 +1165,86 @@ unconditionally.
   iteration based on actual model output — watch the `llm_sbom_parse_errors`
   warning count and the keeps/drops/adds log line after the first scan.
 
+---
+
+## M6q — Components tab UX & data richness (2026-05-11)
+
+### What shipped
+
+- **Phase 1.1 — cdxgen invocation fix.** `runCdxgen` now passes `cwd: workingDir`
+  so paths in `evidence.identity.methods[].value` and `properties.SrcFile` come
+  out repo-relative instead of `../clones/<uuid>/...`. Also added `--evidence`
+  flag explicitly so `evidence.occurrences[]` is a guaranteed contract rather
+  than an accident of project-type defaults.
+
+- **Phase 1.2 — Prisma migration.** `sbom_components.occurrences` JSONB column
+  (default `[]`). Shape: `{path: string, line: number | null}[]`.
+
+- **Phase 1.3 — Occurrence extraction.** `extractOccurrences()` in the new
+  `sbomOccurrences.ts` service: gold source is `evidence.occurrences[].location`
+  (repo-relative, has line numbers); fallback to `evidence.identity[].methods[].value`;
+  `properties[].SrcFile` always skipped (redundant). LLM-augmented components
+  also get `llm_evidence.path` as a guaranteed first occurrence. Wired into
+  `persistComponents` and `persistAugmentedComponents`.
+
+- **Phase 1.4 — Worker backfill.** `backfillSbomOccurrences` boot hook fills
+  rows with `occurrences = []` from stored `sbom_json` (with one-time clone-prefix
+  strip for pre-M6q rows). First run filled 25,705 historical component rows.
+
+- **Phase 1.5 — Tests.** 10 unit tests in `sbomOccurrences.test.ts` covering
+  path#line parsing, identity fallback, clone-prefix stripping, LLM-augmentation
+  entry, SrcFile skip, deduplication.
+
+- **Phase 2 — Endpoints.** `SbomComponentOutSchema` extended with `occurrences[]`,
+  `manifest_file`, `discovery_method`. `GET /scans/:id/components` uses the shared
+  schema (no `linked_issue_ids`). `GET /api/scopes/:id/components` adds `linked_issue_ids`
+  `{sca, sast}` derived in a single batch query (no N+1). New `GET /api/scopes/:id/sbom-json`
+  endpoint: downloads SBOM JSON for the scope's `lastScanRunId` with correct
+  `Content-Disposition` header.
+
+- **Phase 3 — `prettyEcosystem()` helper** in `frontend/src/lib/componentLabels.ts`.
+  Keys on `discovery_method='llm_augmentation'` rather than `ecosystem='generic'`
+  to be forward-compatible with any future non-LLM generic rows.
+
+- **Phase 4 — Expandable component rows.** Both `ScopeDetailPage` and
+  `ScanDetailPage` `ComponentsTab` now have expandable rows showing: License
+  details (all entries), Found in (occurrences as FileLinks, truncated to 15 with
+  "and N more" disclosure), LLM augmentation evidence panel. Scope-page rows
+  additionally show linked SCA issues with severity and clickable cross-tab
+  navigation. Vendored badge (violet) replaces "GENERIC" for LLM-augmented rows.
+  New License column (first license + "+N more" suffix).
+
+- **Phase 5 — URL-driven tab and row state.** `App.tsx` adds nested routes for
+  `/scopes/:id/{sca,sast,components}/:rowId`. `ScopeDetailPage` reads active tab
+  and expanded row from `useMatch()` instead of local state; `Tabs.onValueChange`
+  navigates to the tab URL. Backward-compatible with legacy `?issue=` search param.
+
+- **Phase 6 — Scope SBOM download button.** "SBOM" button in scope page header
+  (next to Scan now); disabled when `lastScanRunId` is null; hits `GET /api/scopes/:id/sbom-json`.
+
+### What we learned
+
+- **Worker and backend must be restarted after bind-mount edits.** `tsx` is not
+  in watch mode in compose — it reads source once at startup. Worker was up for
+  16 hours when M6q landed; the new cdxgen CWD argument only took effect after
+  `docker compose restart worker`. The CLAUDE.md claim that "edits are picked up
+  live" is aspirational for tsx watch mode but not true for the standard `tsx src/worker.ts` command.
+
+- **`evidence.occurrences[]` is already repo-relative even before the CWD fix.**
+  cdxgen computes occurrences relative to the project root regardless of the
+  process CWD. The CWD fix only affects `evidence.identity.methods[].value` and
+  `properties.SrcFile`. This means the occurrence data was already clean in older
+  scans; the backfill captured it correctly from stored `sbom_json`.
+
+- **Phase 1.1 scan verification pending VPN reconnect.** The Gocator Classic
+  clone requires VPN to `git.example.com`. Two scan attempts during implementation
+  failed with `RemoteUnreachableError`. The identity-path format change (from
+  `../clones/<uuid>/...` to repo-relative) can only be confirmed by a fresh scan
+  that runs cdxgen. The occurrence data is already correct in all scans (see above).
+
+- **`linked_issue_ids.sast` is always empty today.** SAST issues don't have a
+  per-component foreign key in the data model. The field is wired in and returns
+  `[]` for all components pending a future data-model change to track SAST-to-component
+  links explicitly. This is correct per plan §2.
+
+
