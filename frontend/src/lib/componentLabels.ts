@@ -30,6 +30,32 @@ function formatEcosystemLabel(raw: string): string {
 }
 
 /**
+ * Normalise a license label for display.
+ *
+ * SPDX IDs are case-sensitive (MIT, Apache-2.0, BSD-3-Clause, GPL-3.0-only,
+ * CC0-1.0, etc.) so we preserve them verbatim — they're recognisable by
+ * containing a hyphen or a digit. Short all-caps abbreviations (≤4 chars
+ * like MIT, ISC, BSD, GPL, LGPL, AGPL, MPL) are also kept verbatim.
+ *
+ * Everything else that's purely all-caps (CUSTOM, UNKNOWN, PROPRIETARY)
+ * is treated as a bare-word descriptor — title-cased so it doesn't shout
+ * (per UX feedback #10).
+ */
+export function prettyLicense(raw: string): string {
+  const s = raw.trim();
+  if (!s) return s;
+  // SPDX-style IDs have hyphens or digits — preserve casing.
+  if (/[-.]/.test(s) || /\d/.test(s)) return s;
+  // Short SPDX abbreviations stay all-caps.
+  if (/^[A-Z]+$/.test(s) && s.length <= 4) return s;
+  // Bare-word all-caps label → title case.
+  if (/^[A-Z]+$/.test(s)) {
+    return s.charAt(0) + s.slice(1).toLowerCase();
+  }
+  return s;
+}
+
+/**
  * Returns the display label for the Ecosystem column in the Components tab.
  *
  * Design decision (per M6q investigation): 100% of `generic`-ecosystem rows

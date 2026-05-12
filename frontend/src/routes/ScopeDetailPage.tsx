@@ -57,7 +57,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDate, formatRelative } from "@/lib/format";
-import { prettyEcosystem } from "@/lib/componentLabels";
+import { prettyEcosystem, prettyLicense } from "@/lib/componentLabels";
 import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
@@ -1302,8 +1302,10 @@ function ScopeComponentRow({
   const occurrences = component.occurrences ?? [];
   const linkedScaIds = component.linked_issue_ids?.sca ?? [];
 
-  // First license for inline display; rest go in expand panel
-  const firstLicense = component.licenses[0] ?? null;
+  // First license for inline display; rest go in expand panel.
+  // prettyLicense() preserves SPDX casing but title-cases bare-word
+  // labels like "CUSTOM" → "Custom".
+  const firstLicense = component.licenses[0] ? prettyLicense(component.licenses[0]) : null;
   const extraLicenses = component.licenses.length > 1 ? component.licenses.length - 1 : 0;
 
   return (
@@ -1379,7 +1381,7 @@ function ScopeComponentRow({
                   <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">Licenses</p>
                   <div className="flex flex-wrap gap-1.5">
                     {component.licenses.map((lic, i) => (
-                      <Badge key={i} variant="secondary" className="text-xs font-normal">{lic}</Badge>
+                      <Badge key={i} variant="secondary" className="text-xs font-normal">{prettyLicense(lic)}</Badge>
                     ))}
                   </div>
                 </div>

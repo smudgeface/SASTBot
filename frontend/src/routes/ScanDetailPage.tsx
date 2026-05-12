@@ -45,7 +45,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
-import { prettyEcosystem } from "@/lib/componentLabels";
+import { prettyEcosystem, prettyLicense } from "@/lib/componentLabels";
 import { useNow } from "@/lib/useNow";
 import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
 import { ContextSnippet } from "@/components/ContextSnippet";
@@ -323,7 +323,7 @@ function ScanComponentRow({
 
   const eco = prettyEcosystem(component.ecosystem, component.discovery_method);
   const occurrences = component.occurrences ?? [];
-  const firstLicense = component.licenses[0] ?? null;
+  const firstLicense = component.licenses[0] ? prettyLicense(component.licenses[0]) : null;
   const extraLicenses = component.licenses.length > 1 ? component.licenses.length - 1 : 0;
 
   return (
@@ -380,7 +380,7 @@ function ScanComponentRow({
                   <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">Licenses</p>
                   <div className="flex flex-wrap gap-1.5">
                     {component.licenses.map((lic, i) => (
-                      <Badge key={i} variant="secondary" className="text-xs font-normal">{lic}</Badge>
+                      <Badge key={i} variant="secondary" className="text-xs font-normal">{prettyLicense(lic)}</Badge>
                     ))}
                   </div>
                 </div>
