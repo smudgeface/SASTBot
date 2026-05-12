@@ -44,6 +44,9 @@ export default function ScopeSbomViewerPage() {
           </Link>
           <span className="text-muted-foreground">/</span>
           <span className="text-sm font-medium">SBOM</span>
+          <span className="text-[10px] text-muted-foreground" title="Curated CycloneDX 1.7 SBOM — post-Stage-2 LLM augmentation, matches the Components tab. This is the artifact to share for CRA compliance.">
+            curated · CRA-ready
+          </span>
           <span className="text-xs text-muted-foreground font-mono">{filename}</span>
         </div>
 
