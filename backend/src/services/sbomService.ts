@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { toRepoRelative } from "./scopePath.js";
-import { extractOccurrences } from "./sbomOccurrences.js";
+import { extractOccurrences, resolveManifestLines } from "./sbomOccurrences.js";
+import type { ComponentOccurrence } from "./sbomOccurrences.js";
 
 import { Prisma } from "@prisma/client";
 import type { PrismaClient, SbomComponent } from "@prisma/client";
@@ -610,36 +611,55 @@ export async function persistComponents(
     return [];
   }
 
-  // Batch-insert; skip duplicates silently (skipDuplicates=true relies on
-  // the unique index; Prisma createMany doesn't return records so we refetch).
-  await (client as PrismaClient).sbomComponent.createMany({
-    data: Array.from(unique.values()).map((c) => {
-      const ecosystem = extractEcosystem(c.purl);
-      return {
+  // Pre-build per-component records so we can enrich `occurrences` with
+  // manifest line numbers (resolveManifestLines is async + uses a shared
+  // cache so each lockfile is read once). Createmany takes the result.
+  type Row = {
+    scanRunId: string;
+    name: string;
+    version: string | null;
+    purl: string;
+    ecosystem: string | null;
+    licenses: string[];
+    componentType: string;
+    scope: string | null;
+    isDevOnly: boolean;
+    manifestFile: string | null;
+    occurrences: ComponentOccurrence[];
+  };
+  const lockfileCache = new Map<string, string[] | null>();
+  const rows: Row[] = [];
+  for (const c of unique.values()) {
+    const ecosystem = extractEcosystem(c.purl);
+    const name = canonicalPackageName(c, ecosystem);
+    const sr = extractManifestFile(c, scopeDir);
+    const occurrences = extractOccurrences(c, null, false, scopePath);
+    // Grep manifest-shaped occurrences for the package name so transitive
+    // lockfile-only entries get a clickable line number, matching the
+    // direct-import case. Cache shared across components in this batch.
+    await resolveManifestLines(occurrences, name, scopeDir || null, scopePath, lockfileCache);
+    rows.push({
       scanRunId,
-      name: canonicalPackageName(c, ecosystem),
+      name,
       version: c.version ?? null,
       purl: c.purl!,
       ecosystem,
       licenses: extractLicenses(c.licenses),
       componentType: c.type ?? "library",
-      // CycloneDX scope: "required" | "optional" | "excluded"
-      // cdxgen lumps both devDependencies AND transitive runtime deps into
-      // "optional" — not a clean dev classifier. Use isDevOnly (cdxgen 12.2+
-      // npm dev marker) for the honest dev signal.
       scope: c.scope ?? null,
       isDevOnly: extractIsDevOnly(c),
-      manifestFile: (() => {
-        const sr = extractManifestFile(c, scopeDir);
-        return sr ? toRepoRelative(scopePath, sr) : null;
-      })(),
-      // M6q: full occurrence list (repo-relative paths + line numbers).
-      // Pass scopePath so non-root scopes get the scope prefix added —
-      // cdxgen-emitted paths are relative to the scope dir, but the FE
-      // <FileLink> + source_url_template expects repo-rooted paths.
-      occurrences: extractOccurrences(c, null, false, scopePath) as unknown as Prisma.InputJsonValue,
-      };
-    }),
+      manifestFile: sr ? toRepoRelative(scopePath, sr) : null,
+      occurrences,
+    });
+  }
+
+  // Batch-insert; skip duplicates silently (skipDuplicates=true relies on
+  // the unique index; Prisma createMany doesn't return records so we refetch).
+  await (client as PrismaClient).sbomComponent.createMany({
+    data: rows.map((r) => ({
+      ...r,
+      occurrences: r.occurrences as unknown as Prisma.InputJsonValue,
+    })),
     skipDuplicates: true,
   });
 
@@ -694,37 +714,56 @@ export async function persistAugmentedComponents(
     return [];
   }
 
+  // Pre-build per-component rows so occurrences can be enriched (async)
+  // with manifest line numbers before createMany.
+  type AugRow = {
+    scanRunId: string;
+    name: string;
+    version: string | null;
+    purl: string;
+    ecosystem: string | null;
+    licenses: string[];
+    componentType: string;
+    scope: string | null;
+    isDevOnly: boolean;
+    manifestFile: string | null;
+    discoveryMethod: string;
+    llmEvidence: Prisma.InputJsonValue | undefined;
+    occurrences: ComponentOccurrence[];
+  };
+  const lockfileCache = new Map<string, string[] | null>();
+  const augRows: AugRow[] = [];
+  for (const c of unique.values()) {
+    const ecosystem = extractEcosystem(c.purl);
+    const canonicalName = canonicalPackageName(c, ecosystem);
+    const evidence = evidenceMap.get(canonicalName) ?? null;
+    const sr = extractManifestFile(c, scopeDir);
+    const occurrences = extractOccurrences(c, evidence?.path ?? null, false, scopePath);
+    await resolveManifestLines(occurrences, canonicalName, scopeDir || null, scopePath, lockfileCache);
+    augRows.push({
+      scanRunId,
+      name: canonicalName,
+      version: c.version ?? null,
+      purl: c.purl!,
+      ecosystem,
+      licenses: extractLicenses(c.licenses),
+      componentType: c.type ?? "library",
+      scope: c.scope ?? null,
+      isDevOnly: extractIsDevOnly(c),
+      manifestFile: sr ? toRepoRelative(scopePath, sr) : null,
+      // M6p Stage 2: discoveryMethod is "llm_augmentation" for LLM-added
+      // components, "manifest" for cdxgen-sourced ones that survived.
+      discoveryMethod: (c as CdxComponent & { discoveryMethod?: string }).discoveryMethod ?? "manifest",
+      llmEvidence: evidence ? (evidence as unknown as Prisma.InputJsonValue) : undefined,
+      occurrences,
+    });
+  }
+
   await (client as PrismaClient).sbomComponent.createMany({
-    data: Array.from(unique.values()).map((c) => {
-      const ecosystem = extractEcosystem(c.purl);
-      const canonicalName = canonicalPackageName(c, ecosystem);
-      const evidence = evidenceMap.get(canonicalName) ?? null;
-      return {
-        scanRunId,
-        name: canonicalName,
-        version: c.version ?? null,
-        purl: c.purl!,
-        ecosystem,
-        licenses: extractLicenses(c.licenses),
-        componentType: c.type ?? "library",
-        scope: c.scope ?? null,
-        isDevOnly: extractIsDevOnly(c),
-        manifestFile: (() => {
-          const sr = extractManifestFile(c, scopeDir);
-          return sr ? toRepoRelative(scopePath, sr) : null;
-        })(),
-        // M6p Stage 2: discoveryMethod is "llm_augmentation" for LLM-added
-        // components, "manifest" for cdxgen-sourced ones that survived.
-        discoveryMethod: (c as CdxComponent & { discoveryMethod?: string }).discoveryMethod ?? "manifest",
-        llmEvidence: evidence ? (evidence as unknown as Prisma.InputJsonValue) : undefined,
-        // M6q: full occurrence list; for LLM-augmented components, also
-        // include the evidence path as a guaranteed occurrence entry.
-        // scopePath ensures sub-scope rows (e.g. /GoWeb) are repo-rooted.
-        // evidence.path is already repo-rooted (toRepoRelative was applied
-        // when the evidence map was first built), so it isn't re-prefixed.
-        occurrences: extractOccurrences(c, evidence?.path ?? null, false, scopePath) as unknown as Prisma.InputJsonValue,
-      };
-    }),
+    data: augRows.map((r) => ({
+      ...r,
+      occurrences: r.occurrences as unknown as Prisma.InputJsonValue,
+    })),
     skipDuplicates: true,
   });
 

@@ -13,10 +13,13 @@
  *  - LLM-augmented components also get llm_evidence.path as a guaranteed occurrence.
  */
 
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
 import { pino } from "pino";
 import { loadConfig } from "../config.js";
 import { prisma } from "../db.js";
-import { toRepoRelative } from "./scopePath.js";
+import { toRepoRelative, toScopeRelative } from "./scopePath.js";
 import type { CdxComponent, CycloneDxDocument } from "./sbomService.js";
 import type { Prisma } from "@prisma/client";
 
@@ -183,6 +186,96 @@ export function extractOccurrenceMap(
 }
 
 // ---------------------------------------------------------------------------
+// Manifest line resolution
+//
+// cdxgen attaches `evidence.occurrences[]` with line numbers when a
+// component is `require()`/`import`-ed from source. For transitive
+// lockfile-only dependencies, the only path it knows is the lockfile
+// itself, with no line. That creates visual inconsistency in the
+// "Found in" panel: some rows have file:line, others just file.
+//
+// resolveManifestLines() backfills those missing line numbers by
+// grepping each manifest-looking file for the package name (same
+// pattern set as osvService.readManifestSnippet uses for SCA issues).
+// Reads are cached per (scopeDir, repoPath) so we never read the
+// same lockfile twice.
+// ---------------------------------------------------------------------------
+
+const MANIFEST_FILENAMES = new Set([
+  "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+  "requirements.txt", "pyproject.toml", "poetry.lock", "Pipfile.lock",
+  "go.mod", "go.sum", "Cargo.toml", "Cargo.lock", "Gemfile.lock",
+  "composer.json", "composer.lock", "packages.config", "csproj.lock.json",
+]);
+
+function looksLikeManifest(repoPath: string): boolean {
+  const base = repoPath.split("/").pop() ?? "";
+  if (MANIFEST_FILENAMES.has(base)) return true;
+  // Project files (.csproj, .vbproj, .vcxproj, etc.)
+  if (/\.(csproj|vbproj|vcxproj|fsproj)$/i.test(base)) return true;
+  return false;
+}
+
+async function readManifestLines(
+  scopeDir: string,
+  repoPath: string,
+  scopePath: string,
+  cache: Map<string, string[] | null>,
+): Promise<string[] | null> {
+  if (cache.has(repoPath)) return cache.get(repoPath)!;
+  // repoPath is repo-rooted ("GoWeb/foo/package-lock.json"); scopeDir is
+  // already the scope dir on disk, so strip the scope prefix to get the
+  // path relative to scopeDir.
+  const scopeRel = toScopeRelative(scopePath, repoPath);
+  try {
+    const content = await readFile(path.join(scopeDir, scopeRel), "utf8");
+    const lines = content.split("\n");
+    cache.set(repoPath, lines);
+    return lines;
+  } catch {
+    cache.set(repoPath, null);
+    return null;
+  }
+}
+
+/**
+ * For each `line: null` occurrence pointing at a manifest-shaped file,
+ * grep the file for the package name and fill in the line number. The
+ * cache is caller-owned so a batch of components persisted together
+ * shares one read per lockfile.
+ *
+ * Mutates and returns the same array. No-op when scopeDir is missing.
+ */
+export async function resolveManifestLines(
+  occurrences: ComponentOccurrence[],
+  packageName: string,
+  scopeDir: string | null,
+  scopePath: string,
+  cache: Map<string, string[] | null>,
+): Promise<ComponentOccurrence[]> {
+  if (!scopeDir) return occurrences;
+  const patterns = [
+    `"${packageName}"`,
+    `'${packageName}'`,
+    `${packageName}==`,
+    `${packageName}~=`,
+  ];
+  for (const occ of occurrences) {
+    if (occ.line != null) continue;
+    if (!looksLikeManifest(occ.path)) continue;
+    const lines = await readManifestLines(scopeDir, occ.path, scopePath, cache);
+    if (!lines) continue;
+    let idx = -1;
+    for (const p of patterns) {
+      idx = lines.findIndex((l) => l.includes(p));
+      if (idx !== -1) break;
+    }
+    if (idx !== -1) occ.line = idx + 1;
+  }
+  return occurrences;
+}
+
+// ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
 
@@ -227,6 +320,7 @@ export async function backfillSbomOccurrences(): Promise<void> {
     },
     select: {
       id: true,
+      name: true,
       purl: true,
       llmEvidence: true,
       scanRunId: true,
@@ -252,13 +346,28 @@ export async function backfillSbomOccurrences(): Promise<void> {
   let filled = 0;
   let skipped = 0;
 
+  // Lazy import to avoid pulling fs / repoCache into the always-loaded
+  // module graph when this backfill never runs.
+  const { repoCachePath } = await import("./repoCache.js");
+  const { stat } = await import("node:fs/promises");
+
   for (const [scanRunId, rows] of byScanRun) {
-    // Fetch the sbom_json + the scope's path for this scan run. We need
-    // scope.path so paths persisted for sub-scopes (e.g. /GoWeb) come out
-    // repo-rooted, not scope-relative.
+    // Fetch sbom_json + scope.path + repo info so we can:
+    //   - persist repo-rooted paths (scope.path)
+    //   - resolve manifest line numbers (need scopeDir on disk via
+    //     repoCachePath + scope.path; only viable when retainClone=true)
     const scanRun = await prisma.scanRun.findUnique({
       where: { id: scanRunId },
-      select: { sbomJson: true, scope: { select: { path: true } } },
+      select: {
+        sbomJson: true,
+        scope: {
+          select: {
+            path: true,
+            repoId: true,
+            repo: { select: { retainClone: true } },
+          },
+        },
+      },
     });
 
     if (!scanRun?.sbomJson) {
@@ -273,6 +382,23 @@ export async function backfillSbomOccurrences(): Promise<void> {
     // have clone-prefixed paths; one-time strip as data migration).
     const occMap = extractOccurrenceMap(doc, /* stripPrefix */ true, scopePath);
 
+    // Compute on-disk scopeDir for manifest-line resolution. Only available
+    // when the clone is retained; otherwise we still persist the file path,
+    // just without line numbers.
+    let scopeDir: string | null = null;
+    if (scanRun.scope?.repo?.retainClone && scanRun.scope.repoId) {
+      const cacheDir = repoCachePath(scanRun.scope.repoId);
+      try {
+        await stat(cacheDir);
+        scopeDir = scopePath === "/" || scopePath === ""
+          ? cacheDir
+          : path.join(cacheDir, scopePath);
+      } catch {
+        scopeDir = null;
+      }
+    }
+    const lockfileCache = new Map<string, string[] | null>();
+
     for (const row of rows) {
       const occs = occMap.get(row.purl) ?? [];
 
@@ -285,6 +411,11 @@ export async function backfillSbomOccurrences(): Promise<void> {
       if (llmPath && !occs.some((o) => o.path === llmPath)) {
         occs.push({ path: llmPath, line: null });
       }
+
+      // Enrich manifest-shaped occurrences with line numbers (matches the
+      // direct-import case in shape, so the FE doesn't render an awkward
+      // mix of "file:N" and "file" entries — UX feedback #13).
+      await resolveManifestLines(occs, row.name, scopeDir, scopePath, lockfileCache);
 
       await setComponentOccurrences(row.id, occs);
       filled++;
