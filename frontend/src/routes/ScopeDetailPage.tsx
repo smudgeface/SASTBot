@@ -829,6 +829,14 @@ function ScaIssueRow({
         <TableCell>
           <div className="flex items-center gap-1 group/summary">
             <span className="text-sm truncate">
+              {/* Lead with the CVE/OSV id so two issues against the same
+                  package@version (different CVEs, same ReDoS topic) are
+                  obviously distinct at a glance. Both ids together when
+                  both exist (CVE is more familiar; OSV/GHSA is the
+                  upstream canonical). */}
+              <span className="font-mono text-xs text-muted-foreground mr-1.5">
+                {issue.latest_cve_id ?? issue.osv_id}
+              </span>
               {issue.latest_summary ?? issue.latest_llm_summary}
             </span>
             <button

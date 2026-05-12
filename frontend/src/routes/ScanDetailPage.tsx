@@ -95,7 +95,17 @@ function FindingRow({
         </TableCell>
         <TableCell className="w-24"><SeverityBadge severity={finding.severity} /></TableCell>
         <TableCell className="text-sm">
-          <div className="line-clamp-1">{summary}</div>
+          <div className="line-clamp-1">
+            {/* CVE/OSV id prefix — two findings against the same component
+                often share a topic (e.g. multiple ReDoS bugs in is-svg);
+                without the id the rows look like dupes. */}
+            {isCve && (
+              <span className="font-mono text-xs text-muted-foreground mr-1.5">
+                {finding.cve_id ?? finding.osv_id}
+              </span>
+            )}
+            {summary}
+          </div>
         </TableCell>
         <TableCell className="w-64 overflow-hidden">
           {manifestFile ? (
