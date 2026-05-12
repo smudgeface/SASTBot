@@ -858,6 +858,15 @@ backfillSbomOccurrences().catch((err) => {
   logger.warn({ err }, "[worker] sbom-occurrences backfill failed");
 });
 
+// M6q follow-up: repair sbom_components.manifest_file values that were
+// truncated to basename by the old normalizeManifestPath fallback (cdxgen
+// emitted relative paths post-M6q, but the basename fallback dropped the
+// subdirectory before toRepoRelative tacked the scope prefix on).
+import { backfillSbomManifestFiles } from "./services/sbomService.js";
+backfillSbomManifestFiles().catch((err) => {
+  logger.warn({ err }, "[worker] sbom manifest_file backfill failed");
+});
+
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {

@@ -7,10 +7,12 @@ import { promisify } from "node:util";
 import { toRepoRelative } from "./scopePath.js";
 import { extractOccurrences } from "./sbomOccurrences.js";
 
-import type { Prisma, PrismaClient, SbomComponent } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import type { PrismaClient, SbomComponent } from "@prisma/client";
 import { pino } from "pino";
 
 import { loadConfig } from "../config.js";
+import { prisma } from "../db.js";
 
 const execFileAsync = promisify(execFile);
 const logger = pino({ level: loadConfig().logLevel, name: "sbomService" });
@@ -184,8 +186,18 @@ export function normalizeManifestPath(abs: string, scopeDir: string): string {
   );
   if (tmpMatch) return tmpMatch[1]!;
 
-  // Last resort: just the basename. Better than leaking a tmp/clone path into
-  // the source-link URL.
+  // M6q cdxgen-cwd fix: cdxgen now emits paths already scope-relative
+  // (e.g. "kJs/package-lock.json"). If `abs` has no leading slash and
+  // doesn't look like a tmp/clone leak we missed, trust it verbatim —
+  // basename-truncation here loses the subdirectory and yields wrong
+  // links like "GoWeb/package-lock.json" pointing at a nonexistent file.
+  if (!abs.startsWith("/") && !abs.startsWith("..") && !/\/(?:clones|tmp|sastbot-repo-)/.test(abs)) {
+    return abs;
+  }
+
+  // Last resort: just the basename. Only reached now if `abs` looked
+  // tmp/clone-rooted but the regex above failed to strip a recognisable
+  // prefix — still better than leaking a tmp/clone path into source URLs.
   const lastSlash = abs.lastIndexOf("/");
   return lastSlash >= 0 ? abs.slice(lastSlash + 1) : abs;
 }
@@ -719,4 +731,74 @@ export async function persistAugmentedComponents(
   return (client as PrismaClient).sbomComponent.findMany({
     where: { scanRunId },
   });
+}
+
+// ---------------------------------------------------------------------------
+// M6q follow-up: backfillSbomManifestFiles
+//
+// Repairs `sbom_components.manifest_file` for rows persisted before the
+// normalizeManifestPath fix that handles already-scope-relative paths.
+// Symptom: cdxgen emitted "kJs/package-lock.json" but the old fallback
+// truncated to "package-lock.json"; toRepoRelative then tacked the scope
+// prefix on, yielding "GoWeb/package-lock.json" — a file that doesn't
+// exist (the real lockfile is at GoWeb/kJs/package-lock.json).
+//
+// Walks every scan_run's sbom_json and re-extracts manifest_file using
+// the fixed normalizeManifestPath, then writes the result into
+// sbom_components. Idempotent — only updates rows whose stored value
+// differs from the freshly extracted one.
+// ---------------------------------------------------------------------------
+
+export async function backfillSbomManifestFiles(): Promise<void> {
+  const runs = await prisma.scanRun.findMany({
+    where: { sbomJson: { not: Prisma.DbNull } },
+    select: {
+      id: true,
+      sbomJson: true,
+      scope: { select: { path: true } },
+    },
+  });
+
+  if (runs.length === 0) {
+    logger.info("[sbomService] manifest_file backfill: no scan_runs to process");
+    return;
+  }
+
+  let totalUpdated = 0;
+
+  for (const run of runs) {
+    const scopePath = run.scope?.path ?? "/";
+    const doc = run.sbomJson as unknown as CycloneDxDocument;
+    if (!doc?.components?.length) continue;
+
+    // Build purl → corrected manifest_file map.
+    const fixedByPurl = new Map<string, string | null>();
+    for (const c of doc.components) {
+      if (!c.purl) continue;
+      // Reuse extractManifestFile + toRepoRelative. scopeDir is unused by
+      // the new branch in normalizeManifestPath (relative paths short-circuit
+      // before scopeDir matters), so passing a sentinel is fine.
+      const sr = extractManifestFile(c, "/__backfill__");
+      fixedByPurl.set(c.purl, sr ? toRepoRelative(scopePath, sr) : null);
+    }
+
+    const rows = await prisma.sbomComponent.findMany({
+      where: { scanRunId: run.id },
+      select: { id: true, purl: true, manifestFile: true },
+    });
+    for (const row of rows) {
+      if (!fixedByPurl.has(row.purl)) continue;
+      const desired = fixedByPurl.get(row.purl) ?? null;
+      if (row.manifestFile === desired) continue;
+      await prisma.sbomComponent.update({
+        where: { id: row.id },
+        data: { manifestFile: desired },
+      });
+      totalUpdated++;
+    }
+  }
+
+  if (totalUpdated > 0) {
+    logger.info({ updated: totalUpdated }, "[sbomService] manifest_file backfill complete");
+  }
 }
