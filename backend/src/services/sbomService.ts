@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { toRepoRelative } from "./scopePath.js";
-import { extractOccurrences, resolveManifestLines } from "./sbomOccurrences.js";
+import { extractOccurrences, resolveManifestLines, ScopeFileIndex } from "./sbomOccurrences.js";
 import type { ComponentOccurrence } from "./sbomOccurrences.js";
 
 import { Prisma } from "@prisma/client";
@@ -628,16 +628,18 @@ export async function persistComponents(
     occurrences: ComponentOccurrence[];
   };
   const lockfileCache = new Map<string, string[] | null>();
+  const scopeIndex = scopeDir ? new ScopeFileIndex(scopeDir, scopePath) : undefined;
   const rows: Row[] = [];
   for (const c of unique.values()) {
     const ecosystem = extractEcosystem(c.purl);
     const name = canonicalPackageName(c, ecosystem);
     const sr = extractManifestFile(c, scopeDir);
     const occurrences = extractOccurrences(c, null, false, scopePath);
-    // Grep manifest-shaped occurrences for the package name so transitive
-    // lockfile-only entries get a clickable line number, matching the
-    // direct-import case. Cache shared across components in this batch.
-    await resolveManifestLines(occurrences, name, scopeDir || null, scopePath, lockfileCache);
+    // Resolve missing/phantom paths (e.g. cdxgen jar-deps basenames) +
+    // grep manifest-shaped occurrences for line numbers so transitive
+    // lockfile-only entries match the direct-import case in shape.
+    // Caches shared across components in this batch.
+    await resolveManifestLines(occurrences, name, scopeDir || null, scopePath, lockfileCache, scopeIndex);
     rows.push({
       scanRunId,
       name,
@@ -732,6 +734,7 @@ export async function persistAugmentedComponents(
     occurrences: ComponentOccurrence[];
   };
   const lockfileCache = new Map<string, string[] | null>();
+  const scopeIndex = scopeDir ? new ScopeFileIndex(scopeDir, scopePath) : undefined;
   const augRows: AugRow[] = [];
   for (const c of unique.values()) {
     const ecosystem = extractEcosystem(c.purl);
@@ -739,7 +742,7 @@ export async function persistAugmentedComponents(
     const evidence = evidenceMap.get(canonicalName) ?? null;
     const sr = extractManifestFile(c, scopeDir);
     const occurrences = extractOccurrences(c, evidence?.path ?? null, false, scopePath);
-    await resolveManifestLines(occurrences, canonicalName, scopeDir || null, scopePath, lockfileCache);
+    await resolveManifestLines(occurrences, canonicalName, scopeDir || null, scopePath, lockfileCache, scopeIndex);
     augRows.push({
       scanRunId,
       name: canonicalName,
@@ -789,12 +792,21 @@ export async function persistAugmentedComponents(
 // ---------------------------------------------------------------------------
 
 export async function backfillSbomManifestFiles(): Promise<void> {
+  const { repoCachePath } = await import("./repoCache.js");
+  const { stat, access } = await import("node:fs/promises");
+
   const runs = await prisma.scanRun.findMany({
     where: { sbomJson: { not: Prisma.DbNull } },
     select: {
       id: true,
       sbomJson: true,
-      scope: { select: { path: true } },
+      scope: {
+        select: {
+          path: true,
+          repoId: true,
+          repo: { select: { retainClone: true } },
+        },
+      },
     },
   });
 
@@ -821,13 +833,48 @@ export async function backfillSbomManifestFiles(): Promise<void> {
       fixedByPurl.set(c.purl, sr ? toRepoRelative(scopePath, sr) : null);
     }
 
+    // Set up an on-disk scopeDir + lazy ScopeFileIndex so we can resolve
+    // cdxgen jar-deps phantom paths (e.g. "GoWeb/compiler.jar" → the
+    // real "GoWeb/kJs/javascript/scripts/tools/compiler.jar"). Only
+    // viable when the clone is retained.
+    let scopeDir: string | null = null;
+    if (run.scope?.repo?.retainClone && run.scope.repoId) {
+      const cacheDir = repoCachePath(run.scope.repoId);
+      try {
+        await stat(cacheDir);
+        scopeDir = scopePath === "/" || scopePath === ""
+          ? cacheDir
+          : join(cacheDir, scopePath);
+      } catch {
+        scopeDir = null;
+      }
+    }
+    const scopeIndex = scopeDir ? new ScopeFileIndex(scopeDir, scopePath) : null;
+
     const rows = await prisma.sbomComponent.findMany({
       where: { scanRunId: run.id },
       select: { id: true, purl: true, manifestFile: true },
     });
     for (const row of rows) {
       if (!fixedByPurl.has(row.purl)) continue;
-      const desired = fixedByPurl.get(row.purl) ?? null;
+      let desired = fixedByPurl.get(row.purl) ?? null;
+
+      // If we have a scope on disk and the proposed path doesn't actually
+      // exist, try resolving the basename via the scope index.
+      if (desired && scopeDir && scopeIndex) {
+        const { toScopeRelative } = await import("./scopePath.js");
+        const onDisk = join(scopeDir, toScopeRelative(scopePath, desired));
+        let exists = false;
+        try { await access(onDisk); exists = true; } catch { /* miss */ }
+        if (!exists) {
+          const basename = desired.split("/").pop() ?? "";
+          if (basename) {
+            const resolved = await scopeIndex.resolveBasename(basename);
+            if (resolved) desired = resolved;
+          }
+        }
+      }
+
       if (row.manifestFile === desired) continue;
       await prisma.sbomComponent.update({
         where: { id: row.id },

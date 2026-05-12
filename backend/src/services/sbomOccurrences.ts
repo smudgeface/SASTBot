@@ -13,7 +13,7 @@
  *  - LLM-augmented components also get llm_evidence.path as a guaranteed occurrence.
  */
 
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import { pino } from "pino";
@@ -239,10 +239,67 @@ async function readManifestLines(
 }
 
 /**
+ * Lazy recursive index of every file basename → repo-relative paths in
+ * a scope dir. Built only on first lookup so the common case (every
+ * occurrence path already correct) costs nothing.
+ *
+ * Skips common heavy/uninteresting trees so we don't get killed on big
+ * monorepos: node_modules, .git, vendor caches, build outputs, etc.
+ */
+class ScopeFileIndex {
+  private byBasename: Map<string, string[]> | null = null;
+  constructor(private scopeDir: string, private scopePath: string) {}
+
+  private static SKIP_DIRS = new Set([
+    ".git", "node_modules", "dist", "build", "out", "target", "bin", "obj",
+    ".venv", "venv", "__pycache__", ".cache", ".next", ".nuxt", ".turbo",
+    "coverage", ".pytest_cache",
+  ]);
+
+  private async build(): Promise<void> {
+    const idx = new Map<string, string[]>();
+    const walk = async (dir: string, rel: string): Promise<void> => {
+      let entries: import("node:fs").Dirent[];
+      try { entries = await readdir(dir, { withFileTypes: true }); }
+      catch { return; }
+      for (const e of entries) {
+        if (e.name.startsWith(".") && e.name !== ".env" && e.name !== ".gitignore") continue;
+        const childRel = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) {
+          if (ScopeFileIndex.SKIP_DIRS.has(e.name)) continue;
+          await walk(path.join(dir, e.name), childRel);
+        } else if (e.isFile()) {
+          const list = idx.get(e.name);
+          if (list) list.push(childRel);
+          else idx.set(e.name, [childRel]);
+        }
+      }
+    };
+    await walk(this.scopeDir, "");
+    this.byBasename = idx;
+  }
+
+  /** Returns the repo-rooted path when exactly one file matches the
+   *  basename; null when 0 or >1 matches (ambiguous). */
+  async resolveBasename(basename: string): Promise<string | null> {
+    if (!this.byBasename) await this.build();
+    const matches = this.byBasename!.get(basename);
+    if (!matches || matches.length !== 1) return null;
+    return toRepoRelative(this.scopePath, matches[0]!);
+  }
+}
+
+/**
  * For each `line: null` occurrence pointing at a manifest-shaped file,
  * grep the file for the package name and fill in the line number. The
  * cache is caller-owned so a batch of components persisted together
  * shares one read per lockfile.
+ *
+ * Also resolves "phantom" paths — when cdxgen extracted a component
+ * from a packed jar/zip its identity value is just the basename (e.g.
+ * "compiler.jar"), with no repo location. We walk the scope dir once
+ * and replace the path with the real location when there's exactly
+ * one match. Ambiguous (≥2 matches) and missing files are left as-is.
  *
  * Mutates and returns the same array. No-op when scopeDir is missing.
  */
@@ -252,6 +309,7 @@ export async function resolveManifestLines(
   scopeDir: string | null,
   scopePath: string,
   cache: Map<string, string[] | null>,
+  scopeIndex?: ScopeFileIndex,
 ): Promise<ComponentOccurrence[]> {
   if (!scopeDir) return occurrences;
   const patterns = [
@@ -261,6 +319,24 @@ export async function resolveManifestLines(
     `${packageName}~=`,
   ];
   for (const occ of occurrences) {
+    // Step 1: try to resolve the path when the on-disk file doesn't exist
+    // (cdxgen jar-deps case: identity is the bare jar basename, no path).
+    // Cheap stat first; only walk the index on a miss.
+    if (scopeIndex) {
+      const scopeRel = toScopeRelative(scopePath, occ.path);
+      const onDisk = path.join(scopeDir, scopeRel);
+      let exists = false;
+      try { await (await import("node:fs/promises")).access(onDisk); exists = true; } catch { /* miss */ }
+      if (!exists) {
+        const basename = occ.path.split("/").pop() ?? "";
+        if (basename) {
+          const resolved = await scopeIndex.resolveBasename(basename);
+          if (resolved) occ.path = resolved;
+        }
+      }
+    }
+    // Step 2: line-number lookup for manifest-shaped files. Skip when the
+    // occurrence already has a line.
     if (occ.line != null) continue;
     if (!looksLikeManifest(occ.path)) continue;
     const lines = await readManifestLines(scopeDir, occ.path, scopePath, cache);
@@ -274,6 +350,8 @@ export async function resolveManifestLines(
   }
   return occurrences;
 }
+
+export { ScopeFileIndex };
 
 // ---------------------------------------------------------------------------
 // Persistence
@@ -398,6 +476,7 @@ export async function backfillSbomOccurrences(): Promise<void> {
       }
     }
     const lockfileCache = new Map<string, string[] | null>();
+    const scopeIndex = scopeDir ? new ScopeFileIndex(scopeDir, scopePath) : undefined;
 
     for (const row of rows) {
       const occs = occMap.get(row.purl) ?? [];
@@ -412,10 +491,10 @@ export async function backfillSbomOccurrences(): Promise<void> {
         occs.push({ path: llmPath, line: null });
       }
 
-      // Enrich manifest-shaped occurrences with line numbers (matches the
-      // direct-import case in shape, so the FE doesn't render an awkward
-      // mix of "file:N" and "file" entries — UX feedback #13).
-      await resolveManifestLines(occs, row.name, scopeDir, scopePath, lockfileCache);
+      // Resolve missing paths (cdxgen jar-deps basenames) + manifest line
+      // numbers so the FE doesn't render an awkward mix of "file:N",
+      // "file", and "file-that-doesn't-exist" entries.
+      await resolveManifestLines(occs, row.name, scopeDir, scopePath, lockfileCache, scopeIndex);
 
       await setComponentOccurrences(row.id, occs);
       filled++;

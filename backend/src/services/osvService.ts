@@ -491,7 +491,8 @@ export async function backfillCvssScores(db: PrismaClient): Promise<void> {
 
 export async function backfillManifestOrigin(db: PrismaClient): Promise<void> {
   const { repoCachePath } = await import("./repoCache.js");
-  const { stat } = await import("node:fs/promises");
+  const { stat, access } = await import("node:fs/promises");
+  const { ScopeFileIndex } = await import("./sbomOccurrences.js");
 
   const scopes = await db.scanScope.findMany({
     where: { lastScanRunId: { not: null } },
@@ -505,32 +506,28 @@ export async function backfillManifestOrigin(db: PrismaClient): Promise<void> {
     try { await stat(cacheDir); } catch { continue; }
     const scopeDir = scope.path === "/" || scope.path === "" ? cacheDir : join(cacheDir, scope.path);
 
-    // Pull the raw sbom_json from the latest scan and index by purl → manifest_file.
-    const run = await db.scanRun.findUnique({
-      where: { id: scope.lastScanRunId },
-      select: { sbomJson: true },
+    // Read sbom_components directly — its `name` column is the canonical
+    // package name (group:artifact for maven, group/name for npm-scoped),
+    // which matches sca_issues.package_name. The previous version of this
+    // backfill re-parsed sbom_json and keyed by cdxgen's raw `c.name`,
+    // missing maven rows whose canonical name has a group prefix.
+    // Its `manifest_file` column is already the repo-rooted path
+    // (post-backfillSbomManifestFiles), so we strip the scope prefix
+    // back off for the snippet read.
+    const sbomRows = await db.sbomComponent.findMany({
+      where: { scanRunId: scope.lastScanRunId },
+      select: { name: true, manifestFile: true },
     });
-    if (!run?.sbomJson) continue;
-
-    type CdxLite = { name?: string; purl?: string; properties?: { name?: string; value?: string }[]; evidence?: { identity?: unknown } };
-    const components = ((run.sbomJson as { components?: CdxLite[] }).components ?? []) as CdxLite[];
     const manifestByName = new Map<string, string>();
-    for (const c of components) {
-      if (!c.name) continue;
-      const srcFile = c.properties?.find((p) => p.name === "SrcFile")?.value;
-      let abs: string | undefined = srcFile;
-      if (!abs && c.evidence?.identity) {
-        const identities = (Array.isArray(c.evidence.identity) ? c.evidence.identity : [c.evidence.identity]) as { methods?: { technique?: string; value?: string }[] }[];
-        for (const ident of identities) {
-          for (const m of ident.methods ?? []) {
-            if (m.technique === "manifest-analysis" && m.value) { abs = m.value; break; }
-          }
-          if (abs) break;
-        }
-      }
-      if (!abs) continue;
-      manifestByName.set(c.name, normalizeManifestPath(abs, scopeDir));
+    for (const r of sbomRows) {
+      if (!r.manifestFile) continue;
+      const { toScopeRelative } = await import("./scopePath.js");
+      manifestByName.set(r.name, toScopeRelative(scope.path, r.manifestFile));
     }
+
+    // Lazy scope file index — only built (and walked) if we hit a path
+    // that doesn't exist on disk (cdxgen jar-deps basenames, etc.).
+    const scopeIndex = new ScopeFileIndex(scopeDir, scope.path);
 
     // Process any issue that's missing the manifest LINE (or both file and
     // line). Filtering on `latestManifestFile: null` alone skipped rows whose
@@ -542,8 +539,30 @@ export async function backfillManifestOrigin(db: PrismaClient): Promise<void> {
       select: { id: true, packageName: true },
     });
     for (const issue of issues) {
-      const manifestFile = manifestByName.get(issue.packageName);
+      let manifestFile = manifestByName.get(issue.packageName);
       if (!manifestFile) continue;
+
+      // If the file doesn't actually exist at the expected location
+      // (cdxgen jar-deps case: identity was just the jar basename), look
+      // up the basename in the scope index. Exactly-one match → swap in
+      // the real path; otherwise leave the file value alone.
+      let onDisk = join(scopeDir, manifestFile);
+      let exists = false;
+      try { await access(onDisk); exists = true; } catch { /* miss */ }
+      if (!exists) {
+        const basename = manifestFile.split("/").pop() ?? "";
+        if (basename) {
+          const resolvedRepoRooted = await scopeIndex.resolveBasename(basename);
+          if (resolvedRepoRooted) {
+            // resolveBasename returns a repo-rooted path; readManifestSnippet
+            // wants scope-relative, so strip the scope prefix back off.
+            const { toScopeRelative } = await import("./scopePath.js");
+            manifestFile = toScopeRelative(scope.path, resolvedRepoRooted);
+            onDisk = join(scopeDir, manifestFile);
+          }
+        }
+      }
+
       const { line, snippet } = await readManifestSnippet(scopeDir, manifestFile, issue.packageName);
       await db.scaIssue.update({
         where: { id: issue.id },

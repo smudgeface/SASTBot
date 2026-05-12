@@ -814,9 +814,10 @@ backfillReachability(prisma).catch((err) => {
   logger.warn({ err }, "[worker] reachability backfill failed");
 });
 
-backfillManifestOrigin(prisma).catch((err) => {
-  logger.warn({ err }, "[worker] manifest-origin backfill failed");
-});
+// backfillManifestOrigin reads from sbom_components.manifest_file, which is
+// itself repaired by backfillSbomManifestFiles below. Chain them so the
+// SCA-issue path inherits the latest correction (e.g. cdxgen jar-deps
+// basenames resolved to their on-disk location via ScopeFileIndex).
 
 // M6n: suppress dev-only SCA issues for repos that have opted out of dev deps.
 // Idempotent — filters on dismissedStatus not already terminal. Safe to re-run.
@@ -862,10 +863,15 @@ backfillSbomOccurrences().catch((err) => {
 // truncated to basename by the old normalizeManifestPath fallback (cdxgen
 // emitted relative paths post-M6q, but the basename fallback dropped the
 // subdirectory before toRepoRelative tacked the scope prefix on).
+// Then re-run backfillManifestOrigin so the SCA-issue paths pick up the
+// corrected sbom_components values (e.g. jar-deps basenames resolved to
+// the real on-disk path via ScopeFileIndex).
 import { backfillSbomManifestFiles } from "./services/sbomService.js";
-backfillSbomManifestFiles().catch((err) => {
-  logger.warn({ err }, "[worker] sbom manifest_file backfill failed");
-});
+backfillSbomManifestFiles()
+  .then(() => backfillManifestOrigin(prisma))
+  .catch((err) => {
+    logger.warn({ err }, "[worker] sbom manifest_file → SCA origin backfill chain failed");
+  });
 
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
