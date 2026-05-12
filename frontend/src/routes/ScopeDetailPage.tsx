@@ -380,7 +380,8 @@ function SastIssueRow({
 
   const copyLink = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(`${window.location.origin}/scopes/${scopeId}?issue=${issue.id}`);
+    // M6q: copy the path-based deep link, not the legacy ?issue= search param.
+    navigator.clipboard.writeText(`${window.location.origin}/scopes/${scopeId}/sast/${issue.id}`);
   };
   const triage = useTriageSastIssue();
   const linkJira = useLinkSastIssueToJira();
@@ -788,7 +789,8 @@ function ScaIssueRow({
 
   const copyLink = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(`${window.location.origin}/scopes/${scopeId}?issue=${issue.id}`);
+    // M6q: copy the path-based deep link, not the legacy ?issue= search param.
+    navigator.clipboard.writeText(`${window.location.origin}/scopes/${scopeId}/sca/${issue.id}`);
   };
 
   const handleLink = (key: string) => {
