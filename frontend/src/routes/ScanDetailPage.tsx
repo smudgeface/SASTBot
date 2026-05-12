@@ -309,13 +309,17 @@ function ScanComponentRow({
   sourceUrlTemplate: string | null;
 }) {
   const rowRef = useRef<HTMLTableRowElement>(null);
-  const [expanded, setExpanded] = useState(expandedId === component.id);
+  const autoExpand = expandedId === component.id;
+  const [expanded, setExpanded] = useState(autoExpand);
 
+  // Sync expand + scroll when the URL targets this row. Instant scroll
+  // (no smooth easing) — the tab/route change is already a hard transition.
   useEffect(() => {
-    if (expandedId === component.id && rowRef.current) {
-      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (autoExpand) {
+      setExpanded(true);
+      rowRef.current?.scrollIntoView({ block: "center" });
     }
-  }, [expandedId, component.id]);
+  }, [autoExpand]);
 
   const eco = prettyEcosystem(component.ecosystem, component.discovery_method);
   const occurrences = component.occurrences ?? [];
@@ -347,15 +351,7 @@ function ScanComponentRow({
           </span>
         </TableCell>
         <TableCell className="text-sm text-muted-foreground">{component.version ?? "—"}</TableCell>
-        <TableCell className="text-sm text-muted-foreground">
-          {eco.variant === "vendored" ? (
-            <Badge variant="outline" className="text-[9px] px-1 py-0 text-violet-600 border-violet-400">
-              Vendored
-            </Badge>
-          ) : (
-            eco.label
-          )}
-        </TableCell>
+        <TableCell className="text-sm text-muted-foreground">{eco}</TableCell>
         <TableCell className="text-sm text-muted-foreground">
           {firstLicense ? (
             <span>{firstLicense}{extraLicenses > 0 && <span className="text-xs ml-1">+{extraLicenses}</span>}</span>

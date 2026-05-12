@@ -16,6 +16,7 @@
 import { pino } from "pino";
 import { loadConfig } from "../config.js";
 import { prisma } from "../db.js";
+import { toRepoRelative } from "./scopePath.js";
 import type { CdxComponent, CycloneDxDocument } from "./sbomService.js";
 import type { Prisma } from "@prisma/client";
 
@@ -72,12 +73,20 @@ function stripClonePrefix(raw: string, warnIfFound: boolean): string {
  *
  * @param c - CdxComponent from the SBOM JSON
  * @param llmEvidencePath - optional path from the stored llmEvidence blob
+ *        (already repo-rooted by the caller; not re-prefixed)
  * @param stripPrefix - when true (backfill mode), strip clone-root prefixes
+ * @param scopePath - the scope's path on the repo (e.g. "/" or "/GoWeb").
+ *        When the scope is not "/", cdxgen ran with cwd = scope dir, so the
+ *        paths it emitted are scope-relative ("kJs/foo.js" rather than
+ *        "GoWeb/kJs/foo.js"). Prefixing here makes the persisted paths
+ *        repo-rooted, which is what <FileLink> + source_url_template expect.
+ *        Defaults to "/" for backwards compat with existing callers/tests.
  */
 export function extractOccurrences(
   c: CdxComponent,
   llmEvidencePath?: string | null,
   stripPrefix = false,
+  scopePath = "/",
 ): ComponentOccurrence[] {
   const raw: ComponentOccurrence[] = [];
 
@@ -99,7 +108,7 @@ export function extractOccurrences(
       }
       if (stripPrefix) path = stripClonePrefix(path, false);
       else path = stripClonePrefix(path, true); // defensive check on new scans
-      if (path) raw.push({ path, line });
+      if (path) raw.push({ path: toRepoRelative(scopePath, path), line });
     }
   } else {
     // Step 2: evidence.identity[].methods[].value or concludedValue
@@ -116,23 +125,24 @@ export function extractOccurrences(
             let path = m.value;
             if (stripPrefix) path = stripClonePrefix(path, false);
             else path = stripClonePrefix(path, true);
-            if (path) raw.push({ path, line: null });
+            if (path) raw.push({ path: toRepoRelative(scopePath, path), line: null });
           }
         }
       } else if ((ident as { concludedValue?: string }).concludedValue) {
         let path = (ident as { concludedValue: string }).concludedValue;
         if (stripPrefix) path = stripClonePrefix(path, false);
         else path = stripClonePrefix(path, true);
-        if (path) raw.push({ path, line: null });
+        if (path) raw.push({ path: toRepoRelative(scopePath, path), line: null });
       }
     }
   }
 
-  // Step 3: llm_evidence.path — guaranteed first occurrence for LLM-augmented rows
+  // Step 3: llm_evidence.path — guaranteed first occurrence for LLM-augmented rows.
+  // The caller already stored this as a repo-rooted path (see persistAugmentedComponents),
+  // so do not re-prefix; just dedupe.
   if (llmEvidencePath) {
     let path = llmEvidencePath;
     if (stripPrefix) path = stripClonePrefix(path, false);
-    // Only add if not already present (no line, so match on path)
     if (path && !raw.some((o) => o.path === path)) {
       raw.push({ path, line: null });
     }
@@ -155,15 +165,18 @@ export function extractOccurrences(
 /**
  * Build a map of purl → ComponentOccurrence[] from a raw SBOM JSON document.
  * Used by backfillSbomOccurrences to extract from the stored sbom_json.
+ * `scopePath` is the scope's repo path ("/", "/GoWeb", etc.) so the
+ * persisted occurrences are repo-rooted.
  */
 export function extractOccurrenceMap(
   doc: CycloneDxDocument,
   stripPrefix: boolean,
+  scopePath = "/",
 ): Map<string, ComponentOccurrence[]> {
   const result = new Map<string, ComponentOccurrence[]>();
   for (const c of doc.components ?? []) {
     if (!c.purl) continue;
-    const occs = extractOccurrences(c, null, stripPrefix);
+    const occs = extractOccurrences(c, null, stripPrefix, scopePath);
     result.set(c.purl, occs);
   }
   return result;
@@ -200,30 +213,37 @@ export async function setComponentOccurrences(
  * cleans them as a one-time data migration.
  */
 export async function backfillSbomOccurrences(): Promise<void> {
-  // Find component rows with empty occurrences that have a parent scan run
-  // with a non-null sbom_json. We join via scanRunId.
-  const emptyRows = await prisma.sbomComponent.findMany({
+  // Pick up:
+  //   a) rows with empty occurrences (initial backfill case), AND
+  //   b) rows belonging to a sub-scope (scope.path != "/") — they may have
+  //      occurrences that pre-date the scopePath prefix fix and therefore
+  //      miss the scope prefix. Re-extracting is cheap and idempotent.
+  const candidates = await prisma.sbomComponent.findMany({
     where: {
-      occurrences: { equals: [] as unknown as Prisma.InputJsonValue },
+      OR: [
+        { occurrences: { equals: [] as unknown as Prisma.InputJsonValue } },
+        { scanRun: { scope: { NOT: { path: "/" } } } },
+      ],
     },
     select: {
       id: true,
       purl: true,
       llmEvidence: true,
       scanRunId: true,
+      occurrences: true,
     },
   });
 
-  if (emptyRows.length === 0) {
+  if (candidates.length === 0) {
     logger.info("[sbomOccurrences] backfill: no rows need occurrences — skipping");
     return;
   }
 
-  logger.info({ count: emptyRows.length }, "[sbomOccurrences] backfill: starting");
+  logger.info({ count: candidates.length }, "[sbomOccurrences] backfill: starting");
 
   // Group by scanRunId so we fetch sbom_json once per scan run.
-  const byScanRun = new Map<string, typeof emptyRows>();
-  for (const row of emptyRows) {
+  const byScanRun = new Map<string, typeof candidates>();
+  for (const row of candidates) {
     const existing = byScanRun.get(row.scanRunId) ?? [];
     existing.push(row);
     byScanRun.set(row.scanRunId, existing);
@@ -233,10 +253,12 @@ export async function backfillSbomOccurrences(): Promise<void> {
   let skipped = 0;
 
   for (const [scanRunId, rows] of byScanRun) {
-    // Fetch the sbom_json for this scan run.
+    // Fetch the sbom_json + the scope's path for this scan run. We need
+    // scope.path so paths persisted for sub-scopes (e.g. /GoWeb) come out
+    // repo-rooted, not scope-relative.
     const scanRun = await prisma.scanRun.findUnique({
       where: { id: scanRunId },
-      select: { sbomJson: true },
+      select: { sbomJson: true, scope: { select: { path: true } } },
     });
 
     if (!scanRun?.sbomJson) {
@@ -245,10 +267,11 @@ export async function backfillSbomOccurrences(): Promise<void> {
       continue;
     }
 
+    const scopePath = scanRun.scope?.path ?? "/";
     const doc = scanRun.sbomJson as unknown as CycloneDxDocument;
     // Build purl → occurrences map. stripPrefix=true for backfill (pre-M6q rows
     // have clone-prefixed paths; one-time strip as data migration).
-    const occMap = extractOccurrenceMap(doc, /* stripPrefix */ true);
+    const occMap = extractOccurrenceMap(doc, /* stripPrefix */ true, scopePath);
 
     for (const row of rows) {
       const occs = occMap.get(row.purl) ?? [];

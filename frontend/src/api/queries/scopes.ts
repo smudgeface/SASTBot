@@ -130,6 +130,24 @@ export function useScopeComponents(
   });
 }
 
+/**
+ * Fetch the most recent scan's SBOM JSON for a scope, pretty-printed for
+ * display in the viewer. Hits the M6q scope-level SBOM endpoint which
+ * serves the same payload the download button delivers — the
+ * Content-Disposition header is harmless when fetched programmatically.
+ */
+export function useScopeSbomJson(scopeId: string | undefined) {
+  return useQuery<string>({
+    queryKey: [...scopesKey, scopeId, "sbom-json"],
+    queryFn: async () => {
+      const data = await apiFetch<unknown>(`/api/scopes/${scopeId}/sbom-json`);
+      return JSON.stringify(data, null, 2);
+    },
+    enabled: !!scopeId,
+    staleTime: Infinity, // SBOM for a completed scan never changes
+  });
+}
+
 export function useScopeScans(scopeId: string | undefined, limit = 20) {
   const qc = useQueryClient();
   return useQuery<ScanRunSummary[]>({

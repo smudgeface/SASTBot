@@ -228,4 +228,55 @@ describe("extractOccurrences", () => {
     // no line numbers since these came from identity methods
     expect(result.every((r) => r.line === null)).toBe(true);
   });
+
+  describe("scopePath prefixing (M6q follow-up)", () => {
+    it("prefixes occurrence paths with the scope when scopePath != /", async () => {
+      const extractOccurrences = await getExtractOccurrences();
+      const c = makeComponent({
+        evidence: {
+          occurrences: [
+            { location: "kJs/javascript/src/kjs/Record.js#3" },
+            { location: "kJs/javascript/src/kjs/Player.js#42" },
+          ],
+        },
+      });
+      const result = extractOccurrences(c, null, false, "/GoWeb");
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({ path: "GoWeb/kJs/javascript/src/kjs/Record.js", line: 3 });
+      expect(result[1]).toEqual({ path: "GoWeb/kJs/javascript/src/kjs/Player.js", line: 42 });
+    });
+
+    it("prefixes identity-fallback paths the same way", async () => {
+      const extractOccurrences = await getExtractOccurrences();
+      const c = makeComponent({
+        evidence: {
+          occurrences: [],
+          identity: [{ methods: [{ value: "package-lock.json" }] }],
+        },
+      });
+      const result = extractOccurrences(c, null, false, "/GoWeb");
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({ path: "GoWeb/package-lock.json", line: null });
+    });
+
+    it("does NOT re-prefix llm_evidence.path (caller already rooted it)", async () => {
+      const extractOccurrences = await getExtractOccurrences();
+      const c = makeComponent({ evidence: { occurrences: [] } });
+      // Caller passes a path that's ALREADY repo-rooted (e.g., "GoWeb/extern/foo.h").
+      // Re-prefixing would produce "GoWeb/GoWeb/extern/foo.h" — bad.
+      const result = extractOccurrences(c, "GoWeb/extern/foo.h", false, "/GoWeb");
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({ path: "GoWeb/extern/foo.h", line: null });
+    });
+
+    it("root scope (default) is a pass-through — no prefix added", async () => {
+      const extractOccurrences = await getExtractOccurrences();
+      const c = makeComponent({
+        evidence: { occurrences: [{ location: "GoEmulate/foo.cs#10" }] },
+      });
+      const result = extractOccurrences(c, null, false, "/");
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({ path: "GoEmulate/foo.cs", line: 10 });
+    });
+  });
 });

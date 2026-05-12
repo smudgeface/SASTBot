@@ -8,6 +8,7 @@ import {
   ChevronUp,
   Download,
   ExternalLink,
+  FileText,
   Link2,
   Loader2,
   Package,
@@ -357,19 +358,23 @@ function Pager({
 // ---------------------------------------------------------------------------
 
 function SastIssueRow({
-  issue, isAdmin, jiraTicket, scopeId, autoExpand, sourceUrlTemplate,
+  issue, isAdmin, jiraTicket, scopeId, autoExpand, sourceUrlTemplate, onUserInteraction,
 }: {
   issue: SastIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null;
   scopeId: string; autoExpand?: boolean; sourceUrlTemplate: string | null;
+  onUserInteraction?: () => void;
 }) {
   const [expanded, setExpanded] = useState(autoExpand ?? false);
   const [linkError, setLinkError] = useState<string>();
   const rowRef = useRef<HTMLTableRowElement>(null);
 
-  // Scroll into view when auto-expanded from a shared link
+  // Sync expand state + scroll into view when the URL targets this row.
+  // Instant scroll (no smooth easing) — tab switch is already a hard
+  // transition; animation here adds latency without informing the user.
   useEffect(() => {
-    if (autoExpand && rowRef.current) {
-      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (autoExpand) {
+      setExpanded(true);
+      rowRef.current?.scrollIntoView({ block: "center" });
     }
   }, [autoExpand]);
 
@@ -408,8 +413,8 @@ function SastIssueRow({
     <>
       <TableRow
         ref={rowRef}
-        className="group cursor-pointer hover:bg-muted/40"
-        onClick={() => setExpanded((v) => !v)}
+        className={`group cursor-pointer hover:bg-muted/40${autoExpand ? " bg-primary/5 ring-1 ring-inset ring-primary/40" : ""}`}
+        onClick={() => { setExpanded((v) => !v); onUserInteraction?.(); }}
       >
         <TableCell className="w-6 text-muted-foreground">
           {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -620,10 +625,16 @@ function SastIssueRow({
   );
 }
 
-function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplayedTotalChange }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null; onDisplayedTotalChange?: (total: number) => void }) {
+function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplayedTotalChange, onUserInteraction }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null; onDisplayedTotalChange?: (total: number) => void; onUserInteraction?: () => void }) {
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
-  const [filters, setFilters] = useState<SastIssueFilters>({ page: 1, page_size: 50 });
+  const [filters, setFiltersRaw] = useState<SastIssueFilters>({ page: 1, page_size: 50 });
+  // Wrap setFilters so any filter change also clears the URL row target —
+  // a stale deep link shouldn't persist once the user moves on.
+  const setFilters = (next: SastIssueFilters | ((f: SastIssueFilters) => SastIssueFilters)) => {
+    setFiltersRaw(next);
+    onUserInteraction?.();
+  };
 
   const { data, isLoading } = useScopeSastIssues(scopeId, filters);
   const { data: jiraTickets } = useScopeJiraTickets(scopeId);
@@ -728,7 +739,7 @@ function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplay
               </TableHeader>
               <TableBody>
                 {data.items.map((issue) => (
-                  <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} sourceUrlTemplate={sourceUrlTemplate} />
+                  <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} sourceUrlTemplate={sourceUrlTemplate} onUserInteraction={onUserInteraction} />
                 ))}
               </TableBody>
             </Table>
@@ -750,10 +761,11 @@ function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplay
 // ---------------------------------------------------------------------------
 
 function ScaIssueRow({
-  issue, isAdmin, jiraTicket, scopeId, autoExpand, sourceUrlTemplate,
+  issue, isAdmin, jiraTicket, scopeId, autoExpand, sourceUrlTemplate, onUserInteraction,
 }: {
   issue: ScaIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null;
   scopeId: string; autoExpand?: boolean; sourceUrlTemplate: string | null;
+  onUserInteraction?: () => void;
 }) {
   const [expanded, setExpanded] = useState(autoExpand ?? false);
   const [linkError, setLinkError] = useState<string>();
@@ -763,9 +775,14 @@ function ScaIssueRow({
   const unlinkJira = useUnlinkScaIssueFromJira();
   const refreshJira = useRefreshJiraTicket();
 
+  // When the URL changes to target this row (e.g. from a clicked badge on the
+  // Components tab), sync the local expand state and scroll into view. Use
+  // an instant scroll — the tab switch is already a hard transition, the
+  // smooth animation here just delays the user without informing them.
   useEffect(() => {
-    if (autoExpand && rowRef.current) {
-      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (autoExpand) {
+      setExpanded(true);
+      rowRef.current?.scrollIntoView({ block: "center" });
     }
   }, [autoExpand]);
 
@@ -798,8 +815,8 @@ function ScaIssueRow({
     <>
       <TableRow
         ref={rowRef}
-        className="group cursor-pointer hover:bg-muted/40"
-        onClick={() => setExpanded((v) => !v)}
+        className={`group cursor-pointer hover:bg-muted/40${autoExpand ? " bg-primary/5 ring-1 ring-inset ring-primary/40" : ""}`}
+        onClick={() => { setExpanded((v) => !v); onUserInteraction?.(); }}
       >
         <TableCell className="w-6 text-muted-foreground">
           {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -1071,11 +1088,21 @@ function ScaIssueRow({
   );
 }
 
-function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplayedTotalChange }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null; onDisplayedTotalChange?: (total: number) => void }) {
+function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplayedTotalChange, onUserInteraction }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null; onDisplayedTotalChange?: (total: number) => void; onUserInteraction?: () => void }) {
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
-  const [filters, setFilters] = useState<ScaIssueFilters>({ page: 1, page_size: 50 });
-  const [excludeDevOnly, setExcludeDevOnly] = useState(true);
+  const [filters, setFiltersRaw] = useState<ScaIssueFilters>({ page: 1, page_size: 50 });
+  const [excludeDevOnly, setExcludeDevOnlyRaw] = useState(true);
+  // Any filter / toggle change clears the URL row target so a stale deep link
+  // doesn't persist once the user moves on.
+  const setFilters = (next: ScaIssueFilters | ((f: ScaIssueFilters) => ScaIssueFilters)) => {
+    setFiltersRaw(next);
+    onUserInteraction?.();
+  };
+  const setExcludeDevOnly = (next: boolean | ((v: boolean) => boolean)) => {
+    setExcludeDevOnlyRaw(next);
+    onUserInteraction?.();
+  };
 
   const { data, isLoading } = useScopeScaIssues(scopeId, { ...filters, exclude_dev_only: excludeDevOnly });
   const { data: jiraTickets } = useScopeJiraTickets(scopeId);
@@ -1220,7 +1247,7 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplaye
               </TableHeader>
               <TableBody>
                 {data.items.map((issue) => (
-                  <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} sourceUrlTemplate={sourceUrlTemplate} />
+                  <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} sourceUrlTemplate={sourceUrlTemplate} onUserInteraction={onUserInteraction} />
                 ))}
               </TableBody>
             </Table>
@@ -1243,32 +1270,33 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplaye
 
 /** Single expandable row in the scope-page ComponentsTab. */
 function ScopeComponentRow({
-  component, scopeId, sourceUrlTemplate, expandedId, scaIssueMap,
+  component, scopeId, sourceUrlTemplate, autoExpand, scaIssueMap, onUserInteraction,
 }: {
   component: import("@/api/types").SbomComponent;
   scopeId: string;
   sourceUrlTemplate: string | null;
-  expandedId: string | undefined;
+  autoExpand: boolean;
   scaIssueMap: Map<string, import("@/api/types").ScaIssue>;
+  onUserInteraction?: () => void;
 }) {
-  const navigate = useNavigate();
   const rowRef = useRef<HTMLTableRowElement>(null);
-  const isExpanded = expandedId === component.id;
+  // Local expand state — mirrors SCA/SAST rows so multiple rows can be open
+  // simultaneously. URL only seeds the initial open + a subsequent open if
+  // the URL changes to target this row.
+  const [expanded, setExpanded] = useState(autoExpand);
 
-  // Scroll into view when this row is the routed-to component
   useEffect(() => {
-    if (isExpanded && rowRef.current) {
-      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (autoExpand) {
+      setExpanded(true);
+      rowRef.current?.scrollIntoView({ block: "center" });
     }
-  }, [isExpanded]);
+  }, [autoExpand]);
 
   const toggle = () => {
-    if (isExpanded) {
-      navigate(`/scopes/${scopeId}/components`, { replace: true });
-    } else {
-      navigate(`/scopes/${scopeId}/components/${component.id}`, { replace: true });
-    }
+    setExpanded((v) => !v);
+    onUserInteraction?.();
   };
+  const isExpanded = expanded;
 
   const eco = prettyEcosystem(component.ecosystem, component.discovery_method);
   const occurrences = component.occurrences ?? [];
@@ -1282,7 +1310,7 @@ function ScopeComponentRow({
     <>
       <TableRow
         ref={rowRef}
-        className="group cursor-pointer hover:bg-muted/40"
+        className={`group cursor-pointer hover:bg-muted/40${autoExpand ? " bg-primary/5 ring-1 ring-inset ring-primary/40" : ""}`}
         onClick={toggle}
       >
         <TableCell className="w-6 text-muted-foreground">
@@ -1303,15 +1331,7 @@ function ScopeComponentRow({
           </span>
         </TableCell>
         <TableCell className="text-sm text-muted-foreground">{component.version ?? "—"}</TableCell>
-        <TableCell className="text-sm text-muted-foreground">
-          {eco.variant === "vendored" ? (
-            <Badge variant="outline" className="text-[9px] px-1 py-0 text-violet-600 border-violet-400">
-              Vendored
-            </Badge>
-          ) : (
-            eco.label
-          )}
-        </TableCell>
+        <TableCell className="text-sm text-muted-foreground">{eco}</TableCell>
         <TableCell className="text-sm text-muted-foreground">
           {firstLicense ? (
             <span>{firstLicense}{extraLicenses > 0 && <span className="text-xs text-muted-foreground ml-1">+{extraLicenses} more</span>}</span>
@@ -1406,7 +1426,8 @@ function ScopeComponentRow({
                 </div>
               )}
 
-              {/* Linked SCA issues */}
+              {/* Linked SCA issues — fixed widths on severity + identifier so the
+                  variable-length summary is what wraps, not the identifier. */}
               {linkedScaIds.length > 0 && (
                 <div>
                   <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">
@@ -1423,16 +1444,16 @@ function ScopeComponentRow({
                         : sev === "low" ? "text-blue-600"
                         : "text-muted-foreground";
                       return (
-                        <div key={issueId} className="flex items-center gap-2">
-                          <span className={`text-xs font-medium w-14 shrink-0 ${sevColor}`}>{sev.toUpperCase()}</span>
+                        <div key={issueId} className="flex items-start gap-2">
+                          <span className={`text-xs font-medium w-16 shrink-0 ${sevColor}`}>{sev.toUpperCase()}</span>
                           <Link
                             to={`/scopes/${scopeId}/sca/${issueId}`}
-                            className="text-xs hover:underline font-mono"
+                            className="text-xs hover:underline font-mono w-56 shrink-0 break-all"
                           >
                             {issue.latest_cve_id ?? issue.osv_id}
                           </Link>
                           {issue.latest_summary && (
-                            <span className="text-xs text-muted-foreground truncate">{issue.latest_summary}</span>
+                            <span className="text-xs text-muted-foreground flex-1 min-w-0">{issue.latest_summary}</span>
                           )}
                         </div>
                       );
@@ -1453,11 +1474,13 @@ function ComponentsTab({
   sourceUrlTemplate,
   onDisplayedTotalChange,
   expandedId,
+  onUserInteraction,
 }: {
   scopeId: string;
   sourceUrlTemplate?: string | null;
   onDisplayedTotalChange?: (total: number) => void;
   expandedId?: string;
+  onUserInteraction?: () => void;
 }) {
   const [page, setPage] = useState(1);
   const [hasFindings, setHasFindings] = useState(false);
@@ -1485,13 +1508,13 @@ function ComponentsTab({
             key: "has_findings",
             label: "Only with findings",
             active: hasFindings,
-            onToggle: () => { setHasFindings((v) => !v); setPage(1); },
+            onToggle: () => { setHasFindings((v) => !v); setPage(1); onUserInteraction?.(); },
           },
           {
             key: "show_dev",
             label: "Show dev-tool packages",
             active: !excludeDevOnly,
-            onToggle: () => { setExcludeDevOnly((v) => !v); setPage(1); },
+            onToggle: () => { setExcludeDevOnly((v) => !v); setPage(1); onUserInteraction?.(); },
           },
         ]}
       />
@@ -1514,7 +1537,7 @@ function ComponentsTab({
       ) : (
         <>
           <Card>
-            <Table>
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-6" />
@@ -1522,7 +1545,7 @@ function ComponentsTab({
                   <TableHead className="w-28">Version</TableHead>
                   <TableHead className="w-28">Ecosystem</TableHead>
                   <TableHead className="w-40">License</TableHead>
-                  <TableHead>Issues</TableHead>
+                  <TableHead className="w-64">Issues</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1532,8 +1555,9 @@ function ComponentsTab({
                     component={c}
                     scopeId={scopeId}
                     sourceUrlTemplate={sourceUrlTemplate ?? null}
-                    expandedId={expandedId}
+                    autoExpand={expandedId === c.id}
                     scaIssueMap={scaIssueMap}
+                    onUserInteraction={onUserInteraction}
                   />
                 ))}
               </TableBody>
@@ -1695,6 +1719,17 @@ export default function ScopeDetailPage() {
     navigate(`/scopes/${id}/${tab}`, { replace: true });
   };
 
+  // Subsequent interactions inside any tab — clicking a different row, hitting
+  // a filter toggle, etc. — should clear the URL row param so a stale deep
+  // link doesn't persist (and the highlight goes away as a consequence).
+  // Tab switches already clear the row param via handleTabChange.
+  const hasRouteRowTarget =
+    !!scaRowMatch || !!sastRowMatch || !!componentsRowMatch;
+  const clearRowTarget = () => {
+    if (!id || !hasRouteRowTarget) return;
+    navigate(`/scopes/${id}/${activeTab}`, { replace: true });
+  };
+
   // SBOM download URL
   const sbomUrl = id && scope.last_scan_run_id ? `/api/scopes/${id}/sbom-json` : null;
 
@@ -1725,19 +1760,33 @@ export default function ScopeDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* M6q: Scope SBOM download button */}
+          {/* M6q: Scope SBOM — View opens the Monaco viewer at /scopes/:id/sbom;
+              Download streams the file via the API endpoint. */}
           {sbomUrl && (
-            <Button
-              size="sm"
-              variant="outline"
-              asChild
-              title="Download the CycloneDX SBOM for the most recent scan of this scope"
-            >
-              <a href={sbomUrl} download>
-                <Download className="h-3.5 w-3.5" />
-                SBOM
-              </a>
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                asChild
+                title="View the CycloneDX SBOM for the most recent scan of this scope"
+              >
+                <Link to={`/scopes/${id}/sbom`}>
+                  <FileText className="h-3.5 w-3.5" />
+                  View SBOM
+                </Link>
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                asChild
+                title="Download the CycloneDX SBOM for the most recent scan of this scope"
+              >
+                <a href={sbomUrl} download>
+                  <Download className="h-3.5 w-3.5" />
+                  Download SBOM
+                </a>
+              </Button>
+            </>
           )}
           <Button
             size="sm"
@@ -1806,13 +1855,13 @@ export default function ScopeDetailPage() {
             not on first click. data-[state=inactive]:hidden hides inactive panels
             without unmounting them — eliminates the loading-flash layout shift. */}
         <TabsContent forceMount value="sca" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ScaIssuesTab scopeId={id} highlightIssueId={expandedIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setScaDisplayed} />}
+          {id && <ScaIssuesTab scopeId={id} highlightIssueId={expandedIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setScaDisplayed} onUserInteraction={clearRowTarget} />}
         </TabsContent>
         <TabsContent forceMount value="sast" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <SastIssuesTab scopeId={id} highlightIssueId={expandedIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setSastDisplayed} />}
+          {id && <SastIssuesTab scopeId={id} highlightIssueId={expandedIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setSastDisplayed} onUserInteraction={clearRowTarget} />}
         </TabsContent>
         <TabsContent forceMount value="components" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ComponentsTab scopeId={id} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setComponentsDisplayed} expandedId={expandedComponentId} />}
+          {id && <ComponentsTab scopeId={id} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setComponentsDisplayed} expandedId={expandedComponentId} onUserInteraction={clearRowTarget} />}
         </TabsContent>
       </Tabs>
 

@@ -621,8 +621,11 @@ export async function persistComponents(
         const sr = extractManifestFile(c, scopeDir);
         return sr ? toRepoRelative(scopePath, sr) : null;
       })(),
-      // M6q: full occurrence list (repo-relative paths + line numbers)
-      occurrences: extractOccurrences(c, null, false) as unknown as Prisma.InputJsonValue,
+      // M6q: full occurrence list (repo-relative paths + line numbers).
+      // Pass scopePath so non-root scopes get the scope prefix added —
+      // cdxgen-emitted paths are relative to the scope dir, but the FE
+      // <FileLink> + source_url_template expects repo-rooted paths.
+      occurrences: extractOccurrences(c, null, false, scopePath) as unknown as Prisma.InputJsonValue,
       };
     }),
     skipDuplicates: true,
@@ -704,7 +707,10 @@ export async function persistAugmentedComponents(
         llmEvidence: evidence ? (evidence as unknown as Prisma.InputJsonValue) : undefined,
         // M6q: full occurrence list; for LLM-augmented components, also
         // include the evidence path as a guaranteed occurrence entry.
-        occurrences: extractOccurrences(c, evidence?.path ?? null, false) as unknown as Prisma.InputJsonValue,
+        // scopePath ensures sub-scope rows (e.g. /GoWeb) are repo-rooted.
+        // evidence.path is already repo-rooted (toRepoRelative was applied
+        // when the evidence map was first built), so it isn't re-prefixed.
+        occurrences: extractOccurrences(c, evidence?.path ?? null, false, scopePath) as unknown as Prisma.InputJsonValue,
       };
     }),
     skipDuplicates: true,

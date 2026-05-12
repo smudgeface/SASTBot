@@ -10,6 +10,7 @@ import ScopeDetailPage from "@/routes/ScopeDetailPage";
 import ScansPage from "@/routes/ScansPage";
 import ScanDetailPage from "@/routes/ScanDetailPage";
 import SbomViewerPage from "@/routes/SbomViewerPage";
+import ScopeSbomViewerPage from "@/routes/ScopeSbomViewerPage";
 import SastSarifViewerPage from "@/routes/SastSarifViewerPage";
 import ReposPage from "@/routes/admin/ReposPage";
 import SettingsPage from "@/routes/admin/SettingsPage";
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="/scopes/:id/sast/:issueId" element={<ScopeDetailPage />} />
         <Route path="/scopes/:id/components" element={<ScopeDetailPage />} />
         <Route path="/scopes/:id/components/:componentId" element={<ScopeDetailPage />} />
+        <Route path="/scopes/:id/sbom" element={<ScopeSbomViewerPage />} />
         <Route path="/scans" element={<ScansPage />} />
         {/* M6q: nested routes for scan detail */}
         <Route path="/scans/:id" element={<ScanDetailPage />} />
