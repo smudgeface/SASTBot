@@ -1247,4 +1247,111 @@ unconditionally.
   `[]` for all components pending a future data-model change to track SAST-to-component
   links explicitly. This is correct per plan §2.
 
+## M6q review round — UI & data fixes (2026-05-11/12)
+
+A series of manual-review iterations on the M6q changes once they landed in
+the browser. Each item shipped as its own commit; this is a roll-up.
+
+### What shipped
+
+- **`3a440a8` — drop `--evidence` flag.** Initial Phase 1.1 added an explicit
+  `--evidence` flag to cdxgen for "guaranteed contract." Empirically it broke
+  cdxgen 12.2.1 on this codebase (exit 0, no output file). Evidence section is
+  emitted anyway for npm/nuget/.csproj/.vcxproj — the flag was unnecessary AND
+  harmful. cwd+`.` part of Phase 1.1 still applies.
+- **`d70cc18` — review bundle (items 1-9).** GoWeb scope occurrences missing
+  the `GoWeb/` prefix (extractOccurrences now takes a scopePath and applies
+  `toRepoRelative`); clicking a linked-CVE badge didn't expand the SCA row
+  (useEffect now sets local expanded state, not just scrolls); scroll-to was
+  smooth (now instant — tab change is already a hard transition);
+  route-targeted row gets a `bg-primary/5 ring-1` highlight + subsequent
+  interactions (any row click, filter toggle, severity/status change) clear
+  the URL row segment via a `clearRowTarget` callback; ScopeComponentRow
+  converted from URL-driven (single-expand) to local useState so multiple
+  rows can stay open; `/scopes/:id/sbom` route + ScopeSbomViewerPage; new
+  View SBOM button next to Download SBOM on scope header; Components
+  `<Table className="table-fixed">` with `w-64` Issues column so expanded
+  rows can't widen the table; linked-issues row uses w-16 severity +
+  w-56 id + flex-1 summary so the long DEPRECATED-npm-X id doesn't wrap;
+  `prettyEcosystem()` returns plain strings with proper casing (`Maven`,
+  `NuGet`, `npm`, `PyPI`, `RubyGems`); "Vendored" renders as plain text
+  to match other variants.
+- **`442154d` — license casing.** `prettyLicense()` preserves SPDX IDs
+  (`MIT`, `Apache-2.0`, `BSD-3-Clause`, `LGPL`, ≤4-char all-caps) and
+  title-cases bare-word labels (`CUSTOM`, `UNKNOWN`, `PROPRIETARY`).
+- **`d051583` — manifest paths missing subdirectory.** `normalizeManifestPath`
+  was written for "always absolute or clone-prefixed" cdxgen output. The M6q
+  cwd fix made cdxgen emit scope-relative paths; every relative path fell
+  through to the basename fallback, then `toRepoRelative` tacked the scope
+  prefix on, yielding bogus paths like `GoWeb/package-lock.json` pointing
+  at a file that doesn't exist (real lockfile at
+  `GoWeb/EmulatorUI/package-lock.json` etc.). Added a "trust relative paths
+  verbatim" branch + a new `backfillSbomManifestFiles` worker-boot hook that
+  walked every scan_run's stored sbom_json and rewrote `sbom_components.manifest_file`
+  (repaired 27,615 component rows + 146 SCA issues).
+- **`b0261bd` — chain-link copies path-based URL.** The chain icon at the end
+  of SCA/SAST row summaries was still copying the legacy `?issue=<id>` form.
+  Now copies the path-based form (`/scopes/:id/{sca,sast}/:issueId`). Full
+  audit of every internal Link/navigate covered; everything else was already
+  on the path-based form.
+- **`35fad98` — manifest line numbers for transitive deps.** cdxgen attaches
+  `evidence.occurrences[]` with line numbers only when a component is directly
+  `require()`/`import`-ed; transitive lockfile-only deps fell back to identity
+  (path only, no line). New `resolveManifestLines()` greps each manifest-shaped
+  occurrence for the package name (same patterns as `readManifestSnippet`),
+  cached per lockfile. /GoWeb now sits at 4,988/4,996 line-numbered occurrences
+  (99.84%; the 8 outliers are LLM-augmented evidence paths or non-manifest
+  files where grep won't help).
+- **`68f2048` — cdxgen jar-deps phantom paths.** When cdxgen extracts a Maven
+  coord from a packed jar, identity is just the bare jar basename
+  ("compiler.jar") — no path. The chain produced "GoWeb/compiler.jar" pointing
+  at a file that doesn't exist. New `ScopeFileIndex` lazily walks the scope
+  dir (skipping `node_modules`/`.git`/`build`/`dist`/etc.) and resolves a
+  basename to its repo-rooted path when exactly one match exists. Also fixed
+  `backfillManifestOrigin` keying — it had been reading from sbom_json with
+  `c.name` ("protobuf-java") but `sca_issues.package_name` uses canonical
+  "com.google.protobuf:protobuf-java" so maven rows never matched the
+  lookup. Rewrote to read from sbom_components (already canonical, already
+  path-fixed by the previous backfill). Worker boot now chains
+  `backfillSbomManifestFiles → backfillManifestOrigin` so SCA paths inherit
+  the corrected component paths.
+- **`d2ea049` / `c5f4085` — distinguish co-package CVEs.** A single npm
+  package can carry multiple distinct CVEs against the same version (e.g.
+  is-svg@2.1.0 → CVE-2021-28092 + CVE-2021-29059, both ReDoS). The collapsed
+  SCA row only showed severity + summary + package@version + status, so two
+  rows for the same package@version looked indistinguishable. Now the
+  summary cell is two stacked rows: summary on top (truncated with a
+  title= tooltip carrying the full text), CVE/OSV id on the second line
+  mono+muted as an identifier badge. Detail panel surfaces the full OSV
+  summary verbatim followed by the LLM summary when different. Applied
+  consistently on the scan-page Findings tab.
+
+### What we learned
+
+- **The "no path normalisation" cleanup needs every consumer updated together.**
+  The Phase 1.1 cdxgen-cwd fix produced cleaner cdxgen output, but each
+  downstream consumer (`normalizeManifestPath`, the manifest-snippet read,
+  `backfillManifestOrigin`'s sbom_json re-parse) had been written for the
+  old shape. Each became its own bug to discover by inspection during the
+  UI shake-out. A pre-fix audit of every consumer would have been faster.
+- **cdxgen's `evidence` shape is heterogeneous.** Direct-import deps get
+  `evidence.occurrences[]` with line numbers; lockfile-only transitive deps
+  get only `evidence.identity[].methods[].value`; jar-extracted Maven coords
+  get just a bare jar basename. Single-display-shape requires post-extraction
+  enrichment (grep lockfile for line, scope-walk for basename) — there's no
+  cdxgen flag that produces a uniform "where is this used" record.
+- **Same canonical name on both sides of the join.** `backfillManifestOrigin`
+  silently dropped maven SCA rows for months because it keyed by cdxgen's
+  raw `c.name` ("protobuf-java") while `sca_issues.package_name` is canonical
+  ("com.google.protobuf:protobuf-java"). Always join against the table that
+  already has the canonical form, not the raw SBOM JSON, to inherit the
+  canonicalisation work that's already been done.
+- **A backfill that silently no-ops on unchanged rows is the right design.**
+  Both `backfillSbomManifestFiles` and `backfillSbomOccurrences` re-process
+  every eligible row on every worker boot but only write when the value
+  actually differs. Each new fix in this round (jar-deps, manifest lines,
+  scope prefixing) added more cases the existing backfills picked up
+  without filter changes. Worker restart became the canonical "apply
+  fixes to historical data" gesture.
+
 
