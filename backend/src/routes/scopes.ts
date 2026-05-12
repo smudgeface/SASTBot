@@ -687,17 +687,19 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       if (!scope) return reply.code(404).send({ detail: "Scope not found" });
       if (!scope.lastScanRunId) return reply.code(404).send({ detail: "No successful scan for this scope" });
 
-      const scanRun = await prisma.scanRun.findUnique({
-        where: { id: scope.lastScanRunId },
-        select: { sbomJson: true },
-      });
-      if (!scanRun?.sbomJson) return reply.code(404).send({ detail: "SBOM not yet available for this scan" });
+      // Build from the curated sbom_components rows (M6q follow-up: don't
+      // serve the raw cdxgen output, which contains CMake find_package
+      // probes + absolute "Filename /app/clones/..." paths that bypass
+      // the M6q CWD fix).
+      const { buildCuratedSbomJson } = await import("../services/sbomCurated.js");
+      const doc = await buildCuratedSbomJson(scope.lastScanRunId);
+      if (!doc) return reply.code(404).send({ detail: "SBOM not yet available for this scan" });
 
       const repoName = (scope.repo as { name: string }).name;
       // Build a slug from the scope path: "/" → "root", "/GoWeb" → "GoWeb"
       const scopeSlug = scope.path === "/" ? "root" : scope.path.replace(/^\//, "").replace(/\//g, "-");
       const filename = `sbom-${repoName}-${scopeSlug}.cdx.json`;
-      const pretty = JSON.stringify(scanRun.sbomJson, null, 2);
+      const pretty = JSON.stringify(doc, null, 2);
       return reply
         .header("Content-Type", "application/json; charset=utf-8")
         .header("Content-Disposition", `attachment; filename="${filename}"`)

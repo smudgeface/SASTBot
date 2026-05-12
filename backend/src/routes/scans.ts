@@ -172,7 +172,10 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  // Raw CycloneDX JSON download — returns the SBOM stored by the worker.
+  // Curated CycloneDX JSON download. Built from sbom_components rows so it
+  // matches the Components tab — post-Stage-2-augmentation, path-cleaned,
+  // CMake-probe-free. The raw cdxgen output is still in scan_runs.sbom_json
+  // for audit/debug but is no longer the user-facing surface (M6q follow-up).
   app.get(
     "/scans/:id/sbom",
     {
@@ -184,17 +187,19 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
 
       const run = await prisma.scanRun.findFirst({
         where: { id: params.id, orgId: orgId ?? null },
-        select: { id: true, sbomJson: true, repo: { select: { name: true } } },
+        select: { id: true, repo: { select: { name: true } } },
       });
       if (!run) {
         return reply.code(404).send({ detail: "Scan run not found" });
       }
-      if (!run.sbomJson) {
+      const { buildCuratedSbomJson } = await import("../services/sbomCurated.js");
+      const doc = await buildCuratedSbomJson(run.id);
+      if (!doc) {
         return reply.code(404).send({ detail: "SBOM not yet available for this scan" });
       }
 
       const filename = `sbom-${(run.repo as { name: string }).name}-${params.id.slice(0, 8)}.cdx.json`;
-      const pretty = JSON.stringify(run.sbomJson, null, 2);
+      const pretty = JSON.stringify(doc, null, 2);
       return reply
         .header("Content-Type", "application/json; charset=utf-8")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
