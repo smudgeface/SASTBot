@@ -503,11 +503,14 @@ export async function runCdxgen(workingDir: string, excludes: string[] = []): Pr
       // paths in evidence.identity.methods[].value and properties.SrcFile —
       // no more "../clones/<uuid>/..." prefix leaking into stored paths.
       // Pass "." as the scan root (since cwd is already the scope dir).
-      // Pass --evidence explicitly so evidence.occurrences[] is a guaranteed
-      // contract, not an accident of project-type defaults.
+      // Do NOT pass --evidence: cdxgen 12.2.1 silently fails (exit 0, no
+      // output file) on this codebase when --evidence is passed explicitly.
+      // The evidence section + occurrences[] are emitted anyway for the
+      // project types we care about (npm, nuget, .csproj, .vcxproj, etc.).
+      // Verified empirically on Gocator Classic / scope (M6q follow-up).
       await execFileAsync(
         cdxgenBin,
-        ["-o", outputPath, "--evidence", ...excludeArgs, "."],
+        ["-o", outputPath, ...excludeArgs, "."],
         {
           cwd: workingDir,           // ← M6q: scope dir is the process root
           timeout: 5 * 60 * 1000, // 5-minute hard cap
