@@ -827,21 +827,26 @@ function ScaIssueRow({
           <SeverityBadge severity={issue.latest_severity} />
         </TableCell>
         <TableCell>
-          <div className="flex items-center gap-1 group/summary">
-            <span className="text-sm truncate">
-              {/* Lead with the CVE/OSV id so two issues against the same
-                  package@version (different CVEs, same ReDoS topic) are
-                  obviously distinct at a glance. Both ids together when
-                  both exist (CVE is more familiar; OSV/GHSA is the
-                  upstream canonical). */}
-              <span className="font-mono text-xs text-muted-foreground mr-1.5">
+          {/* Two-row layout: summary on top (with full-text tooltip since
+              we truncate), CVE/OSV id on the second line muted so it
+              reads as an identifier rather than competing for space.
+              Distinguishes co-package issues (e.g. two ReDoS bugs in
+              is-svg@2.1.0) without crowding the summary. */}
+          <div className="flex items-start gap-1 group/summary min-w-0">
+            <div className="min-w-0 flex-1">
+              <div
+                className="text-sm truncate"
+                title={issue.latest_summary ?? issue.latest_llm_summary ?? undefined}
+              >
+                {issue.latest_summary ?? issue.latest_llm_summary}
+              </div>
+              <div className="font-mono text-xs text-muted-foreground truncate">
                 {issue.latest_cve_id ?? issue.osv_id}
-              </span>
-              {issue.latest_summary ?? issue.latest_llm_summary}
-            </span>
+              </div>
+            </div>
             <button
               onClick={copyLink}
-              className="shrink-0 opacity-0 group-hover/summary:opacity-60 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-muted-foreground"
+              className="shrink-0 mt-0.5 opacity-0 group-hover/summary:opacity-60 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-muted-foreground"
               title="Copy link to this issue"
             >
               <Link2 className="h-3 w-3" />
@@ -932,8 +937,13 @@ function ScaIssueRow({
                 detail="listed in CISA KEV. Prioritize remediation."
               />
             )}
+            {/* Full OSV summary (collapsed row truncates with tooltip; the
+                panel shows it in full — wraps naturally, no ellipsis). */}
+            {issue.latest_summary && (
+              <p className="text-sm">{issue.latest_summary}</p>
+            )}
             {issue.latest_llm_summary && issue.latest_llm_summary !== issue.latest_summary && (
-              <p className="text-sm">{issue.latest_llm_summary}</p>
+              <p className="text-sm text-muted-foreground">{issue.latest_llm_summary}</p>
             )}
             {issue.latest_manifest_file && (
               <div className="space-y-1">

@@ -94,17 +94,17 @@ function FindingRow({
           {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
         </TableCell>
         <TableCell className="w-24"><SeverityBadge severity={finding.severity} /></TableCell>
-        <TableCell className="text-sm">
-          <div className="line-clamp-1">
-            {/* CVE/OSV id prefix — two findings against the same component
-                often share a topic (e.g. multiple ReDoS bugs in is-svg);
-                without the id the rows look like dupes. */}
+        <TableCell>
+          {/* Two-row layout matching the scope page: summary on top (with
+              full-text tooltip — truncated rows hide content), CVE/OSV
+              id on the second line muted as an identifier. */}
+          <div className="min-w-0">
+            <div className="text-sm truncate" title={summary}>{summary}</div>
             {isCve && (
-              <span className="font-mono text-xs text-muted-foreground mr-1.5">
+              <div className="font-mono text-xs text-muted-foreground truncate">
                 {finding.cve_id ?? finding.osv_id}
-              </span>
+              </div>
             )}
-            {summary}
           </div>
         </TableCell>
         <TableCell className="w-64 overflow-hidden">
@@ -145,8 +145,13 @@ function FindingRow({
                 detail="listed in CISA KEV. Prioritize remediation."
               />
             )}
+            {/* Full OSV summary (the collapsed row truncates with a
+                tooltip; the panel shows it in full). */}
+            {finding.summary && (
+              <p className="text-sm">{finding.summary}</p>
+            )}
             {finding.llm_summary && finding.llm_summary !== finding.summary && (
-              <p className="text-sm">{finding.llm_summary}</p>
+              <p className="text-sm text-muted-foreground">{finding.llm_summary}</p>
             )}
             {manifestFile && (
               <div className="space-y-1">
