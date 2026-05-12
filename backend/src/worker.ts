@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Worker } from "bullmq";
@@ -9,6 +9,7 @@ import { prisma } from "./db.js";
 import { closeRedis, getRedis } from "./queue/connection.js";
 import { SCAN_QUEUE_NAME, type ScanJobData } from "./queue/scanQueue.js";
 import { cloneOrRefresh, RemoteUnreachableError } from "./services/repoCache.js";
+import { GitCloneError } from "./services/gitClone.js";
 import {
   extractCleanedComponents,
   persistAugmentedComponents,
@@ -924,6 +925,30 @@ const worker = new Worker<ScanJobData>(
           ? clone.workingDir
           : join(clone.workingDir, scopePath);
 
+      // Pre-flight: scope path must exist in the clone. Otherwise the
+      // failure surfaces deep inside cdxgen as a confusing "spawn ENOENT"
+      // (Node's spawn returns ENOENT on a missing `cwd` and reports it as
+      // if the executable were missing). Emit a clear typed warning and
+      // abort the scan so the operator knows what to fix.
+      try {
+        const s = await stat(scanDir);
+        if (!s.isDirectory()) {
+          throw new Error(`scope path "${scopePath}" exists but is not a directory`);
+        }
+      } catch (statErr) {
+        const reason = statErr instanceof Error
+          ? (statErr as { code?: string }).code === "ENOENT"
+            ? `Scope path "${scopePath}" does not exist in the cloned repository. Edit the repo in Admin → Repos and set Scan paths to a directory that actually exists at the repo root (e.g. "/").`
+            : statErr.message
+          : "scope path stat failed";
+        await appendWarning(scanRunId, {
+          code: "scope_path_missing",
+          severity: "error",
+          message: reason,
+        });
+        throw new Error(reason);
+      }
+
       // When the same repo defines nested scopes (e.g. "/" and "/GoWeb"),
       // the broader scope excludes the deeper sibling so files aren't
       // double-counted. We also strip excluded subtrees from opengrep.
@@ -1236,11 +1261,42 @@ const worker = new Worker<ScanJobData>(
 
       log.info({ ...counts, untrustworthy }, "[worker] scan complete");
     } catch (err) {
-      // Network failures get a plain-English error; everything else carries
-      // the underlying error message through.
-      const message = err instanceof RemoteUnreachableError
-        ? `Git remote unreachable — cache preserved. Reconnect VPN/network and retry. (${err.message})`
-        : err instanceof Error ? err.message : String(err);
+      // Map known error classes to operator-friendly messages + typed
+      // warnings so the GUI surfaces something useful instead of a
+      // silent "failed" with an empty warnings array.
+      let message: string;
+      let warningCode: string | null = null;
+      if (err instanceof RemoteUnreachableError) {
+        message = `Git remote unreachable — cache preserved. Reconnect VPN/network and retry. (${err.message})`;
+        warningCode = "remote_unreachable";
+      } else if (err instanceof GitCloneError) {
+        // Branch-not-found is the common "user pasted a repo and the
+        // default branch is master, not main" case. Detect it from
+        // stderr and frame the fix concretely.
+        const stderr = err.stderr ?? "";
+        if (/Remote branch .* not found in upstream origin/i.test(stderr)) {
+          const branchMatch = stderr.match(/Remote branch (\S+) not found/i);
+          const wrongBranch = branchMatch?.[1] ?? repo.defaultBranch;
+          message = `Default branch "${wrongBranch}" does not exist on the remote. Edit the repo in Admin → Repos and set Default branch to the branch the repo actually uses (commonly "master" for older LMI repos, "main" for newer ones).`;
+          warningCode = "branch_not_found";
+        } else if (/could not read Username|Authentication failed|fatal: Authentication/i.test(stderr)) {
+          message = `Git authentication failed. Verify the repo's stored credentials in Admin → Credentials. (${err.message})`;
+          warningCode = "auth_failed";
+        } else {
+          message = `Git clone failed: ${err.message}`;
+          warningCode = "clone_failed";
+        }
+      } else {
+        message = err instanceof Error ? err.message : String(err);
+      }
+
+      if (warningCode) {
+        await appendWarning(scanRunId, {
+          code: warningCode,
+          severity: "error",
+          message,
+        }).catch(() => undefined);
+      }
       log.error({ err }, "[worker] scan failed");
       await prisma.scanRun
         .update({
