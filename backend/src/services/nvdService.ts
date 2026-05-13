@@ -200,6 +200,41 @@ function firstEnglishDesc(descriptions: NvdDescription[]): string | null {
 // ---------------------------------------------------------------------------
 
 /**
+ * Return a usable version string, or null when the component has no
+ * extractable version. Treat "", "unknown", and "*" as no-version.
+ * Querying NVD without a version produces noise — keyword search returns
+ * every CVE that mentions the name, and there is nothing meaningful to
+ * filter against.
+ */
+function sanitizeVersion(version: string | null | undefined): string | null {
+  if (!version) return null;
+  const trimmed = version.trim();
+  if (trimmed === "" || trimmed === "*") return null;
+  if (trimmed.toLowerCase() === "unknown") return null;
+  return trimmed;
+}
+
+/**
+ * Substitute a concrete version into the version segment of a CPE 2.3
+ * string when that segment is currently a wildcard. Returns the original
+ * CPE unchanged when it already carries a concrete version, or null when
+ * the CPE doesn't look like a valid CPE 2.3 string.
+ *
+ * NVD's `cpeName=` parameter requires an exact match against the CPE
+ * dictionary. A CPE with `*` in the version slot matches nothing — the
+ * LLM emits these when it knows the vendor/product but not the version.
+ * Re-attaching the component's version makes the precise path usable.
+ */
+function injectCpeVersion(cpe: string, version: string): string | null {
+  const parts = cpe.split(":");
+  if (parts.length < 6) return null;
+  if (parts[0] !== "cpe" || parts[1] !== "2.3") return null;
+  if (parts[5] && parts[5] !== "*" && parts[5] !== "") return cpe;
+  parts[5] = version;
+  return parts.join(":");
+}
+
+/**
  * Normalize a version string to a comparable array of numbers/strings.
  * E.g. "1.2.11" → [1, 2, 11].
  */
@@ -375,26 +410,48 @@ export async function queryAndPersistNvdFindings(
 
   const findings: ScanFinding[] = [];
   const seen = new Set<string>(); // "componentId:cveId"
+  let skippedNoVersion = 0;
 
   for (let i = 0; i < genericComponents.length; i++) {
     const component = genericComponents[i];
     onProgress?.(i, genericComponents.length);
 
+    // Version gate: without a usable version we can't determine which CVEs
+    // affect this component. Querying anyway either pulls every CVE that
+    // mentions the name (keyword path) or matches nothing (wildcard CPE).
+    // Both are noise. The component still lives in the SBOM — just no NVD lookup.
+    const version = sanitizeVersion(component.version);
+    if (!version) {
+      skippedNoVersion += 1;
+      logger.info(
+        { name: component.name, rawVersion: component.version },
+        "[nvdService] skipping component: no usable version",
+      );
+      continue;
+    }
+
     let vulns: NvdVulnerability[] = [];
     try {
-      const cpe = (component as SbomComponent & { cpe?: string | null }).cpe;
-      if (cpe) {
-        // Precise CPE match — NVD returns only affecting CVEs.
-        vulns = await queryNvd({ cpeName: cpe, isVulnerable: "" }, apiKey, bucket);
-      } else {
-        // Keyword search — NVD returns all CVEs that mention the name, so we
-        // must filter by version ourselves.
-        vulns = await queryNvd(
+      const rawCpe = (component as SbomComponent & { cpe?: string | null }).cpe;
+      const cpeWithVersion = rawCpe ? injectCpeVersion(rawCpe, version) : null;
+
+      if (cpeWithVersion) {
+        // Precise CPE match path — NVD returns only affecting CVEs when the
+        // CPE matches a dictionary entry.
+        vulns = await queryNvd({ cpeName: cpeWithVersion, isVulnerable: "" }, apiKey, bucket);
+      }
+
+      if (vulns.length === 0) {
+        // Fallback path: either no CPE was emitted, or the CPE didn't match
+        // the NVD dictionary (the most common cause of a 404 here). Run the
+        // keyword search and post-filter by version so we still surface CVEs
+        // for components whose CPE the LLM didn't know.
+        const kwResults = await queryNvd(
           { keywordSearch: component.name },
           apiKey,
           bucket,
         );
-        vulns = vulns.filter((v) => cveAffectsVersion(v.cve, component.version));
+        vulns = kwResults.filter((v) => cveAffectsVersion(v.cve, version));
       }
     } catch (err) {
       logger.warn({ err, name: component.name }, "[nvdService] NVD request failed — skipping component");
@@ -466,6 +523,9 @@ export async function queryAndPersistNvdFindings(
   }
 
   onProgress?.(genericComponents.length, genericComponents.length);
-  logger.info({ scanRunId, findings: findings.length }, "[nvdService] NVD findings persisted");
+  logger.info(
+    { scanRunId, findings: findings.length, skippedNoVersion },
+    "[nvdService] NVD findings persisted",
+  );
   return findings;
 }
