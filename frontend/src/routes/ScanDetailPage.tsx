@@ -76,6 +76,9 @@ function FindingRow({
   const isCve = finding.finding_type === "cve";
   const summary = finding.summary
     ?? (finding.finding_type === "eol" ? "End of life" : finding.finding_type === "deprecated" ? "Deprecated package" : "—");
+  // Row shows the short LLM summary when available; tooltip and detail panel
+  // keep the full raw OSV/NVD description.
+  const summaryShort = finding.llm_summary ?? summary;
   const manifestFile = finding.manifest_file;
   // Match scope page's "runtime" relabel for CycloneDX `required`. Anything
   // else (optional, excluded, null) shows the raw value or "unknown".
@@ -99,7 +102,7 @@ function FindingRow({
               full-text tooltip — truncated rows hide content), CVE/OSV
               id on the second line muted as an identifier. */}
           <div className="min-w-0">
-            <div className="text-sm truncate" title={summary}>{summary}</div>
+            <div className="text-sm truncate" title={summary}>{summaryShort}</div>
             {isCve && (
               <div className="font-mono text-xs text-muted-foreground truncate">
                 {finding.cve_id ?? finding.osv_id}

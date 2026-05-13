@@ -838,7 +838,7 @@ function ScaIssueRow({
                 className="text-sm truncate"
                 title={issue.latest_summary ?? issue.latest_llm_summary ?? undefined}
               >
-                {issue.latest_summary ?? issue.latest_llm_summary}
+                {issue.latest_llm_summary ?? issue.latest_summary}
               </div>
               <div className="font-mono text-xs text-muted-foreground truncate">
                 {issue.latest_cve_id ?? issue.osv_id}
