@@ -127,8 +127,9 @@ SBOM-augmentation effort.
 
 | Output | Storage | Consumer |
 |---|---|---|
-| Raw cdxgen SBOM (CycloneDX 1.7) | `scan_runs.sbom_json` (JSONB) | Auditable raw source; LLM SBOM augmentation reads this |
-| Post-augmentation component list | `sbom_components` rows (one per scan run) | Components tab + OSV queries |
+| Raw cdxgen SBOM (CycloneDX 1.7) | `scan_runs.sbom_json` (JSONB) | Auditable raw source; LLM SBOM augmentation reads this; served at `GET /scans/:id/sbom` as the per-scan audit trail |
+| Curated CycloneDX 1.7 SBOM | Built on demand from `sbom_components` by `sbomCurated.ts` | Served at `GET /api/scopes/:id/sbom-json` as the operator-facing artifact (matches the Components tab; CRA-ready) |
+| Post-augmentation component list | `sbom_components` rows (one per scan run) | Components tab + OSV queries + curated-SBOM builder |
 | LLM augmentation evidence | `sbom_components.llm_evidence` (JSONB `{path, excerpt, llmReason}`) | Tooltip rationale on Components tab |
 | Discovery method tag | `sbom_components.discovery_method` (`manifest \| llm_augmentation`) | Filtering + provenance audit |
 | `is_dev_only` flag | `sbom_components.is_dev_only` (npm `dev: true` marker from cdxgen 12.2+) | Dev-tool filter on Components & SCA tabs |
@@ -150,7 +151,11 @@ SBOM-augmentation effort.
 | `llm_sbom_augmentation_failed` | error | Worker falls back to Stage-1-cleaned components; scan still completes; marked untrustworthy. | Inspect `claude -p` exit and stderr in logs; re-run scan. |
 | `llm_sbom_parse_errors` | info | Some augmentation records were unparseable; partial results applied. | Usually self-clears; if persistent, inspect tmp record stream. |
 | `llm_sast_detection_failed` | error | No SAST findings persisted; scan marked untrustworthy. | Inspect `claude -p` exit; re-run scan. |
-| `RemoteUnreachableError` | error | `git ls-remote` failed (commonly VPN drop). | Reconnect VPN; re-queue scan from the UI or via `triggerScan`. |
+| `scope_path_missing` | error | Pre-flight detected the configured scope path doesn't exist in the clone. Scan aborts before cdxgen. | Edit the repo in Admin → Repos; set Scan paths to a directory that actually exists at the repo root. |
+| `remote_unreachable` | error | `git ls-remote` / `git clone` couldn't reach the remote (VPN drop, DNS, firewall). | Reconnect network, re-trigger. |
+| `branch_not_found` | error | Default branch on the repo doesn't exist on the remote. | Edit the repo's Default branch (common LMI case: change `main` → `master`). |
+| `auth_failed` | error | Git auth rejected by the remote. | Verify the credential in Admin → Credentials. |
+| `clone_failed` | error | Any other `git clone` failure. | Inspect the error message; usually network or filesystem related. |
 
 Worker boot also runs idempotent backfills for any new column added in
 recent milestones — `backfillLlmSummaries`, `backfillCvssScores`,

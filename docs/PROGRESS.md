@@ -1354,4 +1354,74 @@ the browser. Each item shipped as its own commit; this is a roll-up.
   without filter changes. Worker restart became the canonical "apply
   fixes to historical data" gesture.
 
+### Addendum — onboarding-a-new-repo failures (2026-05-12)
+
+While intaking the FSS repo (`https://git.example.com/scm/internal/repo.git`) we
+hit three "no helpful message in the GUI" failure modes and a confusing
+SBOM mismatch. All shipped as their own commits.
+
+- **`14554ff` — pre-flight + typed warnings for scan-config errors.** Two
+  real failure modes had been producing `status=failed` with `warnings=[]`,
+  leaving the UI silent: (a) **scope path doesn't exist in the clone** —
+  FSS had `scan_paths=["/FSS"]` but the cloned tree has the code at the
+  root (no `FSS/` subdir). The worker passed the missing dir as `cwd` to
+  cdxgen and Claude; Node's spawn returns `ENOENT` on a missing cwd and
+  blames the executable, producing the misleading "spawn cdxgen ENOENT"
+  / "spawn claude ENOENT" logs. Now a pre-flight stats the scope dir
+  right after clone and emits a typed `scope_path_missing` error
+  warning with concrete fix instructions. (b) **clone failures** (remote
+  unreachable, branch not found, auth failed, generic clone error) were
+  caught and written to `scan_runs.error` (free-text) but never converted
+  into typed `warnings`. Now mapped to `remote_unreachable`,
+  `branch_not_found`, `auth_failed`, `clone_failed` with operator-facing
+  messages.
+- **`6bf7142` → `f76bf9a` → `ff4a35d` — split scan-vs-scope SBOM
+  surfaces.** Both viewers were serving `scan_runs.sbom_json` (raw cdxgen
+  output). On FSS that meant 65 entries — mostly CMake `find_package()`
+  probes from inside Eigen's CMakeLists.txt and `evidence.identity`
+  values formatted as `"Filename /app/clones/<uuid>/.../CMakeLists.txt"`
+  (cdxgen's CMake parser emits absolute paths regardless of process
+  CWD). The Components tab correctly showed the post-Stage-2 21 entries,
+  so the SBOM viewer felt broken. New split:
+    - `GET /scans/:id/sbom` → raw cdxgen output (audit trail of what
+      this run produced). Filename prefix `sbom-raw-…`. Viewer
+      subtitle: "cdxgen output · pre-curation".
+    - `GET /api/scopes/:id/sbom-json` → curated CycloneDX 1.7 doc
+      built from `sbom_components` rows. Matches the Components tab.
+      This is the file the operator ships for CRA compliance.
+  `buildCuratedSbomJson(scanRunId)` in `services/sbomCurated.ts` is
+  the builder. Includes purl, version, licenses, evidence.identity
+  (manifest_file), evidence.occurrences (path#line), and
+  `sastbot:discovery_method` / `sastbot:llm_rationale` properties.
+
+### What we learned (round 2)
+
+- **`spawn ENOENT` lies about which thing was missing.** When a
+  child-process call fails with ENOENT, Node reports the executable
+  path. The actual cause is often a missing `cwd`. Pre-flight stats
+  on every external resource (scope dir, manifest paths, prompt
+  files) catch this class of misattributed failure cheaply.
+- **Audit trail ≠ ship artifact.** The scan-level SBOM is internal
+  forensics; the scope-level SBOM is what an auditor or customer
+  receives. Serving the same JSON from both surfaces conflated those
+  purposes. The split now matches the rest of the model:
+    - **Scan page** = "what this run did" (audit, raw, per-execution)
+    - **Scope page** = "current state, ready to act on" (curated,
+      cross-scan, the operator's truth)
+- **Set `firstPartyNamespaces` per repo.** FSS's first run dropped
+  61 of 62 cleaned cdxgen components via LLM inspection alone (the
+  `k*` directories at the repo root are all LMI internal). Setting
+  `firstPartyNamespaces = ["k"]` on the repo lets the SBOM
+  augmentation short-circuit these without LLM inspection — cheaper,
+  more deterministic. Worth doing for every LMI repo on onboarding.
+- **OSV's generic-ecosystem coverage is essentially zero.** FSS's
+  21 curated components are mostly vendored C/C++ (libgit2, zlib,
+  freetype, eigen, …) emitted with `pkg:generic/...` purls. OSV
+  returned zero findings even though several have known CVEs
+  (libgit2 0.26 from 2018, zlib 1.2.6 from 2012). This is a
+  cross-repo gap, not an FSS-specific bug — any C/C++ project will
+  see the same hole. Workarounds (CPE/NVD direct query, GHSA via
+  GitHub, curated short list of high-profile C/C++ packages) are
+  candidate work for a future milestone.
+
 
