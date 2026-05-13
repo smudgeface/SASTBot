@@ -106,17 +106,28 @@ they're real (found in a build file or #include), stay silent (= keep). If
 you can't find any evidence, emit a drop with
 `reason: "no evidence found in source tree"`.
 
-### Step 5 — Emit CPE strings for C/C++ and generic-ecosystem components
+### Step 5 — CPE enrichment (labeling-only)
 
-For components with `ecosystem: "generic"` (or components whose purl starts
-with `pkg:generic/`), and for vendored C/C++ libraries you are adding, emit
-the canonical **CPE 2.3** string on `keep` or `add` records when you are
-**reasonably confident** of the vendor and product names. A wrong CPE is worse
-than no CPE — only include the `cpe` field if you are confident.
+This step is **purely additive labeling**. It does NOT change which
+components you keep, drop, or add — those decisions are governed entirely
+by Steps 1–4. Whatever vendored libraries Steps 2–3 surfaced from
+VENDORED_DIRS, runtime-SDK references, etc. — add them ALL, regardless
+of CPE availability.
 
-Why: SASTBot queries the NVD CVE database using CPE for precise matching.
-OSV.dev has essentially no coverage for generic/C/C++ libs; NVD is the
-primary vuln source for them.
+When emitting a `keep` or `add` record for a `pkg:generic/...` component
+or any C/C++ library, optionally include a `cpe` field with the canonical
+**CPE 2.3** string IF you happen to know it. If you don't know the
+canonical CPE — especially for vendor-specific hardware/SDK libraries
+(FTDI, Thorlabs, Zaber, Heidenhain, Moxa, National Instruments, LabJack,
+MCC, Nerian, Adimec, …) — just omit the field. Vendor SDKs typically have
+no published CPE; that's expected, and they MUST still be added/kept.
+
+A wrong CPE is worse than no CPE, so when in doubt, omit.
+
+Why: SASTBot queries NVD using CPE for precise CVE matching when the
+field is present, and falls back to a keyword search when it's not. So
+omitting the CPE doesn't hide the component — it just makes the NVD
+query a bit less precise.
 
 Examples of well-known CPE strings:
 - `zlib` → `cpe:2.3:a:zlib:zlib:<version>:*:*:*:*:*:*:*`
@@ -128,12 +139,10 @@ Examples of well-known CPE strings:
 - `expat` / `libexpat` → `cpe:2.3:a:libexpat_project:libexpat:<version>:*:*:*:*:*:*:*`
 - `sqlite` → `cpe:2.3:a:sqlite:sqlite:<version>:*:*:*:*:*:*:*`
 - `libjpeg-turbo` → `cpe:2.3:a:libjpeg-turbo:libjpeg-turbo:<version>:*:*:*:*:*:*:*`
-- `eigen` → no well-known CPE — omit
-- `boost` → no standard NVD CPE — omit
 
 If the component has a known version, fill it in; otherwise use `*`.
-Omit the `cpe` field entirely for npm/pypi/maven/nuget components and any
-C/C++ library whose CPE you are not confident about.
+Omit the `cpe` field entirely for npm/pypi/maven/nuget components and for
+any C/C++ library whose canonical CPE you don't already know.
 
 ## Token budget
 
