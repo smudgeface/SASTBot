@@ -76,9 +76,27 @@ Three record types:
 ```
 {"type":"keep","component_id":"<canonical key from SBOM>"}
 {"type":"keep","component_id":"<...>","llm_reason":"<one sentence why it belongs>"}
+{"type":"keep","component_id":"<...>","llm_reason":"<rationale>","cpe":"cpe:2.3:a:<vendor>:<product>:<version>:*:*:*:*:*:*:*"}
 {"type":"drop","component_id":"<canonical key>","reason":"<one sentence>","evidence_path":"<optional file that confirms>"}
 {"type":"add","name":"<package name>","version":"<version or null>","ecosystem":"<npm|nuget|generic|...>","evidence_path":"<file where you found it>","evidence_excerpt":"<short quote>","llm_reason":"<one sentence>"}
+{"type":"add","name":"<package name>","version":"<version>","ecosystem":"generic","cpe":"cpe:2.3:a:<vendor>:<product>:<version>:*:*:*:*:*:*:*","evidence_path":"<file>","evidence_excerpt":"<short quote>","llm_reason":"<one sentence>"}
 ```
+
+**CPE 2.3 field (`cpe`):** Optional on `keep` and `add` records. Emit when
+you are **reasonably confident** of the canonical CPE vendor + product names
+for a `pkg:generic/...` or C/C++ component. A wrong CPE is worse than no
+CPE — only emit if you know it. Examples:
+- zlib 1.2.6 → `"cpe":"cpe:2.3:a:zlib:zlib:1.2.6:*:*:*:*:*:*:*"`
+- libgit2 0.26 → `"cpe":"cpe:2.3:a:libgit2_project:libgit2:0.26:*:*:*:*:*:*:*"`
+- OpenSSL 1.1.1k → `"cpe":"cpe:2.3:a:openssl:openssl:1.1.1k:*:*:*:*:*:*:*"`
+- freetype 2.6.3 → `"cpe":"cpe:2.3:a:freetype:freetype:2.6.3:*:*:*:*:*:*:*"`
+- libpng 1.6.37 → `"cpe":"cpe:2.3:a:libpng:libpng:1.6.37:*:*:*:*:*:*:*"`
+- curl 7.81.0 → `"cpe":"cpe:2.3:a:haxx:curl:7.81.0:*:*:*:*:*:*:*"`
+- expat 2.4.1 → `"cpe":"cpe:2.3:a:libexpat_project:libexpat:2.4.1:*:*:*:*:*:*:*"`
+- sqlite 3.39.0 → `"cpe":"cpe:2.3:a:sqlite:sqlite:3.39.0:*:*:*:*:*:*:*"`
+
+Omit `cpe` for ecosystem packages (npm, pypi, maven, nuget) and any C/C++
+component whose canonical CPE vendor/product you are not confident about.
 
 The `component_id` field MUST match the `component_id` value from the SBOM
 file exactly — copy it verbatim. Do not normalise or reformulate it.

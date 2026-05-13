@@ -168,6 +168,7 @@ export async function applyCredentialToEnv(
     }
     case "jira_token":
     case "llm_api_key":
+    case "nvd_api_key":
       throw new Error(
         `Credential kind ${cred.kind} is not valid for git clone — use https_token, https_basic, or ssh_key.`,
       );

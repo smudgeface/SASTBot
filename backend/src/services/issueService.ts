@@ -121,6 +121,8 @@ export interface ScaDetectionInput {
   manifestFile?: string | null;
   manifestLine?: number | null;
   manifestSnippet?: string | null;
+  /** Provenance: "osv" (default) or "nvd". */
+  source?: string;
 }
 
 export async function upsertScaIssueFromDetection(
@@ -169,6 +171,7 @@ export async function upsertScaIssueFromDetection(
       packageName,
       osvId,
       dismissedStatus: "pending",
+      source: detection.source ?? "osv",
       ...latestFields,
       firstSeenScanRunId: scanRunId,
       lastSeenScanRunId: scanRunId,
@@ -176,6 +179,7 @@ export async function upsertScaIssueFromDetection(
     update: {
       lastSeenAt: new Date(),
       lastSeenScanRunId: scanRunId,
+      source: detection.source ?? "osv",
       ...latestFields,
     },
   });

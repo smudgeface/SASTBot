@@ -910,6 +910,15 @@ function ScaIssueRow({
                 Dev
               </Badge>
             )}
+            {issue.source === "nvd" && (
+              <Badge
+                variant="outline"
+                className="text-[9px] px-1 py-0 text-slate-600 border-slate-400"
+                title="Finding sourced from NVD (National Vulnerability Database) — not in OSV.dev"
+              >
+                NVD
+              </Badge>
+            )}
           </div>
         </TableCell>
         <TableCell>

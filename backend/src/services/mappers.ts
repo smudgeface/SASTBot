@@ -189,6 +189,7 @@ export function appSettingsToOut(s: AppSettings): AppSettingsOut {
     llm_model: s.llmModel,
     llm_credential_id: s.llmCredentialId,
     reachability_min_severity: s.reachabilityMinSeverity as "critical" | "high" | "medium" | "low",
+    nvd_credential_id: s.nvdCredentialId,
     updated_at: s.updatedAt.toISOString(),
   };
 }
@@ -519,6 +520,7 @@ export function scaIssueToOut(i: ScaIssue): ScaIssueOut {
     reachable_call_sites: (i.reachableCallSites ?? null) as ScaIssueOut["reachable_call_sites"],
     reachable_assessed_at: i.reachableAssessedAt ? i.reachableAssessedAt.toISOString() : null,
     reachable_model: i.reachableModel,
+    source: i.source,
     first_seen_at: i.firstSeenAt.toISOString(),
     last_seen_at: i.lastSeenAt.toISOString(),
     created_at: i.createdAt.toISOString(),

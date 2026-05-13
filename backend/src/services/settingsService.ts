@@ -47,6 +47,17 @@ export async function updateSettings(
       llmCredentialId = input.llm_credential_id ?? null;
     }
 
+    let nvdCredentialId: string | null | undefined;
+    if (input.nvd_credential) {
+      const cred = await createCredential(
+        { orgId, input: input.nvd_credential, createdBy },
+        tx,
+      );
+      nvdCredentialId = cred.id;
+    } else if (Object.prototype.hasOwnProperty.call(input, "nvd_credential_id")) {
+      nvdCredentialId = input.nvd_credential_id ?? null;
+    }
+
     const data: Prisma.AppSettingsUpdateInput = {};
     if (Object.prototype.hasOwnProperty.call(input, "jira_base_url")) {
       data.jiraBaseUrl = input.jira_base_url ?? null;
@@ -75,6 +86,11 @@ export async function updateSettings(
     }
     if (Object.prototype.hasOwnProperty.call(input, "reachability_min_severity") && input.reachability_min_severity) {
       data.reachabilityMinSeverity = input.reachability_min_severity;
+    }
+    if (nvdCredentialId !== undefined) {
+      data.nvdCredential = nvdCredentialId
+        ? { connect: { id: nvdCredentialId } }
+        : { disconnect: true };
     }
 
     return tx.appSettings.update({ where: { id: existing.id }, data });

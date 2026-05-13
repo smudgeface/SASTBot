@@ -46,6 +46,8 @@ const KeepRecord = z.object({
   component_id: z.string(),
   /** Optional one-line rationale. Stored as llmReason in llmEvidence. */
   llm_reason: z.string().optional(),
+  /** Optional CPE 2.3 string for precise NVD lookup (e.g. "cpe:2.3:a:zlib:zlib:1.2.6:*:*:*:*:*:*:*"). */
+  cpe: z.string().optional(),
 });
 export type KeepRecord = z.infer<typeof KeepRecord>;
 
@@ -68,6 +70,8 @@ const AddRecord = z.object({
   llm_reason: z.string(),
   /** When true the version field could not be determined from the source. */
   version_unknown: z.boolean().optional(),
+  /** Optional CPE 2.3 string for precise NVD lookup. */
+  cpe: z.string().optional(),
 });
 export type AddRecord = z.infer<typeof AddRecord>;
 
@@ -538,6 +542,8 @@ export interface SbomAugmentationApplied {
   components: CdxComponent[];
   /** Map from canonical component_id → evidence (for persisting llmEvidence). */
   evidenceMap: Map<string, LlmEvidence>;
+  /** Map from canonical component_id → CPE 2.3 string (for persistAugmentedComponents). */
+  cpeMap: Map<string, string>;
 }
 
 /**
@@ -563,6 +569,7 @@ export function applySbomAugmentation(
   // Build fast lookup maps keyed by component_id (canonical name).
   const dropSet = new Set<string>();
   const evidenceMap = new Map<string, LlmEvidence>();
+  const cpeMap = new Map<string, string>();
 
   for (const r of records) {
     if (r.type === "drop") {
@@ -571,19 +578,27 @@ export function applySbomAugmentation(
         { component_id: r.component_id, reason: r.reason },
         "[llmSbomService] dropping component",
       );
-    } else if (r.type === "keep" && r.llm_reason) {
-      // Only store evidence when the LLM supplied a rationale.
-      evidenceMap.set(r.component_id, {
-        path: "",
-        excerpt: null,
-        llmReason: r.llm_reason,
-      });
+    } else if (r.type === "keep") {
+      if (r.llm_reason) {
+        // Only store evidence when the LLM supplied a rationale.
+        evidenceMap.set(r.component_id, {
+          path: "",
+          excerpt: null,
+          llmReason: r.llm_reason,
+        });
+      }
+      if (r.cpe) {
+        cpeMap.set(r.component_id, r.cpe);
+      }
     } else if (r.type === "add") {
       evidenceMap.set(r.name, {
         path: r.evidence_path,
         excerpt: r.evidence_excerpt ?? null,
         llmReason: r.llm_reason,
       });
+      if (r.cpe) {
+        cpeMap.set(r.name, r.cpe);
+      }
     }
   }
 
@@ -628,6 +643,7 @@ export function applySbomAugmentation(
   return {
     components: [...survivors, ...synthesised],
     evidenceMap,
+    cpeMap,
   };
 }
 

@@ -27,7 +27,8 @@ export type CredentialKind =
   | "https_basic"
   | "ssh_key"
   | "jira_token"
-  | "llm_api_key";
+  | "llm_api_key"
+  | "nvd_api_key";
 
 export const CREDENTIAL_KIND_LABELS: Record<CredentialKind, string> = {
   https_token: "HTTPS token",
@@ -35,6 +36,7 @@ export const CREDENTIAL_KIND_LABELS: Record<CredentialKind, string> = {
   ssh_key: "SSH private key",
   jira_token: "Jira API token",
   llm_api_key: "LLM API key",
+  nvd_api_key: "NVD API key",
 };
 
 export interface CredentialMetadata {
@@ -50,6 +52,7 @@ export interface CredentialReferences {
   repos: { id: string; name: string }[];
   jira_settings: boolean;
   llm_settings: boolean;
+  nvd_settings: boolean;
 }
 
 export interface Credential {
@@ -93,13 +96,18 @@ export interface LlmKeyCreate extends NamedBase {
   kind: "llm_api_key";
   value: string;
 }
+export interface NvdKeyCreate extends NamedBase {
+  kind: "nvd_api_key";
+  value: string;
+}
 
 export type CredentialCreateInput =
   | HttpsTokenCreate
   | HttpsBasicCreate
   | SshKeyCreate
   | JiraTokenCreate
-  | LlmKeyCreate;
+  | LlmKeyCreate
+  | NvdKeyCreate;
 
 /** Rotate = same shape as Create minus the name (kind is locked). */
 export type CredentialRotateInput =
@@ -107,7 +115,8 @@ export type CredentialRotateInput =
   | Omit<HttpsBasicCreate, "name">
   | Omit<SshKeyCreate, "name">
   | Omit<JiraTokenCreate, "name">
-  | Omit<LlmKeyCreate, "name">;
+  | Omit<LlmKeyCreate, "name">
+  | Omit<NvdKeyCreate, "name">;
 
 /** Legacy simple-shape alias used in places where the kind is always
  *  `https_token`/`jira_token`/`llm_api_key`. */
@@ -197,6 +206,7 @@ export interface AdminSettings {
   llm_model: string | null;
   llm_credential_id: string | null;
   reachability_min_severity: ReachabilityMinSeverity;
+  nvd_credential_id: string | null;
   updated_at: string;
 }
 
@@ -211,6 +221,8 @@ export interface AdminSettingsUpdate {
   llm_credential_id?: string | null;
   llm_credential?: CredentialCreateInput | null;
   reachability_min_severity?: ReachabilityMinSeverity;
+  nvd_credential_id?: string | null;
+  nvd_credential?: CredentialCreateInput | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +277,7 @@ export type ScanPhase =
   | "cdxgen"
   | "llm_sbom"
   | "osv"
+  | "nvd"
   | "eol"
   | "llm_detection"
   | "llm_recheck"
@@ -276,6 +289,7 @@ export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
   cdxgen: "Building SBOM",
   llm_sbom: "LLM SBOM augmentation",
   osv: "Querying OSV.dev",
+  nvd: "Querying NVD",
   eol: "Checking EOL / deprecation",
   llm_detection: "LLM SAST detection",
   llm_recheck: "LLM SAST recheck",
@@ -288,6 +302,7 @@ export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
 // ("0 of 300000 tokens · 0%") so the magnitude isn't mysterious.
 export const SCAN_PHASE_UNITS: Partial<Record<ScanPhase, string>> = {
   osv: "components",
+  nvd: "components",
   eol: "components",
   llm_sbom: "tokens",
   llm_detection: "tokens",
@@ -487,6 +502,8 @@ export interface ScaIssue {
   reachable_call_sites: { file: string; line: number; snippet: string }[] | null;
   reachable_assessed_at: string | null;
   reachable_model: string | null;
+  /** Provenance of this finding: "osv" | "nvd". */
+  source: string;
   first_seen_at: string;
   last_seen_at: string;
   created_at: string;

@@ -113,12 +113,20 @@ export const LlmKeyCreateSchema = z.object({
   expires_at: ExpiresAtSchema,
 });
 
+export const NvdKeyCreateSchema = z.object({
+  kind: z.literal("nvd_api_key"),
+  name: NameSchema,
+  value: z.string().min(1),
+  expires_at: ExpiresAtSchema,
+});
+
 export const CredentialCreateSchema = z.discriminatedUnion("kind", [
   HttpsTokenCreateSchema,
   HttpsBasicCreateSchema,
   SshKeyCreateSchema,
   JiraTokenCreateSchema,
   LlmKeyCreateSchema,
+  NvdKeyCreateSchema,
 ]);
 export type CredentialCreate = z.infer<typeof CredentialCreateSchema>;
 
@@ -134,6 +142,7 @@ export const CredentialRotateSchema = z.discriminatedUnion("kind", [
   SshKeyCreateSchema.omit({ name: true }),
   JiraTokenCreateSchema.omit({ name: true }),
   LlmKeyCreateSchema.omit({ name: true }),
+  NvdKeyCreateSchema.omit({ name: true }),
 ]);
 export type CredentialRotate = z.infer<typeof CredentialRotateSchema>;
 
@@ -162,6 +171,7 @@ export const CredentialReferencesSchema = z.object({
   repos: z.array(z.object({ id: UuidSchema, name: z.string() })),
   jira_settings: z.boolean(),
   llm_settings: z.boolean(),
+  nvd_settings: z.boolean(),
 });
 export type CredentialReferences = z.infer<typeof CredentialReferencesSchema>;
 
@@ -307,6 +317,8 @@ export const AppSettingsUpdateSchema = z.object({
   llm_credential_id: UuidSchema.nullable().optional(),
   llm_credential: CredentialCreateSchema.nullable().optional(),
   reachability_min_severity: ReachabilityMinSeveritySchema.optional(),
+  nvd_credential_id: UuidSchema.nullable().optional(),
+  nvd_credential: NvdKeyCreateSchema.nullable().optional(),
 });
 export type AppSettingsUpdate = z.infer<typeof AppSettingsUpdateSchema>;
 
@@ -321,6 +333,7 @@ export const AppSettingsOutSchema = z.object({
   llm_model: z.string().nullable(),
   llm_credential_id: UuidSchema.nullable(),
   reachability_min_severity: ReachabilityMinSeveritySchema,
+  nvd_credential_id: UuidSchema.nullable(),
   updated_at: IsoDateTimeSchema,
 });
 export type AppSettingsOut = z.infer<typeof AppSettingsOutSchema>;
@@ -371,7 +384,7 @@ export const ScanRunOutSchema = z.object({
   /** Live progress fields, populated by the worker while status==="running",
    *  cleared on terminal status. */
   current_phase: z.enum([
-    "cloning", "cdxgen", "osv", "eol",
+    "cloning", "cdxgen", "llm_sbom", "osv", "nvd", "eol",
     "llm_detection", "llm_recheck", "sca_summaries", "finalizing",
   ]).nullable(),
   phase_progress: z.object({
@@ -649,6 +662,8 @@ export const ScaIssueOutSchema = z.object({
   })).nullable(),
   reachable_assessed_at: IsoDateTimeSchema.nullable(),
   reachable_model: z.string().nullable(),
+  /** Provenance of this finding: "osv" | "nvd". */
+  source: z.string().default("osv"),
   first_seen_at: IsoDateTimeSchema,
   last_seen_at: IsoDateTimeSchema,
   created_at: IsoDateTimeSchema,

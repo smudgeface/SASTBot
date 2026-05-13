@@ -76,6 +76,7 @@ model Credential {
   reposUsing   Repo[]        @relation("RepoCredential")
   jiraSettings AppSettings[] @relation("JiraCredential")
   llmSettings  AppSettings[] @relation("LlmCredential")
+  nvdSettings  AppSettings[] @relation("NvdCredential")
 
   @@map("credentials")
 }
@@ -184,9 +185,15 @@ model AppSettings {
   reachabilityMinSeverity   String   @default("high") @map("reachability_min_severity")
   updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  // NVD API key for querying the National Vulnerability Database. Without a
+  // key, NVD allows 5 req / 30 sec; with one, 50 req / 30 sec. Leave null
+  // until the operator adds a key via the admin UI.
+  nvdCredentialId           String?  @map("nvd_credential_id") @db.Uuid
+
   org            Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
   jiraCredential Credential? @relation("JiraCredential", fields: [jiraCredentialId], references: [id], onDelete: SetNull)
   llmCredential  Credential? @relation("LlmCredential", fields: [llmCredentialId], references: [id], onDelete: SetNull)
+  nvdCredential  Credential? @relation("NvdCredential", fields: [nvdCredentialId], references: [id], onDelete: SetNull)
 
   @@map("app_settings")
 }
@@ -269,6 +276,11 @@ model SbomComponent {
   // kept with a rationale. Shape: {path, excerpt, llmReason}. Stored so the
   // Components tab can show a tooltip explaining why the component is there.
   llmEvidence     Json?   @map("llm_evidence")
+  // CPE 2.3 string for the component when known (e.g. emitted by the LLM SBOM
+  // augmentation pass). Used to query NVD by exact CPE rather than keyword
+  // search, giving much more precise vuln results for C/C++ vendored libs.
+  // Example: "cpe:2.3:a:zlib:zlib:1.2.6:*:*:*:*:*:*:*"
+  cpe             String? @map("cpe")
   // M6q: full list of locations where this component is used. Each entry is
   // {path: string, line: number | null}. `evidence.occurrences[]` is the gold
   // source (repo-relative, with line numbers); falls back to
@@ -436,6 +448,12 @@ model ScaIssue {
   reachableAssessedAt         DateTime? @map("reachable_assessed_at") @db.Timestamptz(6)
   reachableModel              String?   @map("reachable_model")
   reachableAtScanRunId        String?   @map("reachable_at_scan_run_id") @db.Uuid
+  // Provenance: which service produced this finding. "osv" for OSV.dev,
+  // "nvd" for NVD CVE API (used for generic/C-C++ components where OSV
+  // coverage is sparse). Kept as string so future sources can be added
+  // without a migration. Re-uses osvId column for CVE IDs from NVD —
+  // CVE-YYYY-NNNN IDs are globally unique so the unique constraint still holds.
+  source                      String    @default("osv") @map("source")
   // Lifecycle
   firstSeenAt                 DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz(6)
   firstSeenScanRunId          String    @map("first_seen_scan_run_id") @db.Uuid

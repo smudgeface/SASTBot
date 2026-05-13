@@ -65,7 +65,8 @@ export function buildCredentialCreate(
   switch (state.kind) {
     case "https_token":
     case "jira_token":
-    case "llm_api_key": {
+    case "llm_api_key":
+    case "nvd_api_key": {
       const value = state.value.trim();
       if (!value) return { ok: false, error: "Value is required" };
       return { ok: true, input: { kind: state.kind, name, value, expires_at } };
@@ -105,7 +106,8 @@ export function buildCredentialRotate(
   switch (state.kind) {
     case "https_token":
     case "jira_token":
-    case "llm_api_key": {
+    case "llm_api_key":
+    case "nvd_api_key": {
       const value = state.value.trim();
       if (!value) return { ok: false, error: "Value is required" };
       return { ok: true, input: { kind: state.kind, value } };
@@ -153,6 +155,7 @@ const DEFAULT_KINDS: CredentialKind[] = [
   "ssh_key",
   "jira_token",
   "llm_api_key",
+  "nvd_api_key",
 ];
 
 export function CredentialFormFields({
@@ -271,7 +274,8 @@ export function CredentialFormFields({
 
       {state.kind === "https_token" ||
       state.kind === "jira_token" ||
-      state.kind === "llm_api_key" ? (
+      state.kind === "llm_api_key" ||
+      state.kind === "nvd_api_key" ? (
         <div className="space-y-1.5">
           <Label htmlFor={`${idPrefix}-value`}>Value</Label>
           <Textarea

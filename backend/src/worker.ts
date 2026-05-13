@@ -17,6 +17,7 @@ import {
   runCdxgen,
 } from "./services/sbomService.js";
 import { queryAndPersistFindings, backfillCvssScores, backfillManifestOrigin } from "./services/osvService.js";
+import { queryAndPersistNvdFindings } from "./services/nvdService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { backfillReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
@@ -86,6 +87,7 @@ type ScanPhase =
   | "cdxgen"
   | "llm_sbom"
   | "osv"
+  | "nvd"
   | "eol"
   | "llm_detection"
   | "llm_recheck"
@@ -1010,6 +1012,7 @@ const worker = new Worker<ScanJobData>(
       // can still complete. A failed augmentation never aborts the scan.
       let finalComponents = cleanedComponents;
       let sbomEvidenceMap = new Map<string, { path: string; excerpt: string | null; llmReason: string }>();
+      let sbomCpeMap = new Map<string, string>();
       const sbomTokenBudget = 200_000;
 
       try {
@@ -1059,6 +1062,7 @@ const worker = new Worker<ScanJobData>(
         const applied = applySbomAugmentation(cleanedComponents, augResult);
         finalComponents = applied.components;
         sbomEvidenceMap = applied.evidenceMap;
+        sbomCpeMap = applied.cpeMap;
 
         log.info(
           {
@@ -1103,6 +1107,7 @@ const worker = new Worker<ScanJobData>(
           tx,
           scanDir,
           scopePath,
+          sbomCpeMap,
         );
       });
       log.info({ inserted: components.length }, "[worker] augmented components persisted");
@@ -1113,13 +1118,45 @@ const worker = new Worker<ScanJobData>(
       const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir, scopePath, repo.reachabilityIncludeDevDeps);
       log.info({ findings: cveFindings.length }, "[worker] CVE findings persisted");
 
+      // ── Step 4.5: NVD fallback for generic/C/C++ components ─────────────
+      // Always-on for `generic` ecosystem components — OSV has near-zero
+      // coverage there. Uses CPE for precise matching when available (set by
+      // the LLM SBOM augmentation pass). Failure is non-fatal: an info-level
+      // warning is recorded and the scan continues without NVD data.
+      const genericComponents = components.filter((c) => c.ecosystem === "generic" || c.ecosystem === null);
+      let nvdFindings: typeof cveFindings = [];
+      if (genericComponents.length > 0) {
+        log.info({ genericCount: genericComponents.length }, "[worker] querying NVD for generic components");
+        await setPhase(scanRunId, "nvd", { done: 0, total: genericComponents.length, label: "Querying NVD" });
+        try {
+          nvdFindings = await queryAndPersistNvdFindings(
+            scanRunId,
+            run.scopeId,
+            run.orgId,
+            components,
+            prisma,
+            (done, total) => {
+              void setPhase(scanRunId, "nvd", { done, total, label: "Querying NVD" });
+            },
+          );
+          log.info({ findings: nvdFindings.length }, "[worker] NVD findings persisted");
+        } catch (err) {
+          log.warn({ err: (err as Error).message }, "[worker] NVD phase failed — continuing without NVD data");
+          await appendWarning(scanRunId, {
+            code: "nvd_query_failed",
+            severity: "info",
+            message: `NVD query phase failed: ${(err as Error).message}. NVD-sourced findings are unavailable for this scan.`,
+          });
+        }
+      }
+
       // ── Step 5: EOL / deprecation check ─────────────────────────────────
       log.info("[worker] checking EOL / deprecation");
       await setPhase(scanRunId, "eol", { done: 0, total: components.length, label: "Checking EOL / deprecation" });
       const eolFindings = await checkAndPersistEolFindings(scanRunId, run.scopeId, run.orgId, components, prisma);
       log.info({ eolFindings: eolFindings.length }, "[worker] EOL findings persisted");
 
-      const findings = [...cveFindings, ...eolFindings];
+      const findings = [...cveFindings, ...nvdFindings, ...eolFindings];
 
       // ── Step 6: SAST (LLM-mode only — Opengrep removed in M6g) ───────────
       // The LLM pass also emits reachability verdicts and vendored-library

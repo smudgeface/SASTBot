@@ -106,6 +106,35 @@ they're real (found in a build file or #include), stay silent (= keep). If
 you can't find any evidence, emit a drop with
 `reason: "no evidence found in source tree"`.
 
+### Step 5 — Emit CPE strings for C/C++ and generic-ecosystem components
+
+For components with `ecosystem: "generic"` (or components whose purl starts
+with `pkg:generic/`), and for vendored C/C++ libraries you are adding, emit
+the canonical **CPE 2.3** string on `keep` or `add` records when you are
+**reasonably confident** of the vendor and product names. A wrong CPE is worse
+than no CPE — only include the `cpe` field if you are confident.
+
+Why: SASTBot queries the NVD CVE database using CPE for precise matching.
+OSV.dev has essentially no coverage for generic/C/C++ libs; NVD is the
+primary vuln source for them.
+
+Examples of well-known CPE strings:
+- `zlib` → `cpe:2.3:a:zlib:zlib:<version>:*:*:*:*:*:*:*`
+- `libgit2` → `cpe:2.3:a:libgit2_project:libgit2:<version>:*:*:*:*:*:*:*`
+- `OpenSSL` → `cpe:2.3:a:openssl:openssl:<version>:*:*:*:*:*:*:*`
+- `freetype` / `FreeType` → `cpe:2.3:a:freetype:freetype:<version>:*:*:*:*:*:*:*`
+- `libpng` → `cpe:2.3:a:libpng:libpng:<version>:*:*:*:*:*:*:*`
+- `curl` → `cpe:2.3:a:haxx:curl:<version>:*:*:*:*:*:*:*`
+- `expat` / `libexpat` → `cpe:2.3:a:libexpat_project:libexpat:<version>:*:*:*:*:*:*:*`
+- `sqlite` → `cpe:2.3:a:sqlite:sqlite:<version>:*:*:*:*:*:*:*`
+- `libjpeg-turbo` → `cpe:2.3:a:libjpeg-turbo:libjpeg-turbo:<version>:*:*:*:*:*:*:*`
+- `eigen` → no well-known CPE — omit
+- `boost` → no standard NVD CPE — omit
+
+If the component has a known version, fill it in; otherwise use `*`.
+Omit the `cpe` field entirely for npm/pypi/maven/nuget components and any
+C/C++ library whose CPE you are not confident about.
+
 ## Token budget
 
 Target output tokens: `{{TOKEN_BUDGET}}` total for this session. Self-pace.

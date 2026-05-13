@@ -55,6 +55,7 @@ function encodeSecret(input: SecretInput): EncodedSecret {
     case "https_token":
     case "jira_token":
     case "llm_api_key":
+    case "nvd_api_key":
       return {
         plaintext: Buffer.from(input.value, "utf8"),
         metadata: Prisma.JsonNull,
@@ -96,7 +97,8 @@ export type DecodedCredential =
       known_hosts: string | null;
     }
   | { kind: "jira_token"; value: string }
-  | { kind: "llm_api_key"; value: string };
+  | { kind: "llm_api_key"; value: string }
+  | { kind: "nvd_api_key"; value: string };
 
 export async function decodeCredential(
   credentialId: string,
@@ -115,6 +117,7 @@ export async function decodeCredential(
     case "https_token":
     case "jira_token":
     case "llm_api_key":
+    case "nvd_api_key":
       return { kind: row.kind, value: plaintext };
     case "https_basic":
       if (!meta?.username) {
@@ -250,7 +253,7 @@ export async function credentialReferences(
   credentialId: string,
   client: Tx = prisma,
 ): Promise<CredentialReferences> {
-  const [repos, jiraCount, llmCount] = await Promise.all([
+  const [repos, jiraCount, llmCount, nvdCount] = await Promise.all([
     client.repo.findMany({
       where: { credentialId },
       select: { id: true, name: true },
@@ -258,11 +261,13 @@ export async function credentialReferences(
     }),
     client.appSettings.count({ where: { jiraCredentialId: credentialId } }),
     client.appSettings.count({ where: { llmCredentialId: credentialId } }),
+    client.appSettings.count({ where: { nvdCredentialId: credentialId } }),
   ]);
   return {
     repos: repos.map((r) => ({ id: r.id, name: r.name })),
     jira_settings: jiraCount > 0,
     llm_settings: llmCount > 0,
+    nvd_settings: nvdCount > 0,
   };
 }
 

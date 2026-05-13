@@ -55,6 +55,12 @@ export default function SettingsPage() {
   // LLM assistance section state
   const [reachabilityMinSeverity, setReachabilityMinSeverity] = useState<ReachabilityMinSeverity>("high");
 
+  // NVD API key section state
+  const [nvdCredChoice, setNvdCredChoice] = useState<CredentialChoice>("existing");
+  const [nvdCredId, setNvdCredId] = useState<string>("");
+  const [nvdNewName, setNvdNewName] = useState("");
+  const [nvdNewValue, setNvdNewValue] = useState("");
+
   // When the settings query completes, hydrate the form.
   useEffect(() => {
     const data = settings.data;
@@ -71,10 +77,14 @@ export default function SettingsPage() {
     setLlmCredChoice(data.llm_credential_id ? "existing" : "new");
 
     setReachabilityMinSeverity(data.reachability_min_severity ?? "high");
+
+    setNvdCredId(data.nvd_credential_id ?? "");
+    setNvdCredChoice(data.nvd_credential_id ? "existing" : "new");
   }, [settings.data]);
 
   const jiraOptions = credentials.data?.filter((c) => c.kind.startsWith("jira")) ?? [];
   const llmOptions = credentials.data?.filter((c) => c.kind === "llm_api_key") ?? [];
+  const nvdOptions = credentials.data?.filter((c) => c.kind === "nvd_api_key") ?? [];
 
   const buildJiraCred = (): AdminSettingsUpdate["jira_credential"] => {
     if (jiraCredChoice !== "new") return null;
@@ -96,9 +106,20 @@ export default function SettingsPage() {
     };
   };
 
+  const buildNvdCred = (): AdminSettingsUpdate["nvd_credential"] => {
+    if (nvdCredChoice !== "new") return null;
+    if (!nvdNewName.trim() || !nvdNewValue.trim()) return null;
+    return {
+      kind: "nvd_api_key",
+      name: nvdNewName.trim(),
+      value: nvdNewValue,
+    };
+  };
+
   const buildPayload = (): AdminSettingsUpdate => {
     const jiraCred = buildJiraCred();
     const llmCred = buildLlmCred();
+    const nvdCred = buildNvdCred();
     const payload: AdminSettingsUpdate = {
       jira_base_url: jiraBaseUrl.trim() || null,
       jira_email: jiraEmail.trim() || null,
@@ -121,6 +142,11 @@ export default function SettingsPage() {
     } else if (llmCred) {
       payload.llm_credential = llmCred;
     }
+    if (nvdCredChoice === "existing") {
+      payload.nvd_credential_id = nvdCredId || null;
+    } else if (nvdCred) {
+      payload.nvd_credential = nvdCred;
+    }
     return payload;
   };
 
@@ -134,6 +160,8 @@ export default function SettingsPage() {
       setJiraNewValue("");
       setLlmNewName("");
       setLlmNewValue("");
+      setNvdNewName("");
+      setNvdNewValue("");
       // If a new credential was created, reset choice to "existing" and point
       // at the new credential id so subsequent saves don't try to re-create.
       if (updated.jira_credential_id) {
@@ -143,6 +171,10 @@ export default function SettingsPage() {
       if (updated.llm_credential_id) {
         setLlmCredChoice("existing");
         setLlmCredId(updated.llm_credential_id);
+      }
+      if (updated.nvd_credential_id) {
+        setNvdCredChoice("existing");
+        setNvdCredId(updated.nvd_credential_id);
       }
       return true;
     } catch (err) {
@@ -388,6 +420,43 @@ export default function SettingsPage() {
               </p>
             </div>
 
+          </CardContent>
+        </Card>
+
+        {/* NVD API key */}
+        <Card>
+          <CardHeader>
+            <CardTitle>NVD API key</CardTitle>
+            <CardDescription>
+              Optional. Raises the NVD rate limit from 5 req/30 s to 50 req/30 s.
+              Without a key SASTBot still queries NVD for C/C++ components —
+              it just throttles more conservatively. Obtain a key at{" "}
+              <a
+                href="https://nvd.nist.gov/developers/request-an-api-key"
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                nvd.nist.gov
+              </a>
+              .
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CredentialPicker
+              idPrefix="nvd"
+              choice={nvdCredChoice}
+              setChoice={setNvdCredChoice}
+              credentialId={nvdCredId}
+              setCredentialId={setNvdCredId}
+              options={nvdOptions}
+              newName={nvdNewName}
+              setNewName={setNvdNewName}
+              newValue={nvdNewValue}
+              setNewValue={setNvdNewValue}
+              valuePlaceholder="NVD API key"
+              kindLabel="NVD API key"
+            />
           </CardContent>
         </Card>
 

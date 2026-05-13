@@ -702,6 +702,7 @@ export async function persistAugmentedComponents(
   client: Tx,
   scopeDir = "",
   scopePath = "/",
+  cpeMap?: Map<string, string>,
 ): Promise<SbomComponent[]> {
   const unique = new Map<string, CdxComponent>();
 
@@ -732,6 +733,7 @@ export async function persistAugmentedComponents(
     discoveryMethod: string;
     llmEvidence: Prisma.InputJsonValue | undefined;
     occurrences: ComponentOccurrence[];
+    cpe?: string;
   };
   const lockfileCache = new Map<string, string[] | null>();
   const scopeIndex = scopeDir ? new ScopeFileIndex(scopeDir, scopePath) : undefined;
@@ -743,6 +745,7 @@ export async function persistAugmentedComponents(
     const sr = extractManifestFile(c, scopeDir);
     const occurrences = extractOccurrences(c, evidence?.path ?? null, false, scopePath);
     await resolveManifestLines(occurrences, canonicalName, scopeDir || null, scopePath, lockfileCache, scopeIndex);
+    const cpe = cpeMap?.get(canonicalName);
     augRows.push({
       scanRunId,
       name: canonicalName,
@@ -759,6 +762,7 @@ export async function persistAugmentedComponents(
       discoveryMethod: (c as CdxComponent & { discoveryMethod?: string }).discoveryMethod ?? "manifest",
       llmEvidence: evidence ? (evidence as unknown as Prisma.InputJsonValue) : undefined,
       occurrences,
+      ...(cpe ? { cpe } : {}),
     });
   }
 

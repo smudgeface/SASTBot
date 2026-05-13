@@ -215,6 +215,7 @@ function UsedByCell({ refs }: { refs: CredentialReferences }) {
   if (refs.repos.length > 0) bits.push(...refs.repos.map((r) => r.name));
   if (refs.jira_settings) bits.push("Jira settings");
   if (refs.llm_settings) bits.push("LLM settings");
+  if (refs.nvd_settings) bits.push("NVD settings");
   if (bits.length === 0) {
     return <span className="text-xs text-muted-foreground italic">unused</span>;
   }
