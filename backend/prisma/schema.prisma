@@ -92,12 +92,13 @@ model ScanScope {
   lastScanCompletedAt DateTime? @map("last_scan_completed_at") @db.Timestamptz(6)
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
-  repo       Repo        @relation(fields: [repoId], references: [id], onDelete: Cascade)
-  scanRuns   ScanRun[]
-  sastFindings SastFinding[]
-  sastIssues SastIssue[]
-  scaIssues  ScaIssue[]
+  org              Org?             @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  repo             Repo             @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  scanRuns         ScanRun[]
+  sastFindings     SastFinding[]
+  sastIssues       SastIssue[]
+  scaIssues        ScaIssue[]
+  scopeComponents  ScopeComponent[]
 
   @@unique([repoId, path], name: "uq_scan_scopes_repo_path")
   @@map("scan_scopes")
@@ -238,12 +239,13 @@ model ScanRun {
   phaseProgress           Json?     @map("phase_progress")
   createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  org          Org?           @relation(fields: [orgId], references: [id], onDelete: SetNull)
-  repo         Repo           @relation(fields: [repoId], references: [id], onDelete: Cascade)
-  scope        ScanScope      @relation(fields: [scopeId], references: [id], onDelete: Cascade)
-  components   SbomComponent[]
-  findings     ScanFinding[]
-  sastFindings SastFinding[]
+  org               Org?               @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  repo              Repo               @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  scope             ScanScope          @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  components        SbomComponent[]
+  findings          ScanFinding[]
+  sastFindings      SastFinding[]
+  scanRunComponents ScanRunComponent[]
 
   @@index([scopeId, createdAt(sort: Desc)])
   @@index([repoId, createdAt(sort: Desc)])
@@ -532,4 +534,70 @@ model Canary {
   keyVersion Int    @default(1) @map("key_version")
 
   @@map("encryption_canary")
+}
+
+// ---------------------------------------------------------------------------
+// SBOM Component Recheck — Stage 1 (scope-level component state)
+// ---------------------------------------------------------------------------
+// Mirrors the proven sast_issues / sca_issues model: each scan contributes
+// evidence to a cumulative, durable scope-level record. Per-scan-run view
+// is now a join table (scan_run_components) rather than the primary container.
+// See docs/SBOM_COMPONENT_RECHECK_PLAN.md for the full architectural rationale.
+
+model ScopeComponent {
+  id              String    @id @default(uuid()) @db.Uuid
+  scopeId         String    @map("scope_id") @db.Uuid
+  orgId           String?   @map("org_id") @db.Uuid
+
+  name            String
+  version         String?
+  purl            String
+  ecosystem       String?
+  licenses        String[]
+  componentType   String    @default("library") @map("component_type")
+  scope           String?
+  isDevOnly       Boolean   @default(false) @map("is_dev_only")
+  manifestFile    String?   @map("manifest_file")
+  discoveryMethod String?   @default("manifest") @map("discovery_method")
+  evidenceLine    Int?      @map("evidence_line")
+  // New in Stage 1 — was previously implicit inside llmEvidence.path.
+  // Stores the repo-relative path to the file that is evidence of this
+  // component's presence (for Tier-1 file-existence recheck).
+  evidencePath    String?   @map("evidence_path")
+  llmEvidence     Json?     @map("llm_evidence")
+  cpe             String?
+
+  // Lifecycle — mirrors SastIssue / ScaIssue pattern
+  source          String    @default("scan")
+  // "active" | "removed" | "manual_override"
+  dismissedStatus String    @default("active") @map("dismissed_status")
+  dismissedReason String?   @map("dismissed_reason")
+  dismissedAt     DateTime? @map("dismissed_at") @db.Timestamptz(6)
+
+  firstSeenScanRunId String?   @map("first_seen_scan_run_id") @db.Uuid
+  lastSeenScanRunId  String?   @map("last_seen_scan_run_id") @db.Uuid
+  lastSeenAt         DateTime? @map("last_seen_at") @db.Timestamptz(6)
+
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  scope_      ScanScope          @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  scanRunLinks ScanRunComponent[]
+
+  @@unique([scopeId, name, version, purl], name: "uq_scope_components_scope_name_ver_purl")
+  @@index([scopeId, dismissedStatus])
+  @@map("scope_components")
+}
+
+model ScanRunComponent {
+  scanRunId        String @map("scan_run_id") @db.Uuid
+  scopeComponentId String @map("scope_component_id") @db.Uuid
+  // "manifest" | "llm_augmentation" | "recheck_recovery"
+  discoveryMethod  String @map("discovery_method")
+
+  scanRun        ScanRun        @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
+  scopeComponent ScopeComponent @relation(fields: [scopeComponentId], references: [id], onDelete: Cascade)
+
+  @@id([scanRunId, scopeComponentId])
+  @@map("scan_run_components")
 }
