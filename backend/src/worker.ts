@@ -876,6 +876,15 @@ backfillSbomManifestFiles()
     logger.warn({ err }, "[worker] sbom manifest_file → SCA origin backfill chain failed");
   });
 
+// Stage 1 of the SBOM Component Recheck feature: promote sbom_components rows
+// from each scope's latest successful scan into the durable scope-level
+// scope_components table. Reads from sbom_components so it runs after the
+// manifest-file normalization chain above to inherit the corrected paths.
+import { backfillScopeComponentsFromLatestScans } from "./services/scopeComponentService.js";
+backfillScopeComponentsFromLatestScans().catch((err) => {
+  logger.warn({ err }, "[worker] scope-components backfill failed");
+});
+
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {
