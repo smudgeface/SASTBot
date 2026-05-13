@@ -19,13 +19,20 @@ any scope has an active scan.
 |---|---|---|---|---|
 | 1 | `cloning` | Shallow `git clone` (or `git fetch` on cached clone). | 10–60s LAN, 1–10m cold WAN | – |
 | 2 | `cdxgen` | `cdxgen` against the scope dir; emits CycloneDX 1.7. | 20s–2m | – |
-| 3 | `llm_sbom` | **Stage 1** mechanical post-processing (`postProcessComponents`, 6 rules) cleans cdxgen noise (placeholder versions, cmake internals, .NET BCL assemblies, test frameworks, versionless duplicates, alias normalization). **Stage 2** `claude -p` augmentation reads the Stage-1-cleaned SBOM, drops first-party / build-only / .NET BCL entries, adds vendored libs cdxgen missed, attaches rationale evidence. | 1–10m | $0.50–$2.50 |
+| 3 | `llm_sbom` | **Stage 1** mechanical post-processing (`postProcessComponents`, 6 rules) cleans cdxgen noise (placeholder versions, cmake internals, .NET BCL assemblies, test frameworks, versionless duplicates, alias normalization). **Stage 2** `claude -p` augmentation reads the Stage-1-cleaned SBOM, drops first-party / build-only / .NET BCL entries, adds vendored libs cdxgen missed, attaches rationale evidence + optional CPE 2.3 string. | 1–10m | $0.50–$2.50 |
 | 4 | `osv` | Batched OSV.dev queries per component. Dev-only npm components are skipped when `reachabilityIncludeDevDeps=false`. | 5–30s | – |
-| 5 | `eol` | endoflife.date enrichment for runtimes (Node, Python, .NET). | <5s | – |
-| 6 | `llm_detection` | `claude -p` SAST agent reads source, emits `sast` (per-location), `sast_absence` (cross-cutting), and `reachability` records for OSV findings. | 5–20m | $5–$16 |
-| 7 | `llm_recheck` | `claude -p` re-verifies any issue that the detection pass didn't re-emit, to confirm it's fixed (vs. just dropped from the LLM's attention). | 1–3m | $0.50–$1.50 |
-| 8 | `sca_summaries` | One short `claude -p` summary per high+critical SCA issue (cached after first generation). | seconds to minutes | small |
-| 9 | `finalizing` | SARIF v2.1.0 generation, severity rollup, scope `lastScanRunId` advance (gated on no error-warnings), dev-tree policy suppression on dev-only SCA issues. | <2s | – |
+| 5 | `nvd` | NVD CVE API queries for `generic`-ecosystem components (vendored C/C++ libs OSV doesn't cover). Components with a CPE use the precise `cpeName` path; components without fall back to keyword + version-filtered search. Components with no extractable version are skipped entirely. Throttled to 5 req/30s without an API key (50 req/30s with). | 5s–4m | – |
+| 6 | `eol` | endoflife.date enrichment for runtimes (Node, Python, .NET). | <5s | – |
+| 7 | `llm_detection` | `claude -p` SAST agent reads source, emits `sast` (per-location), `sast_absence` (cross-cutting), and `reachability` records for OSV findings. | 5–20m | $5–$16 |
+| 8 | `llm_recheck` | `claude -p` re-verifies any issue that the detection pass didn't re-emit, to confirm it's fixed (vs. just dropped from the LLM's attention). | 1–3m | $0.50–$1.50 |
+| 9 | `sca_summaries` | One short `claude -p` summary per high+critical SCA issue (cached after first generation). | seconds to minutes | small |
+| 10 | `finalizing` | SARIF v2.1.0 generation, severity rollup, scope `lastScanRunId` advance (gated on no error-warnings), dev-tree policy suppression on dev-only SCA issues. | <2s | – |
+
+### Planned phases (not yet shipped)
+
+| Phase | When it runs | What it does | Plan doc |
+|---|---|---|---|
+| `llm_sbom_recheck` | between `llm_sbom` and `osv` | Compares the current run's augmented component list against the scope-level component truth set. For each previously-known component the augmentation didn't surface, runs a two-tier check (filesystem evidence existence, then a focused LLM verification when ambiguous). Recovered components flow into the same run's `osv` / `nvd` / detection passes. | [SBOM_COMPONENT_RECHECK_PLAN.md](./SBOM_COMPONENT_RECHECK_PLAN.md) |
 
 A "trustworthy" scan has no `error`-severity warnings in
 `scan_runs.warnings`. The SCA auto-fix sweep and the `lastScanRunId`
@@ -151,6 +158,7 @@ SBOM-augmentation effort.
 | `llm_sbom_augmentation_failed` | error | Worker falls back to Stage-1-cleaned components; scan still completes; marked untrustworthy. | Inspect `claude -p` exit and stderr in logs; re-run scan. |
 | `llm_sbom_parse_errors` | info | Some augmentation records were unparseable; partial results applied. | Usually self-clears; if persistent, inspect tmp record stream. |
 | `llm_sast_detection_failed` | error | No SAST findings persisted; scan marked untrustworthy. | Inspect `claude -p` exit; re-run scan. |
+| `nvd_query_failed` | info | NVD CVE API was unreachable or returned an error; the `nvd` phase persisted no findings. Scan still completes; SCA auto-fix sweep still runs (info-severity, by design — NVD being down must not gate remediation). | Verify NVD service status at <https://services.nvd.nist.gov/>; re-run scan once NVD is back. |
 | `scope_path_missing` | error | Pre-flight detected the configured scope path doesn't exist in the clone. Scan aborts before cdxgen. | Edit the repo in Admin → Repos; set Scan paths to a directory that actually exists at the repo root. |
 | `remote_unreachable` | error | `git ls-remote` / `git clone` couldn't reach the remote (VPN drop, DNS, firewall). | Reconnect network, re-trigger. |
 | `branch_not_found` | error | Default branch on the repo doesn't exist on the remote. | Edit the repo's Default branch (common LMI case: change `main` → `master`). |
