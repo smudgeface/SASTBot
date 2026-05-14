@@ -20,6 +20,7 @@ any scope has an active scan.
 | 1 | `cloning` | Shallow `git clone` (or `git fetch` on cached clone). | 10–60s LAN, 1–10m cold WAN | – |
 | 2 | `cdxgen` | `cdxgen` against the scope dir; emits CycloneDX 1.7. | 20s–2m | – |
 | 3 | `llm_sbom` | **Stage 1** mechanical post-processing (`postProcessComponents`, 6 rules) cleans cdxgen noise (placeholder versions, cmake internals, .NET BCL assemblies, test frameworks, versionless duplicates, alias normalization). **Stage 2** `claude -p` augmentation reads the Stage-1-cleaned SBOM, drops first-party / build-only / .NET BCL entries, adds vendored libs cdxgen missed, attaches rationale evidence + optional CPE 2.3 string. | 1–10m | $0.50–$2.50 |
+| 3.5 | `llm_sbom_recheck` | Compares the current run's augmented component list against the scope-level component truth set (`scope_components`). For each previously-known `active` component not surfaced in this run: **Tier 1** checks whether the recorded `evidence_path` still exists on disk (free — no LLM cost); missing file → mark `removed`. **Tier 2** spawns `claude -p` for components that passed Tier 1 or have no evidence path — the LLM confirms presence/absence and optionally updates the evidence path if a refactor moved the file. Recovered components get a `scan_run_components` join row with `discoveryMethod = 'recheck_recovery'` so downstream OSV/NVD passes pick them up this run. Hard cap of 20 candidates; excess emits an `info` warning `recheck_capped`. | <1m (Tier 1 only) to 2–3m (with LLM) | $0 (Tier 1) / $0.20–$0.80 (Tier 2) |
 | 4 | `osv` | Batched OSV.dev queries per component. Dev-only npm components are skipped when `reachabilityIncludeDevDeps=false`. | 5–30s | – |
 | 5 | `nvd` | NVD CVE API queries for `generic`-ecosystem components (vendored C/C++ libs OSV doesn't cover). Components with a CPE use the precise `cpeName` path; components without fall back to keyword + version-filtered search. Components with no extractable version are skipped entirely. Throttled to 5 req/30s without an API key (50 req/30s with). | 5s–4m | – |
 | 6 | `eol` | endoflife.date enrichment for runtimes (Node, Python, .NET). | <5s | – |
@@ -27,12 +28,6 @@ any scope has an active scan.
 | 8 | `llm_recheck` | `claude -p` re-verifies any issue that the detection pass didn't re-emit, to confirm it's fixed (vs. just dropped from the LLM's attention). | 1–3m | $0.50–$1.50 |
 | 9 | `sca_summaries` | One short `claude -p` summary per high+critical SCA issue (cached after first generation). | seconds to minutes | small |
 | 10 | `finalizing` | SARIF v2.1.0 generation, severity rollup, scope `lastScanRunId` advance (gated on no error-warnings), dev-tree policy suppression on dev-only SCA issues. | <2s | – |
-
-### Planned phases (not yet shipped)
-
-| Phase | When it runs | What it does | Plan doc |
-|---|---|---|---|
-| `llm_sbom_recheck` | between `llm_sbom` and `osv` | Compares the current run's augmented component list against the scope-level component truth set. For each previously-known component the augmentation didn't surface, runs a two-tier check (filesystem evidence existence, then a focused LLM verification when ambiguous). Recovered components flow into the same run's `osv` / `nvd` / detection passes. | [SBOM_COMPONENT_RECHECK_PLAN.md](./SBOM_COMPONENT_RECHECK_PLAN.md) |
 
 A "trustworthy" scan has no `error`-severity warnings in
 `scan_runs.warnings`. The SCA auto-fix sweep and the `lastScanRunId`
@@ -137,6 +132,7 @@ SBOM-augmentation effort.
 | Raw cdxgen SBOM (CycloneDX 1.7) | `scan_runs.sbom_json` (JSONB) | Auditable raw source; LLM SBOM augmentation reads this; served at `GET /scans/:id/sbom` as the per-scan audit trail |
 | Curated CycloneDX 1.7 SBOM | Built on demand from `sbom_components` by `sbomCurated.ts` | Served at `GET /api/scopes/:id/sbom-json` as the operator-facing artifact (matches the Components tab; CRA-ready) |
 | Post-augmentation component list | `sbom_components` rows (one per scan run) | Components tab + OSV queries + curated-SBOM builder |
+| Scope-level component state | `scope_components` rows (stable identity per scope) + `scan_run_components` join rows | SBOM recheck truth set; future Components tab query target; audit trail |
 | LLM augmentation evidence | `sbom_components.llm_evidence` (JSONB `{path, excerpt, llmReason}`) | Tooltip rationale on Components tab |
 | Discovery method tag | `sbom_components.discovery_method` (`manifest \| llm_augmentation`) | Filtering + provenance audit |
 | `is_dev_only` flag | `sbom_components.is_dev_only` (npm `dev: true` marker from cdxgen 12.2+) | Dev-tool filter on Components & SCA tabs |
@@ -156,6 +152,9 @@ SBOM-augmentation effort.
 | `cdxgen_failed` | error | Worker emits warning; downstream phases skip; scan marked untrustworthy. | Inspect cdxgen output in worker logs; re-run after fixing the manifest. |
 | `cdxgen_zero_components` | info | Scan completes but with zero components; flagged if a previous run had > 0. | Verify the scope directory has a manifest at the expected path. |
 | `llm_sbom_augmentation_failed` | error | Worker falls back to Stage-1-cleaned components; scan still completes; marked untrustworthy. | Inspect `claude -p` exit and stderr in logs; re-run scan. |
+| `llm_sbom_recheck_failed` | error | Recheck subprocess crashed or timed out. Potentially-missing components stay `active` from prior runs (safe default — conserves the inventory). Scan marked untrustworthy so SCA auto-fix doesn't run. | Inspect logs; re-run. |
+| `llm_sbom_recheck_partial` | info | Some Tier-2 verdicts unparseable. Parseable ones applied; ambiguous components stay `active`. | Usually self-clears next run. |
+| `recheck_capped` | info | More than 20 candidates were in the truth set for this scope. Oldest by `last_seen_at` were skipped. | Normal for major refactors; will resolve over subsequent scans. |
 | `llm_sbom_parse_errors` | info | Some augmentation records were unparseable; partial results applied. | Usually self-clears; if persistent, inspect tmp record stream. |
 | `llm_sast_detection_failed` | error | No SAST findings persisted; scan marked untrustworthy. | Inspect `claude -p` exit; re-run scan. |
 | `nvd_query_failed` | info | NVD CVE API was unreachable or returned an error; the `nvd` phase persisted no findings. Scan still completes; SCA auto-fix sweep still runs (info-severity, by design — NVD being down must not gate remediation). | Verify NVD service status at <https://services.nvd.nist.gov/>; re-run scan once NVD is back. |
