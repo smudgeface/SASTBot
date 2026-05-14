@@ -156,6 +156,8 @@ export interface Repo {
   vendored_dirs: string[];
   /** M6p Stage 2: effort level for the SBOM augmentation LLM pass. */
   llm_sbom_effort: LlmEffort;
+  /** SBOM Component Recheck Stage 2: effort for the recheck pass. */
+  llm_sbom_recheck_effort: LlmEffort;
   source_url_template: string | null;
   last_cloned_at: string | null;
   created_at?: string;
@@ -181,6 +183,8 @@ export interface RepoUpsertInput {
   vendored_dirs?: string[];
   /** M6p Stage 2: effort for the SBOM augmentation pass. */
   llm_sbom_effort?: LlmEffort;
+  /** SBOM Component Recheck Stage 2: effort for the recheck pass. */
+  llm_sbom_recheck_effort?: LlmEffort;
   source_url_template?: string | null;
   /** Existing credential to link. Ignored if `credential` (inline) is supplied. */
   credential_id?: string | null;
@@ -276,6 +280,7 @@ export type ScanPhase =
   | "cloning"
   | "cdxgen"
   | "llm_sbom"
+  | "llm_sbom_recheck"
   | "osv"
   | "nvd"
   | "eol"
@@ -288,6 +293,7 @@ export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
   cloning: "Cloning repo",
   cdxgen: "Building SBOM",
   llm_sbom: "LLM SBOM augmentation",
+  llm_sbom_recheck: "SBOM recheck",
   osv: "Querying OSV.dev",
   nvd: "Querying NVD",
   eol: "Checking EOL / deprecation",
@@ -305,6 +311,7 @@ export const SCAN_PHASE_UNITS: Partial<Record<ScanPhase, string>> = {
   nvd: "components",
   eol: "components",
   llm_sbom: "tokens",
+  llm_sbom_recheck: "components",
   llm_detection: "tokens",
   llm_recheck: "tokens",
   sca_summaries: "summaries",
@@ -314,7 +321,7 @@ export const SCAN_PHASE_UNITS: Partial<Record<ScanPhase, string>> = {
 // advances toward the cap as a "still moving" signal but isn't expected to
 // reach it. Render with `(max)` suffix and no percentage / bar so the UI
 // doesn't suggest filling to 100% is the objective.
-export const SCAN_PHASE_CAPS = new Set<ScanPhase>(["llm_sbom", "llm_detection", "llm_recheck"]);
+export const SCAN_PHASE_CAPS = new Set<ScanPhase>(["llm_sbom", "llm_sbom_recheck", "llm_detection", "llm_recheck"]);
 
 // ---------------------------------------------------------------------------
 // SCA — SBOM components and findings (M3)

@@ -28,6 +28,7 @@
 import { pino } from "pino";
 import { prisma } from "../db.js";
 import { loadConfig } from "../config.js";
+import type { SbomComponent } from "@prisma/client";
 
 const logger = pino({ level: loadConfig().logLevel, name: "scopeComponentService" });
 
@@ -213,4 +214,160 @@ export async function backfillScopeComponentsFromLatestScans(): Promise<void> {
     },
     "[scopeComponentService] backfill complete",
   );
+}
+
+// ---------------------------------------------------------------------------
+// Live scan path: persist augmented sbom_components into scope_components
+// ---------------------------------------------------------------------------
+
+/**
+ * For every component surfaced by this scan run's augmentation pass, upsert
+ * into `scope_components` (keyed by scope_id, name, version, purl) and insert
+ * the `scan_run_components` join row.
+ *
+ * Rules per the plan (docs/SBOM_COMPONENT_RECHECK_PLAN.md):
+ * - Insert: set firstSeenScanRunId = lastSeenScanRunId = scanRunId,
+ *   lastSeenAt = now, dismissedStatus = 'active', source = 'scan'.
+ * - Existing 'active' or 'removed' row hit: update lastSeenScanRunId,
+ *   lastSeenAt. Flip 'removed' back to 'active' (the component is back).
+ * - Existing 'manual_override' row: leave dismissedStatus / reason as-is.
+ *   Update lastSeenScanRunId and lastSeenAt only.
+ *
+ * The join row (scan_run_components) always uses the component's discoveryMethod
+ * value so the per-scan audit trail reflects how it was found.
+ */
+export async function persistScanComponentsToScopeState(
+  scanRunId: string,
+  scopeId: string,
+  orgId: string | null,
+  components: SbomComponent[],
+): Promise<{ upserted: number; joinsInserted: number }> {
+  let upserted = 0;
+  let joinsInserted = 0;
+
+  for (const c of components) {
+    // Extract evidence_path from llmEvidence if not already a top-level field.
+    let evidencePath: string | null = (c as unknown as { evidencePath?: string | null }).evidencePath ?? null;
+    if (!evidencePath && c.llmEvidence && typeof c.llmEvidence === "object") {
+      const ev = c.llmEvidence as Record<string, unknown>;
+      if (typeof ev.path === "string" && ev.path) {
+        evidencePath = ev.path;
+      }
+    }
+
+    try {
+      // Upsert scope_component. We use raw SQL so we can handle NULL version
+      // correctly (Prisma's compound upsert requires all key fields non-null).
+      //
+      // On conflict:
+      //   - Always update lastSeenScanRunId + lastSeenAt.
+      //   - Flip 'removed' → 'active' (component is back this run).
+      //   - Leave 'manual_override' rows untouched on status/reason.
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO scope_components (
+          id, scope_id, org_id,
+          name, version, purl, ecosystem,
+          licenses, component_type, scope, is_dev_only,
+          manifest_file, discovery_method, evidence_line,
+          evidence_path, llm_evidence, cpe,
+          source, dismissed_status,
+          first_seen_scan_run_id, last_seen_scan_run_id, last_seen_at,
+          created_at, updated_at
+        )
+        VALUES (
+          gen_random_uuid(), $1::uuid, $2::uuid,
+          $3, $4, $5, $6,
+          $7::text[], $8, $9, $10,
+          $11, $12, $13,
+          $14, $15::jsonb, $16,
+          'scan', 'active',
+          $17::uuid, $17::uuid, now(),
+          now(), now()
+        )
+        ON CONFLICT (scope_id, name, version, purl) DO UPDATE
+          SET last_seen_scan_run_id = EXCLUDED.last_seen_scan_run_id,
+              last_seen_at          = EXCLUDED.last_seen_at,
+              updated_at            = now(),
+              -- Flip 'removed' rows back to active; leave 'manual_override' alone.
+              dismissed_status = CASE
+                WHEN scope_components.dismissed_status = 'removed' THEN 'active'
+                ELSE scope_components.dismissed_status
+              END,
+              dismissed_reason = CASE
+                WHEN scope_components.dismissed_status = 'removed' THEN NULL
+                ELSE scope_components.dismissed_reason
+              END,
+              dismissed_at = CASE
+                WHEN scope_components.dismissed_status = 'removed' THEN NULL
+                ELSE scope_components.dismissed_at
+              END`,
+        scopeId,
+        orgId ?? null,
+        c.name,
+        c.version ?? null,
+        c.purl,
+        c.ecosystem ?? null,
+        `{${c.licenses.map((l) => `"${l.replace(/"/g, '\\"')}"`).join(",")}}`,
+        c.componentType,
+        c.scope ?? null,
+        c.isDevOnly,
+        c.manifestFile ?? null,
+        c.discoveryMethod ?? "manifest",
+        c.evidenceLine ?? null,
+        evidencePath ?? null,
+        c.llmEvidence !== null ? JSON.stringify(c.llmEvidence) : null,
+        (c as unknown as { cpe?: string | null }).cpe ?? null,
+        scanRunId,
+      );
+
+      upserted++;
+
+      // Fetch the scope_component id so we can insert the join row.
+      const existing = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+        `SELECT id FROM scope_components
+         WHERE scope_id = $1::uuid
+           AND name = $2
+           AND purl = $3
+           AND (version = $4 OR ($4 IS NULL AND version IS NULL))
+         LIMIT 1`,
+        scopeId,
+        c.name,
+        c.purl,
+        c.version ?? null,
+      );
+
+      if (existing.length === 0) {
+        logger.warn(
+          { scopeId, purl: c.purl },
+          "[scopeComponentService] persistScanComponents: could not find scope_component after upsert — skipping join row",
+        );
+        continue;
+      }
+
+      const scopeComponentId = existing[0]!.id;
+
+      const joinInserted = await prisma.$executeRawUnsafe(
+        `INSERT INTO scan_run_components (scan_run_id, scope_component_id, discovery_method)
+         VALUES ($1::uuid, $2::uuid, $3)
+         ON CONFLICT (scan_run_id, scope_component_id) DO NOTHING`,
+        scanRunId,
+        scopeComponentId,
+        c.discoveryMethod ?? "manifest",
+      );
+
+      joinsInserted += joinInserted;
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message, scopeId, purl: c.purl },
+        "[scopeComponentService] persistScanComponents: error upserting component — skipping",
+      );
+    }
+  }
+
+  logger.info(
+    { scanRunId, scopeId, upserted, joinsInserted },
+    "[scopeComponentService] persistScanComponentsToScopeState complete",
+  );
+
+  return { upserted, joinsInserted };
 }

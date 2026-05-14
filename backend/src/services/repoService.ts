@@ -100,6 +100,7 @@ export async function createRepo(
           firstPartyNamespaces: input.first_party_namespaces ?? [],
           vendoredDirs: input.vendored_dirs ?? ["extern/", "third-party/", "vendor/"],
           llmSbomEffort: input.llm_sbom_effort ?? "medium",
+          llmSbomRecheckEffort: input.llm_sbom_recheck_effort ?? "medium",
         },
       });
 
@@ -170,6 +171,7 @@ export async function updateRepo(
       if (input.first_party_namespaces !== undefined) data.firstPartyNamespaces = input.first_party_namespaces;
       if (input.vendored_dirs !== undefined) data.vendoredDirs = input.vendored_dirs;
       if (input.llm_sbom_effort !== undefined) data.llmSbomEffort = input.llm_sbom_effort;
+      if (input.llm_sbom_recheck_effort !== undefined) data.llmSbomRecheckEffort = input.llm_sbom_recheck_effort;
 
       const updated = await tx.repo.update({ where: { id }, data });
 

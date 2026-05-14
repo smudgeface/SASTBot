@@ -37,6 +37,8 @@ import {
   cleanupSbomTmp,
   runSbomAugmentation,
 } from "./services/llmSbomService.js";
+import { persistScanComponentsToScopeState } from "./services/scopeComponentService.js";
+import { runSbomRecheck } from "./services/llmSbomRecheckService.js";
 import type { ScanWarning } from "./schemas.js";
 import { Prisma } from "@prisma/client";
 
@@ -86,6 +88,7 @@ type ScanPhase =
   | "cloning"
   | "cdxgen"
   | "llm_sbom"
+  | "llm_sbom_recheck"
   | "osv"
   | "nvd"
   | "eol"
@@ -146,6 +149,8 @@ interface LlmSastPipelineInput {
 
 const LLM_SCA_HINT_CAP = 200;
 const TERMINAL_TRIAGE_STATUSES = ["fixed", "suppressed", "false_positive"];
+/** Hard cap on SBOM recheck candidates (mirrors the plan's open-question #3 answer). */
+const MAX_SBOM_RECHECK_CANDIDATES = 20;
 
 async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
   const { scanRunId, repo, run, scanDir, scopePath, log } = input;
@@ -1120,6 +1125,111 @@ const worker = new Worker<ScanJobData>(
         );
       });
       log.info({ inserted: components.length }, "[worker] augmented components persisted");
+
+      // ── Step 3.95: persist components into scope-level state ─────────────
+      // This upserts scope_components rows and inserts scan_run_components join
+      // rows for every component surfaced by the augmentation pass. Must happen
+      // before the recheck phase so the candidate set (active rows NOT in this
+      // run's join table) is correctly populated.
+      try {
+        const scopeState = await persistScanComponentsToScopeState(
+          scanRunId,
+          run.scopeId,
+          run.orgId,
+          components,
+        );
+        log.info(scopeState, "[worker] scope_components state updated");
+      } catch (err) {
+        // Non-fatal: the scan should not die from a scope-state failure.
+        // The recheck phase will simply find zero candidates for this run
+        // (they won't have join rows) and become a no-op.
+        log.error({ err: (err as Error).message }, "[worker] scope_components persistence failed — continuing");
+      }
+
+      // ── Step 3.97: LLM SBOM component recheck ───────────────────────────
+      // Compares scope-level truth set (active components not seen this run)
+      // against the filesystem and LLM. Components confirmed present are
+      // recovered into this run's scan_run_components join table so downstream
+      // OSV / NVD / detection passes can pick them up.
+      try {
+        const recheckTokenBudget = 50_000;
+        const recheckEffort = repo.llmSbomRecheckEffort ?? "medium";
+        await setPhase(scanRunId, "llm_sbom_recheck", { done: 0, total: recheckTokenBudget, label: "SBOM recheck" });
+
+        const recheckResult = await runSbomRecheck({
+          scanRunId,
+          scopeId: run.scopeId,
+          scopeDir: scanDir,
+          effortLevel: recheckEffort,
+          tokenBudget: recheckTokenBudget,
+          orgId: run.orgId,
+          onProgress: (usage) => {
+            void setPhase(scanRunId, "llm_sbom_recheck", {
+              done: usage.inputTokens + usage.outputTokens,
+              total: recheckTokenBudget,
+              label: "SBOM recheck",
+            });
+          },
+        });
+
+        log.info(
+          {
+            recovered: recheckResult.recovered.length,
+            removed: recheckResult.removed.length,
+            capped: recheckResult.capped,
+            parseErrors: recheckResult.parseErrors.length,
+            exitCode: recheckResult.exitCode,
+            durationMs: recheckResult.durationMs,
+            usage: recheckResult.usage,
+          },
+          "[worker] SBOM component recheck finished",
+        );
+
+        if (recheckResult.capped > 0) {
+          await appendWarning(scanRunId, {
+            code: "recheck_capped",
+            severity: "info",
+            message: `SBOM recheck: ${recheckResult.capped} candidate(s) skipped (hard cap of ${MAX_SBOM_RECHECK_CANDIDATES} reached). Components not processed remain active from prior runs.`,
+            context: { totalCandidates: recheckResult.capped + Math.min(recheckResult.recovered.length + recheckResult.removed.length + recheckResult.parseErrors.length, MAX_SBOM_RECHECK_CANDIDATES), processed: MAX_SBOM_RECHECK_CANDIDATES },
+          });
+        }
+
+        if (recheckResult.parseErrors.length > 0) {
+          await appendWarning(scanRunId, {
+            code: "llm_sbom_recheck_partial",
+            severity: "info",
+            message: `SBOM recheck emitted ${recheckResult.parseErrors.length} unparseable verdict(s). Ambiguous components remain active.`,
+          });
+        }
+
+        // Token usage accounting.
+        if (recheckResult.usage.inputTokens > 0 || recheckResult.usage.outputTokens > 0) {
+          await prisma.scanRun.update({
+            where: { id: scanRunId },
+            data: {
+              llmInputTokens: { increment: recheckResult.usage.inputTokens },
+              llmOutputTokens: { increment: recheckResult.usage.outputTokens },
+              llmRequestCount: { increment: recheckResult.usage.requestCount },
+            },
+          });
+        }
+
+        // Failure signal: non-zero exit with zero records from Tier-2.
+        if (recheckResult.exitCode !== null && recheckResult.exitCode !== 0 && recheckResult.recovered.length === 0 && recheckResult.removed.length === 0) {
+          await appendWarning(scanRunId, {
+            code: "llm_sbom_recheck_failed",
+            severity: "error",
+            message: `SBOM component recheck exited with code ${recheckResult.exitCode}. Potentially-missing components remain active (safe default). Scan marked untrustworthy.`,
+          });
+        }
+      } catch (err) {
+        log.error({ err: (err as Error).message }, "[worker] SBOM component recheck phase failed");
+        await appendWarning(scanRunId, {
+          code: "llm_sbom_recheck_failed",
+          severity: "error",
+          message: `SBOM component recheck failed: ${(err as Error).message}. Components from prior runs remain active.`,
+        });
+      }
 
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");

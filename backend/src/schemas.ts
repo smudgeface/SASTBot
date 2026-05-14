@@ -231,6 +231,8 @@ export const RepoCreateSchema = z.object({
   vendored_dirs: z.array(z.string()).default(["extern/", "third-party/", "vendor/"]),
   /** M6p Stage 2: effort level for the SBOM augmentation pass. */
   llm_sbom_effort: LlmEffortSchema.default("medium"),
+  /** SBOM Component Recheck Stage 2: effort level for the recheck pass. */
+  llm_sbom_recheck_effort: LlmEffortSchema.default("medium"),
   credential_id: UuidSchema.nullable().optional(),
   // NOTE: the contract names the inline field `credential`, NOT `new_credential`.
   credential: CredentialCreateSchema.nullable().optional(),
@@ -256,6 +258,7 @@ export const RepoUpdateSchema = z.object({
   first_party_namespaces: z.array(z.string()).optional(),
   vendored_dirs: z.array(z.string()).optional(),
   llm_sbom_effort: LlmEffortSchema.optional(),
+  llm_sbom_recheck_effort: LlmEffortSchema.optional(),
   credential_id: UuidSchema.nullable().optional(),
   credential: CredentialCreateSchema.nullable().optional(),
 });
@@ -286,6 +289,8 @@ export const RepoOutSchema = z.object({
   vendored_dirs: z.array(z.string()),
   /** M6p Stage 2: effort level for the SBOM augmentation pass. */
   llm_sbom_effort: LlmEffortSchema,
+  /** SBOM Component Recheck Stage 2: effort for the recheck pass. */
+  llm_sbom_recheck_effort: LlmEffortSchema,
   /** Set whenever the worker finishes a clone/fetch for this repo. Null
    *  means no local cache exists — "Purge cache" should be disabled. */
   last_cloned_at: IsoDateTimeSchema.nullable(),
@@ -384,7 +389,7 @@ export const ScanRunOutSchema = z.object({
   /** Live progress fields, populated by the worker while status==="running",
    *  cleared on terminal status. */
   current_phase: z.enum([
-    "cloning", "cdxgen", "llm_sbom", "osv", "nvd", "eol",
+    "cloning", "cdxgen", "llm_sbom", "llm_sbom_recheck", "osv", "nvd", "eol",
     "llm_detection", "llm_recheck", "sca_summaries", "finalizing",
   ]).nullable(),
   phase_progress: z.object({

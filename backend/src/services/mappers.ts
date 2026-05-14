@@ -172,6 +172,7 @@ export function repoToOut(repo: Repo): RepoOut {
     first_party_namespaces: repo.firstPartyNamespaces,
     vendored_dirs: repo.vendoredDirs,
     llm_sbom_effort: repo.llmSbomEffort as "low" | "medium" | "high" | "xhigh" | "max",
+    llm_sbom_recheck_effort: repo.llmSbomRecheckEffort as "low" | "medium" | "high" | "xhigh" | "max",
     last_cloned_at: repo.lastClonedAt ? repo.lastClonedAt.toISOString() : null,
     created_at: repo.createdAt.toISOString(),
   };
