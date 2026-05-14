@@ -916,6 +916,30 @@ const worker = new Worker<ScanJobData>(
       data: { status: "running", startedAt: new Date() },
     });
 
+    // Retry-idempotency: BullMQ retries the same scan_run_id on worker
+    // crash / restart (stalled-job recovery). Per-scan rows from the killed
+    // attempt would otherwise pollute this attempt — sbom_components from
+    // the prior augmentation get loaded into the retry's in-memory list
+    // alongside its own augmentation output, producing duplicate OSV / NVD
+    // queries and inflated finding counts. Scan_run_components and
+    // scan_findings have the same exposure. Clean them now; first-attempt
+    // counts are zero, so this is a safe no-op on fresh scans.
+    const [staleComponents, staleJoins, staleFindings] = await prisma.$transaction([
+      prisma.sbomComponent.deleteMany({ where: { scanRunId } }),
+      prisma.scanRunComponent.deleteMany({ where: { scanRunId } }),
+      prisma.scanFinding.deleteMany({ where: { scanRunId } }),
+    ]);
+    if (staleComponents.count > 0 || staleJoins.count > 0 || staleFindings.count > 0) {
+      log.warn(
+        {
+          sbomComponents: staleComponents.count,
+          scanRunComponents: staleJoins.count,
+          scanFindings: staleFindings.count,
+        },
+        "[worker] cleared stale per-scan rows from prior attempt (BullMQ retry)",
+      );
+    }
+
     let clone: Awaited<ReturnType<typeof cloneOrRefresh>> | null = null;
     try {
       // ── Step 1: clone / refresh ─────────────────────────────────────────
