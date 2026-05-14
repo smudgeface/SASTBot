@@ -303,11 +303,60 @@ export async function persistScanComponentsToScopeState(
         }
       }
 
-      // Fallback identity: (scope_id, name, version, purl). Used for rows
-      // with no evidence_path (cdxgen manifest discovery, legacy rows,
-      // manual additions) AND for the first insertion of a new component.
-      // Uses raw SQL ON CONFLICT so NULL version values can collide (Prisma's
-      // compound upsert requires non-null keys).
+      // Secondary identity: CPE. Path-agnostic, NVD-canonical. Catches the
+      // case where the same upstream library moves files between scans (LLM
+      // picks `extern/Foo/bar.h` one run and `extern/Foo/baz.h` the next,
+      // both with the same emitted CPE). Only kicks in when (a) the
+      // incoming component has a CPE and (b) evidence_path didn't already
+      // match an existing row. Note: we don't backfill CPE on
+      // evidence_path matches — that would risk colliding with another row
+      // in the same scope that already carries this CPE, which needs a
+      // merge rather than an update. Tracked as a future enhancement.
+      if (!scopeComponentId) {
+        const incomingCpe = (c as unknown as { cpe?: string | null }).cpe ?? null;
+        if (incomingCpe) {
+          const matched = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+            `SELECT id FROM scope_components
+             WHERE scope_id = $1::uuid
+               AND cpe = $2
+             LIMIT 1`,
+            scopeId,
+            incomingCpe,
+          );
+          if (matched.length > 0) {
+            scopeComponentId = matched[0]!.id;
+            await prisma.$executeRawUnsafe(
+              `UPDATE scope_components SET
+                last_seen_scan_run_id = $1::uuid,
+                last_seen_at          = now(),
+                updated_at            = now(),
+                dismissed_status = CASE
+                  WHEN dismissed_status = 'removed' THEN 'active'
+                  ELSE dismissed_status
+                END,
+                dismissed_reason = CASE
+                  WHEN dismissed_status = 'removed' THEN NULL
+                  ELSE dismissed_reason
+                END,
+                dismissed_at = CASE
+                  WHEN dismissed_status = 'removed' THEN NULL
+                  ELSE dismissed_at
+                END
+              WHERE id = $2::uuid`,
+              scanRunId,
+              scopeComponentId,
+            );
+            upserted++;
+          }
+        }
+      }
+
+      // Tertiary identity: (scope_id, name, version, purl). Used for rows
+      // with neither an evidence_path match nor a CPE match — covers cdxgen
+      // manifest discovery, legacy rows, manual additions, and the first
+      // insertion of any new component. Uses raw SQL ON CONFLICT so NULL
+      // version values can collide (Prisma's compound upsert requires
+      // non-null keys).
       if (!scopeComponentId) {
         await prisma.$executeRawUnsafe(
           `INSERT INTO scope_components (
