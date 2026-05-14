@@ -161,6 +161,11 @@ model Repo {
   //   pass. Default medium because it's classification work, not open-ended
   //   vulnerability search. Mirrors llmSastEffort/llmRecheckEffort from M6m.
   llmSbomEffort String  @default("medium") @map("llm_sbom_effort")
+  // SBOM Component Recheck (Stage 2): effort level for the `llm_sbom_recheck`
+  // phase that verifies previously-known components not surfaced in the current
+  // augmentation run. Narrower task than detection (just confirming presence /
+  // absence at a known path), so medium is a reasonable default.
+  llmSbomRecheckEffort String @default("medium") @map("llm_sbom_recheck_effort")
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   org        Org?        @relation(fields: [orgId], references: [id], onDelete: SetNull)
