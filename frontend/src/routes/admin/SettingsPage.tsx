@@ -129,21 +129,23 @@ export default function SettingsPage() {
       reachability_min_severity: reachabilityMinSeverity,
     };
     // Only include credential keys when the user is actually making a change.
-    // If choice is "new" but fields are blank, omit both so the backend keeps
-    // whatever credential is already linked (this prevents re-clicking Save
-    // from silently disconnecting the credential).
-    if (jiraCredChoice === "existing") {
-      payload.jira_credential_id = jiraCredId || null;
+    // If choice is "existing" but no credential is selected (form not yet
+    // hydrated, or no creds exist), omit the field so the backend leaves
+    // whatever is currently linked alone — sending null here would silently
+    // disconnect a credential the user hasn't touched. To clear a credential,
+    // the operator deletes the credential row directly (FK is ON DELETE SET NULL).
+    if (jiraCredChoice === "existing" && jiraCredId) {
+      payload.jira_credential_id = jiraCredId;
     } else if (jiraCred) {
       payload.jira_credential = jiraCred;
     }
-    if (llmCredChoice === "existing") {
-      payload.llm_credential_id = llmCredId || null;
+    if (llmCredChoice === "existing" && llmCredId) {
+      payload.llm_credential_id = llmCredId;
     } else if (llmCred) {
       payload.llm_credential = llmCred;
     }
-    if (nvdCredChoice === "existing") {
-      payload.nvd_credential_id = nvdCredId || null;
+    if (nvdCredChoice === "existing" && nvdCredId) {
+      payload.nvd_credential_id = nvdCredId;
     } else if (nvdCred) {
       payload.nvd_credential = nvdCred;
     }
