@@ -37,7 +37,7 @@ import {
   cleanupSbomTmp,
   runSbomAugmentation,
 } from "./services/llmSbomService.js";
-import { persistScanComponentsToScopeState } from "./services/scopeComponentService.js";
+import { persistScanComponentsToScopeState, materializeRecoveredComponents } from "./services/scopeComponentService.js";
 import { runSbomRecheck } from "./services/llmSbomRecheckService.js";
 import type { ScanWarning } from "./schemas.js";
 import { Prisma } from "@prisma/client";
@@ -1184,6 +1184,30 @@ const worker = new Worker<ScanJobData>(
           },
           "[worker] SBOM component recheck finished",
         );
+
+        // Materialize recovered components into sbom_components rows for this
+        // scan_run AND extend the in-memory `components` array. Without this
+        // step the downstream OSV / NVD / detection passes would skip the
+        // recovered components and only re-issue stale vuln data from prior
+        // scans, defeating the point of the recheck.
+        if (recheckResult.recovered.length > 0) {
+          try {
+            const recovered = await materializeRecoveredComponents(
+              recheckResult.recovered,
+              scanRunId,
+            );
+            components.push(...recovered);
+            log.info(
+              { materialized: recovered.length, totalComponents: components.length },
+              "[worker] recovered components materialized into in-memory set",
+            );
+          } catch (err) {
+            log.error(
+              { err: (err as Error).message },
+              "[worker] failed to materialize recovered components — recheck verdicts applied but downstream passes will miss them this run",
+            );
+          }
+        }
 
         if (recheckResult.capped > 0) {
           await appendWarning(scanRunId, {

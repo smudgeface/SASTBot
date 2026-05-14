@@ -371,3 +371,62 @@ export async function persistScanComponentsToScopeState(
 
   return { upserted, joinsInserted };
 }
+
+// ---------------------------------------------------------------------------
+// Materialize recovered components into per-scan sbom_components rows.
+// ---------------------------------------------------------------------------
+
+/**
+ * After llmSbomRecheckService recovers components into scope_components, this
+ * writes a per-scan SbomComponent row for each recovered component so:
+ *
+ *   1. The scan's audit trail (sbom_components, scan_runs.sbom_json consumers)
+ *      reflects that the recovered component was part of this run's SBOM.
+ *   2. The worker's in-memory `components` list can be extended so the
+ *      downstream OSV / NVD / detection passes pick them up this run instead
+ *      of only carrying forward stale prior-scan vuln data.
+ *
+ * Discovery method is set to "recheck_recovery" to distinguish these rows
+ * from the augmentation pass output. Returns the new rows in Prisma's
+ * canonical SbomComponent shape so the caller can append them directly.
+ */
+export async function materializeRecoveredComponents(
+  recoveredScopeComponentIds: string[],
+  scanRunId: string,
+): Promise<SbomComponent[]> {
+  if (recoveredScopeComponentIds.length === 0) return [];
+
+  const scopeRows = await prisma.scopeComponent.findMany({
+    where: { id: { in: recoveredScopeComponentIds } },
+  });
+
+  const created: SbomComponent[] = [];
+  for (const sc of scopeRows) {
+    const row = await prisma.sbomComponent.create({
+      data: {
+        scanRunId,
+        name: sc.name,
+        version: sc.version,
+        purl: sc.purl,
+        ecosystem: sc.ecosystem,
+        licenses: sc.licenses,
+        componentType: sc.componentType,
+        scope: sc.scope,
+        isDevOnly: sc.isDevOnly,
+        manifestFile: sc.manifestFile,
+        discoveryMethod: "recheck_recovery",
+        evidenceLine: sc.evidenceLine,
+        llmEvidence: sc.llmEvidence ?? undefined,
+        cpe: sc.cpe,
+      },
+    });
+    created.push(row);
+  }
+
+  logger.info(
+    { scanRunId, materialized: created.length },
+    "[scopeComponentService] materializeRecoveredComponents complete",
+  );
+
+  return created;
+}
