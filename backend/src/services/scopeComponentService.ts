@@ -256,95 +256,140 @@ export async function persistScanComponentsToScopeState(
     }
 
     try {
-      // Upsert scope_component. We use raw SQL so we can handle NULL version
-      // correctly (Prisma's compound upsert requires all key fields non-null).
-      //
-      // On conflict:
-      //   - Always update lastSeenScanRunId + lastSeenAt.
-      //   - Flip 'removed' → 'active' (component is back this run).
-      //   - Leave 'manual_override' rows untouched on status/reason.
-      await prisma.$executeRawUnsafe(
-        `INSERT INTO scope_components (
-          id, scope_id, org_id,
-          name, version, purl, ecosystem,
-          licenses, component_type, scope, is_dev_only,
-          manifest_file, discovery_method, evidence_line,
-          evidence_path, llm_evidence, cpe,
-          source, dismissed_status,
-          first_seen_scan_run_id, last_seen_scan_run_id, last_seen_at,
-          created_at, updated_at
-        )
-        VALUES (
-          gen_random_uuid(), $1::uuid, $2::uuid,
-          $3, $4, $5, $6,
-          $7::text[], $8, $9, $10,
-          $11, $12, $13,
-          $14, $15::jsonb, $16,
-          'scan', 'active',
-          $17::uuid, $17::uuid, now(),
-          now(), now()
-        )
-        ON CONFLICT (scope_id, name, version, purl) DO UPDATE
-          SET last_seen_scan_run_id = EXCLUDED.last_seen_scan_run_id,
-              last_seen_at          = EXCLUDED.last_seen_at,
+      let scopeComponentId: string | null = null;
+
+      // Primary identity: evidence_path when present. The LLM picks a slightly
+      // different canonical name for the same vendored library each run
+      // ("Thorlabs SDK" / "thorlabs-sdk" / "thorlabs-motion-control"), so
+      // matching on (scope_id, name, version, purl) would let those name
+      // variants accumulate as separate rows. The vendored library lives at
+      // one specific path inside extern/ — that path is the stable identity.
+      // When an existing row matches, update its last-seen markers but
+      // preserve the existing name (first-seen wins, stable for operator
+      // memory). Bad LLM names get cleaned up via a future manual rename UI.
+      if (evidencePath) {
+        const matched = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+          `SELECT id FROM scope_components
+           WHERE scope_id = $1::uuid
+             AND evidence_path = $2
+           LIMIT 1`,
+          scopeId,
+          evidencePath,
+        );
+        if (matched.length > 0) {
+          scopeComponentId = matched[0]!.id;
+          await prisma.$executeRawUnsafe(
+            `UPDATE scope_components SET
+              last_seen_scan_run_id = $1::uuid,
+              last_seen_at          = now(),
               updated_at            = now(),
-              -- Flip 'removed' rows back to active; leave 'manual_override' alone.
               dismissed_status = CASE
-                WHEN scope_components.dismissed_status = 'removed' THEN 'active'
-                ELSE scope_components.dismissed_status
+                WHEN dismissed_status = 'removed' THEN 'active'
+                ELSE dismissed_status
               END,
               dismissed_reason = CASE
-                WHEN scope_components.dismissed_status = 'removed' THEN NULL
-                ELSE scope_components.dismissed_reason
+                WHEN dismissed_status = 'removed' THEN NULL
+                ELSE dismissed_reason
               END,
               dismissed_at = CASE
-                WHEN scope_components.dismissed_status = 'removed' THEN NULL
-                ELSE scope_components.dismissed_at
-              END`,
-        scopeId,
-        orgId ?? null,
-        c.name,
-        c.version ?? null,
-        c.purl,
-        c.ecosystem ?? null,
-        `{${c.licenses.map((l) => `"${l.replace(/"/g, '\\"')}"`).join(",")}}`,
-        c.componentType,
-        c.scope ?? null,
-        c.isDevOnly,
-        c.manifestFile ?? null,
-        c.discoveryMethod ?? "manifest",
-        c.evidenceLine ?? null,
-        evidencePath ?? null,
-        c.llmEvidence !== null ? JSON.stringify(c.llmEvidence) : null,
-        (c as unknown as { cpe?: string | null }).cpe ?? null,
-        scanRunId,
-      );
-
-      upserted++;
-
-      // Fetch the scope_component id so we can insert the join row.
-      const existing = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
-        `SELECT id FROM scope_components
-         WHERE scope_id = $1::uuid
-           AND name = $2
-           AND purl = $3
-           AND (version = $4 OR ($4 IS NULL AND version IS NULL))
-         LIMIT 1`,
-        scopeId,
-        c.name,
-        c.purl,
-        c.version ?? null,
-      );
-
-      if (existing.length === 0) {
-        logger.warn(
-          { scopeId, purl: c.purl },
-          "[scopeComponentService] persistScanComponents: could not find scope_component after upsert — skipping join row",
-        );
-        continue;
+                WHEN dismissed_status = 'removed' THEN NULL
+                ELSE dismissed_at
+              END
+            WHERE id = $2::uuid`,
+            scanRunId,
+            scopeComponentId,
+          );
+          upserted++;
+        }
       }
 
-      const scopeComponentId = existing[0]!.id;
+      // Fallback identity: (scope_id, name, version, purl). Used for rows
+      // with no evidence_path (cdxgen manifest discovery, legacy rows,
+      // manual additions) AND for the first insertion of a new component.
+      // Uses raw SQL ON CONFLICT so NULL version values can collide (Prisma's
+      // compound upsert requires non-null keys).
+      if (!scopeComponentId) {
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO scope_components (
+            id, scope_id, org_id,
+            name, version, purl, ecosystem,
+            licenses, component_type, scope, is_dev_only,
+            manifest_file, discovery_method, evidence_line,
+            evidence_path, llm_evidence, cpe,
+            source, dismissed_status,
+            first_seen_scan_run_id, last_seen_scan_run_id, last_seen_at,
+            created_at, updated_at
+          )
+          VALUES (
+            gen_random_uuid(), $1::uuid, $2::uuid,
+            $3, $4, $5, $6,
+            $7::text[], $8, $9, $10,
+            $11, $12, $13,
+            $14, $15::jsonb, $16,
+            'scan', 'active',
+            $17::uuid, $17::uuid, now(),
+            now(), now()
+          )
+          ON CONFLICT (scope_id, name, version, purl) DO UPDATE
+            SET last_seen_scan_run_id = EXCLUDED.last_seen_scan_run_id,
+                last_seen_at          = EXCLUDED.last_seen_at,
+                updated_at            = now(),
+                dismissed_status = CASE
+                  WHEN scope_components.dismissed_status = 'removed' THEN 'active'
+                  ELSE scope_components.dismissed_status
+                END,
+                dismissed_reason = CASE
+                  WHEN scope_components.dismissed_status = 'removed' THEN NULL
+                  ELSE scope_components.dismissed_reason
+                END,
+                dismissed_at = CASE
+                  WHEN scope_components.dismissed_status = 'removed' THEN NULL
+                  ELSE scope_components.dismissed_at
+                END`,
+          scopeId,
+          orgId ?? null,
+          c.name,
+          c.version ?? null,
+          c.purl,
+          c.ecosystem ?? null,
+          `{${c.licenses.map((l) => `"${l.replace(/"/g, '\\"')}"`).join(",")}}`,
+          c.componentType,
+          c.scope ?? null,
+          c.isDevOnly,
+          c.manifestFile ?? null,
+          c.discoveryMethod ?? "manifest",
+          c.evidenceLine ?? null,
+          evidencePath ?? null,
+          c.llmEvidence !== null ? JSON.stringify(c.llmEvidence) : null,
+          (c as unknown as { cpe?: string | null }).cpe ?? null,
+          scanRunId,
+        );
+
+        upserted++;
+
+        const inserted = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+          `SELECT id FROM scope_components
+           WHERE scope_id = $1::uuid
+             AND name = $2
+             AND purl = $3
+             AND (version = $4 OR ($4 IS NULL AND version IS NULL))
+           LIMIT 1`,
+          scopeId,
+          c.name,
+          c.purl,
+          c.version ?? null,
+        );
+
+        if (inserted.length === 0) {
+          logger.warn(
+            { scopeId, purl: c.purl },
+            "[scopeComponentService] persistScanComponents: could not find scope_component after upsert — skipping join row",
+          );
+          continue;
+        }
+
+        scopeComponentId = inserted[0]!.id;
+      }
 
       const joinInserted = await prisma.$executeRawUnsafe(
         `INSERT INTO scan_run_components (scan_run_id, scope_component_id, discovery_method)
