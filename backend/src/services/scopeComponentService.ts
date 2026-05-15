@@ -537,16 +537,14 @@ export async function rebuildComponentsFromScopeState(
          scan_run_id, name, version, purl, ecosystem,
          licenses, component_type, scope, is_dev_only,
          manifest_file, discovery_method, evidence_line,
-         llm_evidence, cpe,
-         created_at, updated_at
+         llm_evidence, cpe
        )
        SELECT
          $1::uuid, sc.name, sc.version, sc.purl, sc.ecosystem,
          sc.licenses, sc.component_type, sc.scope, sc.is_dev_only,
          sc.manifest_file,
          COALESCE(src.discovery_method, sc.discovery_method, 'manifest'),
-         sc.evidence_line, sc.llm_evidence, sc.cpe,
-         now(), now()
+         sc.evidence_line, sc.llm_evidence, sc.cpe
        FROM scope_components sc
        INNER JOIN scan_run_components src ON src.scope_component_id = sc.id
          AND src.scan_run_id = $1::uuid
