@@ -43,8 +43,18 @@ const logger = pino({ level: loadConfig().logLevel, name: "llmSbomRecheckService
 const CLAUDE_UID = 1001;
 const CLAUDE_GID = 1001;
 
-/** Hard cap: maximum candidates to pass to Tier 2 (per open-question #3 in the plan). */
-const MAX_CANDIDATES = 20;
+/**
+ * Hard cap on recheck candidates passed to Tier-2 verification. Defends
+ * against bug-induced runaway sets (e.g. a join-table misalignment that
+ * causes the candidate set to incorrectly include the whole scope) and
+ * bounds worst-case cost / wall-clock. Token budget (50k) is the secondary
+ * limit — practically allows ~165 candidates per call, so this cap is the
+ * binding constraint for typical scans. Set high enough that normal
+ * post-augmentation drift (typically 10-30 rows on the small C++ scope)
+ * never trips it. Original 20 was too low — FSS regularly trips it at
+ * 22-30 candidates as the LLM name-shifts row identity.
+ */
+const MAX_CANDIDATES = 100;
 
 // ---------------------------------------------------------------------------
 // Output record schemas

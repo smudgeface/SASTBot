@@ -149,8 +149,8 @@ interface LlmSastPipelineInput {
 
 const LLM_SCA_HINT_CAP = 200;
 const TERMINAL_TRIAGE_STATUSES = ["fixed", "suppressed", "false_positive"];
-/** Hard cap on SBOM recheck candidates (mirrors the plan's open-question #3 answer). */
-const MAX_SBOM_RECHECK_CANDIDATES = 20;
+/** Hard cap on SBOM recheck candidates — keep in sync with llmSbomRecheckService MAX_CANDIDATES. */
+const MAX_SBOM_RECHECK_CANDIDATES = 100;
 
 async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
   const { scanRunId, repo, run, scanDir, scopePath, log } = input;
