@@ -65,23 +65,16 @@ assess (e.g., couldn't determine the affected APIs).
 
 ## Output format (JSON-Lines)
 
-Emit one JSON object per line. Allowed shapes:
+Emit one JSON object **per line** — the entire object on a single line, with
+NO embedded newlines and NO pretty-printing. Each line must `JSON.parse`
+on its own. Do NOT wrap output in markdown code fences. Do NOT prefix or
+suffix records with prose. Stream records as you confirm them. Allowed
+shapes (shown below; emit on one line):
 
 ### `kind: "sast"` — per-location finding
 
-```json
-{
-  "kind": "sast",
-  "cwe": "CWE-798",
-  "severity": "critical",
-  "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
-  "file_path": "GoSensor/GoSensor/Services/Host/GsHostProtocol.h",
-  "start_line": 68,
-  "end_line": 69,
-  "summary": "Hardcoded super-user password defined as macro",
-  "confidence": 0.98,
-  "reasoning": "Macro grants SuperAccess on any device per GsCore.cpp:2367-2372."
-}
+```
+{"kind":"sast","cwe":"CWE-798","severity":"critical","cvss_vector":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H","file_path":"GoSensor/GoSensor/Services/Host/GsHostProtocol.h","start_line":68,"end_line":69,"summary":"Hardcoded super-user password defined as macro","confidence":0.98,"reasoning":"Macro grants SuperAccess on any device per GsCore.cpp:2367-2372."}
 ```
 
 `cvss_vector` is optional. `file_path` must be relative to the scope root.
@@ -97,17 +90,8 @@ the wrong line creates duplicate findings on the next scan.
 
 ### `kind: "sast_absence"` — cross-cutting absence finding
 
-```json
-{
-  "kind": "sast_absence",
-  "cwe": "CWE-352",
-  "severity": "high",
-  "summary": "No CSRF protection on any state-changing endpoint",
-  "evidence_file": "GoSensor/GoSensor/Services/Http/GsHttpServer.cpp",
-  "evidence_line": 193,
-  "confidence": 0.9,
-  "reasoning": "Searched the entire HTTP server and all express routes; no csurf middleware, no SameSite cookie config, no CSRF token validation logic anywhere. evidence_file points to a representative state-changing endpoint."
-}
+```
+{"kind":"sast_absence","cwe":"CWE-352","severity":"high","summary":"No CSRF protection on any state-changing endpoint","evidence_file":"GoSensor/GoSensor/Services/Http/GsHttpServer.cpp","evidence_line":193,"confidence":0.9,"reasoning":"Searched the entire HTTP server and all express routes; no csurf middleware, no SameSite cookie config, no CSRF token validation logic anywhere. evidence_file points to a representative state-changing endpoint."}
 ```
 
 `evidence_file` and `evidence_line` should point at a representative location
@@ -116,17 +100,8 @@ the wrong line creates duplicate findings on the next scan.
 
 ### `kind: "reachability"` — SCA reachability verdict
 
-```json
-{
-  "kind": "reachability",
-  "sca_issue_id": "abc123-...",
-  "reachable": true,
-  "confidence": 0.85,
-  "call_sites": [
-    {"file": "src/utils.js", "line": 42}
-  ],
-  "reasoning": "lodash.template called with a user-controlled string in BuildManager."
-}
+```
+{"kind":"reachability","sca_issue_id":"abc123-...","reachable":true,"confidence":0.85,"call_sites":[{"file":"src/utils.js","line":42}],"reasoning":"lodash.template called with a user-controlled string in BuildManager."}
 ```
 
 For `reachable: false`, omit `call_sites` (or pass an empty array) and explain
@@ -134,14 +109,8 @@ in `reasoning` what you searched for.
 
 ### `kind: "complete"` — terminating record
 
-```json
-{
-  "kind": "complete",
-  "sast_count": 42,
-  "sast_absence_count": 3,
-  "reachability_count": 12,
-  "summary": "Done. 3 critical, 14 high. 12 high+critical SCA issues had reachable call sites."
-}
+```
+{"kind":"complete","sast_count":42,"sast_absence_count":3,"reachability_count":12,"summary":"Done. 3 critical, 14 high. 12 high+critical SCA issues had reachable call sites."}
 ```
 
 Always emit this as your final line, even if all counts are zero.

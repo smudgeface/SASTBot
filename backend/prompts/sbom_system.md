@@ -78,9 +78,50 @@ Three record types:
 {"type":"keep","component_id":"<...>","llm_reason":"<one sentence why it belongs>"}
 {"type":"keep","component_id":"<...>","llm_reason":"<rationale>","cpe":"cpe:2.3:a:<vendor>:<product>:<version>:*:*:*:*:*:*:*"}
 {"type":"drop","component_id":"<canonical key>","reason":"<one sentence>","evidence_path":"<optional file that confirms>"}
-{"type":"add","name":"<package name>","version":"<version or null>","ecosystem":"<npm|nuget|generic|...>","evidence_path":"<file where you found it>","evidence_excerpt":"<short quote>","llm_reason":"<one sentence>"}
-{"type":"add","name":"<package name>","version":"<version>","ecosystem":"generic","cpe":"cpe:2.3:a:<vendor>:<product>:<version>:*:*:*:*:*:*:*","evidence_path":"<file>","evidence_excerpt":"<short quote>","llm_reason":"<one sentence>"}
+{"type":"add","name":"<package name>","version":"<version or null>","ecosystem":"<npm|nuget|generic|...>","component_root":"<shallowest unique dir>","evidence":[{"path":"<file1>"},{"path":"<file2>","line":42}],"evidence_excerpt":"<short quote>","llm_reason":"<one sentence>"}
+{"type":"add","name":"<package name>","version":"<version>","ecosystem":"generic","cpe":"cpe:2.3:a:<vendor>:<product>:<version>:*:*:*:*:*:*:*","component_root":"<shallowest unique dir>","evidence":[{"path":"<file1>"}],"evidence_excerpt":"<short quote>","llm_reason":"<one sentence>"}
 ```
+
+## Identity fields on `add` records
+
+Vendored components are deduplicated across scans by `component_root` — the
+shallowest repo-relative directory path that is **exclusively** owned by this
+upstream library. The matcher uses this as the primary identity key, so naming
+variation (case, separators, alias names) doesn't matter as long as the root is
+the same.
+
+**How to pick `component_root`:**
+- Start from the file you found the library in. Walk UP the directory tree.
+- Keep walking up while the directory only contains files belonging to this
+  same library.
+- Stop when going one level higher would include files belonging to a different
+  upstream library.
+
+Examples:
+- `extern/Xenomai/include/xeno_config.h` → `extern/Xenomai`
+  (everything under `extern/Xenomai/` is Xenomai)
+- `extern/Nerian/libnvshared/inc/lib.h` → `extern/Nerian/libnvshared`
+  (`extern/Nerian/` also contains `libvisiontransfer-client/` — a sibling lib,
+  so the unique root is one level deeper)
+- `extern/Ophir/OphirLMMeasurement.dll` → `extern/Ophir`
+  (`extern/Ophir/` contains only Ophir SDK files)
+- `extern/Zaber/include/zaber-motion-lib-linux-amd64.h` → `extern/Zaber`
+
+When in doubt, prefer the SHALLOWER path. It's better to over-collapse two
+related sub-libraries than to fail to dedup naming variants of the same lib.
+
+**`evidence`** is the list of locations where you actually saw the library —
+headers, sources, READMEs, CMake files, version manifests. Each entry has a
+required `path` (repo-relative) and an optional `line` (1-based line number,
+useful for lockfile-based packages where the dep is declared on a specific
+line; omit for vendored libs). Emit every file you inspected that confirms
+the component is there. These render as clickable links in the operator UI
+that jump to the file (and line, when present). Diagnostic only; does not
+affect dedup.
+
+Back-compat: `evidence_paths` (array of strings, no line numbers) and the
+older `evidence_path` (single string) are still accepted. New emissions
+should use `evidence`.
 
 **CPE 2.3 field (`cpe`):** Optional on `keep` and `add` records. Emit when
 you are **reasonably confident** of the canonical CPE vendor + product names
@@ -101,9 +142,10 @@ component whose canonical CPE vendor/product you are not confident about.
 The `component_id` field MUST match the `component_id` value from the SBOM
 file exactly — copy it verbatim. Do not normalise or reformulate it.
 
-`evidence_path` is **required** for every `add`. It is strongly recommended
-for every `drop`. Use repo-relative paths (relative to the clone root, not
-absolute).
+`evidence` (or the legacy `evidence_paths` / `evidence_path`) is **required**
+for every `add`. It is strongly recommended for every `drop`. `component_root`
+is also required on every `add` — it's the dedup identity. Use repo-relative
+paths throughout (relative to the clone root, not absolute).
 
 Do not emit a record for components you haven't assessed. Do not emit a
 `complete` sentinel — the orchestrator treats session end as completion.

@@ -234,7 +234,17 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       },
     });
     log.info(
-      { records: detection.records.length, parseErrors: detection.parseErrors.length, durationMs: detection.durationMs, usage: detection.usage, exitCode: detection.exitCode },
+      {
+        records: detection.records.length,
+        parseErrors: detection.parseErrors.length,
+        parseErrorSamples: detection.parseErrors.slice(0, 3).map((e) => ({
+          reason: e.reason,
+          raw: e.raw.slice(0, 300),
+        })),
+        durationMs: detection.durationMs,
+        usage: detection.usage,
+        exitCode: detection.exitCode,
+      },
       "[worker] LLM detection finished",
     );
 
@@ -336,7 +346,16 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         },
       });
       log.info(
-        { verdicts: recheck.verdicts.length, parseErrors: recheck.parseErrors.length, durationMs: recheck.durationMs, usage: recheck.usage },
+        {
+          verdicts: recheck.verdicts.length,
+          parseErrors: recheck.parseErrors.length,
+          parseErrorSamples: recheck.parseErrors.slice(0, 3).map((e) => ({
+            reason: e.reason,
+            raw: e.raw.slice(0, 300),
+          })),
+          durationMs: recheck.durationMs,
+          usage: recheck.usage,
+        },
         "[worker] LLM recheck finished",
       );
       const apply = await applyRecheckVerdicts(prisma, {
@@ -881,15 +900,6 @@ backfillSbomManifestFiles()
     logger.warn({ err }, "[worker] sbom manifest_file → SCA origin backfill chain failed");
   });
 
-// Stage 1 of the SBOM Component Recheck feature: promote sbom_components rows
-// from each scope's latest successful scan into the durable scope-level
-// scope_components table. Reads from sbom_components so it runs after the
-// manifest-file normalization chain above to inherit the corrected paths.
-import { backfillScopeComponentsFromLatestScans } from "./services/scopeComponentService.js";
-backfillScopeComponentsFromLatestScans().catch((err) => {
-  logger.warn({ err }, "[worker] scope-components backfill failed");
-});
-
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {
@@ -1063,6 +1073,7 @@ const worker = new Worker<ScanJobData>(
       let finalComponents = cleanedComponents;
       let sbomEvidenceMap = new Map<string, { path: string; excerpt: string | null; llmReason: string }>();
       let sbomCpeMap = new Map<string, string>();
+      let sbomIdentityMap = new Map<string, { componentRoot: string | null; evidence: Array<{ path: string; line: number | null }> }>();
       let augmentationFailed = false;
       const sbomTokenBudget = 200_000;
 
@@ -1114,6 +1125,7 @@ const worker = new Worker<ScanJobData>(
         finalComponents = applied.components;
         sbomEvidenceMap = applied.evidenceMap;
         sbomCpeMap = applied.cpeMap;
+        sbomIdentityMap = applied.identityMap;
 
         log.info(
           {
@@ -1160,6 +1172,7 @@ const worker = new Worker<ScanJobData>(
           scanDir,
           scopePath,
           sbomCpeMap,
+          sbomIdentityMap,
         );
       });
       log.info({ inserted: components.length }, "[worker] augmented components persisted");

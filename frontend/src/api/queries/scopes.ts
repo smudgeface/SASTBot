@@ -175,6 +175,64 @@ export function useScopeScans(scopeId: string | undefined, limit = 20) {
   });
 }
 
+/**
+ * Operator-edit of identity fields on a scope_component. Used to backfill or
+ * correct `component_root` and `evidence_paths` when the LLM picked something
+ * wrong or left them empty. Server marks the row `source='manual_override'`
+ * so values stick across scans.
+ */
+export function usePatchScopeComponent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      scopeId,
+      componentId,
+      name,
+      component_root,
+      evidence,
+    }: {
+      scopeId: string;
+      componentId: string;
+      name?: string;
+      component_root?: string | null;
+      evidence?: Array<{ path: string; line?: number | null }>;
+    }) =>
+      apiFetch<{ ok: true }>(`/api/scopes/${scopeId}/components/${componentId}`, {
+        method: "PATCH",
+        json: { name, component_root, evidence },
+      }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: [...scopesKey, vars.scopeId, "components"] });
+    },
+  });
+}
+
+/**
+ * Manually delete a scope_component. Used to clean up residual duplicate rows
+ * the deterministic matcher doesn't catch. Hard delete — the row is gone; if
+ * it's a real component, the next scan re-emits it and componentMatch
+ * collapses it back into the canonical row, so this is safe to use freely.
+ */
+export function useDeleteScopeComponent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      scopeId,
+      componentId,
+    }: {
+      scopeId: string;
+      componentId: string;
+    }) =>
+      apiFetch<void>(`/api/scopes/${scopeId}/components/${componentId}`, {
+        method: "DELETE",
+      }),
+    onSuccess: (_data, vars) => {
+      // Invalidate the components list for this scope so the row disappears.
+      qc.invalidateQueries({ queryKey: [...scopesKey, vars.scopeId, "components"] });
+    },
+  });
+}
+
 export function useTriageSastIssue() {
   const qc = useQueryClient();
   return useMutation({

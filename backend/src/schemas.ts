@@ -438,7 +438,11 @@ export const ComponentOccurrenceSchema = z.object({
 
 export const SbomComponentOutSchema = z.object({
   id: UuidSchema,
-  scan_run_id: UuidSchema,
+  // Nullable: on the Scope Components tab the rows come from scope_components,
+  // which carries lastSeenScanRunId (a real UUID) for any scan-observed row but
+  // may be null for purely manual-override rows (future feature). On the scan
+  // detail page, every row has scanRunId set.
+  scan_run_id: UuidSchema.nullable(),
   name: z.string(),
   version: z.string().nullable(),
   purl: z.string(),
@@ -456,6 +460,19 @@ export const SbomComponentOutSchema = z.object({
   occurrences: z.array(ComponentOccurrenceSchema).optional(),
   /** M6p Stage 2: evidence from LLM augmentation pass for added/kept-with-rationale components. */
   llm_evidence: LlmEvidenceSchema.optional(),
+  /** M7: shallowest directory uniquely owned by this component (dedup identity). */
+  component_root: z.string().nullable().optional(),
+  /** M7: per-evidence locations (diagnostic, clickable in UI). Each entry is
+   *  {path, line?} where line is optional (lockfile-line for npm/pypi, null
+   *  for vendored libs). */
+  evidence: z
+    .array(
+      z.object({
+        path: z.string(),
+        line: z.number().int().nullable().optional(),
+      }),
+    )
+    .optional(),
 });
 export type SbomComponentOut = z.infer<typeof SbomComponentOutSchema>;
 

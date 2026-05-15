@@ -365,6 +365,12 @@ export interface SbomComponent {
   linked_issue_ids?: { sca: string[]; sast: string[] };
   /** M6p Stage 2: evidence from LLM augmentation, set for added/kept-with-rationale components. */
   llm_evidence?: LlmEvidence | null;
+  /** M7: shallowest directory uniquely owned by this component (dedup identity). */
+  component_root?: string | null;
+  /** M7: per-evidence locations (clickable in component panel). Each entry is
+   *  {path, line?} — line is optional (set for lockfile-based packages, null
+   *  for vendored libs). */
+  evidence?: Array<{ path: string; line: number | null }>;
 }
 
 export interface ScanFinding {

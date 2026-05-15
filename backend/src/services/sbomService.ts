@@ -703,6 +703,7 @@ export async function persistAugmentedComponents(
   scopeDir = "",
   scopePath = "/",
   cpeMap?: Map<string, string>,
+  identityMap?: Map<string, { componentRoot: string | null; evidence: Array<{ path: string; line: number | null }> }>,
 ): Promise<SbomComponent[]> {
   const unique = new Map<string, CdxComponent>();
 
@@ -734,6 +735,8 @@ export async function persistAugmentedComponents(
     llmEvidence: Prisma.InputJsonValue | undefined;
     occurrences: ComponentOccurrence[];
     cpe?: string;
+    componentRoot?: string | null;
+    evidence?: Prisma.InputJsonValue;
   };
   const lockfileCache = new Map<string, string[] | null>();
   const scopeIndex = scopeDir ? new ScopeFileIndex(scopeDir, scopePath) : undefined;
@@ -746,6 +749,7 @@ export async function persistAugmentedComponents(
     const occurrences = extractOccurrences(c, evidence?.path ?? null, false, scopePath);
     await resolveManifestLines(occurrences, canonicalName, scopeDir || null, scopePath, lockfileCache, scopeIndex);
     const cpe = cpeMap?.get(canonicalName);
+    const identity = identityMap?.get(canonicalName);
     augRows.push({
       scanRunId,
       name: canonicalName,
@@ -763,6 +767,9 @@ export async function persistAugmentedComponents(
       llmEvidence: evidence ? (evidence as unknown as Prisma.InputJsonValue) : undefined,
       occurrences,
       ...(cpe ? { cpe } : {}),
+      // M7: stable identity + diagnostic evidence list for vendored adds.
+      ...(identity?.componentRoot ? { componentRoot: identity.componentRoot } : {}),
+      ...(identity?.evidence ? { evidence: identity.evidence as unknown as Prisma.InputJsonValue } : {}),
     });
   }
 

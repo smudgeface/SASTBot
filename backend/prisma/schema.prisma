@@ -279,6 +279,11 @@ model SbomComponent {
   // pass identified a checked-in vendored library by directory + content.
   discoveryMethod String? @default("manifest") @map("discovery_method")
   evidenceLine    Int?    @map("evidence_line")
+  // Mirrors ScopeComponent.componentRoot — shallowest directory path that
+  // exclusively belongs to this upstream library. Used as the dedup identity.
+  componentRoot   String? @map("component_root")
+  // Mirrors ScopeComponent.evidence — diagnostic {path, line?}[] list.
+  evidence        Json    @default("[]") @map("evidence")
   // M6p Stage 2: set by the LLM augmentation pass on components it added or
   // kept with a rationale. Shape: {path, excerpt, llmReason}. Stored so the
   // Components tab can show a tooltip explaining why the component is there.
@@ -300,6 +305,7 @@ model SbomComponent {
   scanRun  ScanRun       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
   findings ScanFinding[]
 
+  @@unique([scanRunId, purl], map: "sbom_components_scan_run_id_purl_unique")
   @@index([scanRunId])
   @@map("sbom_components")
 }
@@ -565,9 +571,21 @@ model ScopeComponent {
   manifestFile    String?   @map("manifest_file")
   discoveryMethod String?   @default("manifest") @map("discovery_method")
   evidenceLine    Int?      @map("evidence_line")
-  // New in Stage 1 — was previously implicit inside llmEvidence.path.
-  // Stores the repo-relative path to the file that is evidence of this
-  // component's presence (for Tier-1 file-existence recheck).
+  // Stable identity for vendored components: the shallowest directory path
+  // that exclusively belongs to this upstream library (e.g. "extern/Xenomai",
+  // or "extern/Nerian/libnvshared" when sibling libs share a parent). Used
+  // as the primary key in the deterministic match chain — robust against
+  // the LLM picking different evidence_files for the same library across scans.
+  // Null for manifest-tracked components (npm/pypi/etc.) where purl is identity.
+  componentRoot   String?   @map("component_root")
+  // Per-evidence locations (repo-relative). Each entry is {path, line?}
+  // where path is a repo-relative file and line is optional (useful for
+  // lockfile-based packages — the line where the dep is declared). The LLM
+  // emits headers, sources, READMEs, CMake files, etc. Diagnostic-only —
+  // does not participate in dedup.
+  evidence        Json      @default("[]") @map("evidence")
+  // Deprecated: legacy single-file evidence path. Kept for backwards-compat
+  // reads against existing rows; new writes populate `evidence` instead.
   evidencePath    String?   @map("evidence_path")
   llmEvidence     Json?     @map("llm_evidence")
   cpe             String?

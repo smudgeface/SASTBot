@@ -12,9 +12,11 @@ import {
   Link2,
   Loader2,
   Package,
+  Pencil,
   RefreshCw,
   ScanSearch,
   ShieldAlert,
+  Trash2,
   Unlink,
   Zap,
 } from "lucide-react";
@@ -27,6 +29,8 @@ import {
   useScopeScans,
   useTriageSastIssue,
   useDismissScaIssue,
+  useDeleteScopeComponent,
+  usePatchScopeComponent,
   type SastIssueFilters,
   type ScaIssueFilters,
 } from "@/api/queries/scopes";
@@ -1313,6 +1317,20 @@ function ScopeComponentRow({
   // simultaneously. URL only seeds the initial open + a subsequent open if
   // the URL changes to target this row.
   const [expanded, setExpanded] = useState(autoExpand);
+  const deleteComponent = useDeleteScopeComponent();
+  const patchComponent = usePatchScopeComponent();
+
+  // Inline-edit state for name + component_root + evidence.
+  // evidenceDraft is a newline-separated textarea string. Each line is a
+  // path with an optional `:LINE` suffix (e.g. "package-lock.json:42").
+  const [editingEvidence, setEditingEvidence] = useState(false);
+  const [nameDraft, setNameDraft] = useState(component.name);
+  const [rootDraft, setRootDraft] = useState(component.component_root ?? "");
+  const [evidenceDraft, setEvidenceDraft] = useState(
+    (component.evidence ?? [])
+      .map((e) => (e.line != null ? `${e.path}:${e.line}` : e.path))
+      .join("\n"),
+  );
 
   useEffect(() => {
     if (autoExpand) {
@@ -1327,8 +1345,16 @@ function ScopeComponentRow({
   };
   const isExpanded = expanded;
 
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const label = `${component.name}${component.version ? `@${component.version}` : ""}`;
+    if (!window.confirm(`Delete "${label}" from this scope?\n\nThe next scan may re-add it if it's found in the repo.`)) {
+      return;
+    }
+    deleteComponent.mutate({ scopeId, componentId: component.id });
+  };
+
   const eco = prettyEcosystem(component.ecosystem, component.discovery_method);
-  const occurrences = component.occurrences ?? [];
   const linkedScaIds = component.linked_issue_ids?.sca ?? [];
 
   // First license for inline display; rest go in expand panel.
@@ -1399,11 +1425,172 @@ function ScopeComponentRow({
             </div>
           )}
         </TableCell>
+        <TableCell className="text-right">
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={deleteComponent.isPending}
+            className="p-1 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition disabled:opacity-50"
+            title="Delete this component from the scope (manual cleanup)"
+            aria-label="Delete component"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </TableCell>
       </TableRow>
       {isExpanded && (
         <TableRow className="bg-muted/20 hover:bg-muted/20">
-          <TableCell colSpan={6} className="py-4 px-6">
+          <TableCell colSpan={7} className="py-4 px-6">
             <div className="space-y-4 text-sm">
+              {/* M7: Evidence files + component_root. Top of the panel; the
+                   pencil opens an inline edit form for name + root + paths. */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide">Evidence</p>
+                  {!editingEvidence && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setNameDraft(component.name);
+                        setRootDraft(component.component_root ?? "");
+                        setEvidenceDraft(
+                          (component.evidence ?? [])
+                            .map((e) => (e.line != null ? `${e.path}:${e.line}` : e.path))
+                            .join("\n"),
+                        );
+                        setEditingEvidence(true);
+                      }}
+                      className="p-1 text-muted-foreground hover:text-foreground"
+                      title="Edit name, component_root and evidence_paths"
+                      aria-label="Edit evidence"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+
+                {editingEvidence ? (
+                  <div className="space-y-2" onClick={(e) => e.stopPropagation()}>
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">
+                        Name
+                      </label>
+                      <input
+                        type="text"
+                        value={nameDraft}
+                        onChange={(e) => setNameDraft(e.target.value)}
+                        placeholder="e.g. xenomai"
+                        className="w-full font-mono text-xs px-2 py-1 border rounded bg-background"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">
+                        Component root (shallowest unique directory)
+                      </label>
+                      <input
+                        type="text"
+                        value={rootDraft}
+                        onChange={(e) => setRootDraft(e.target.value)}
+                        placeholder="e.g. extern/Xenomai"
+                        className="w-full font-mono text-xs px-2 py-1 border rounded bg-background"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">
+                        Evidence paths (one per line; append <span className="font-mono">:N</span> for a line number)
+                      </label>
+                      <textarea
+                        rows={4}
+                        value={evidenceDraft}
+                        onChange={(e) => setEvidenceDraft(e.target.value)}
+                        placeholder={"extern/Xenomai/include/xeno_config.h\npackage-lock.json:1234"}
+                        className="w-full font-mono text-xs px-2 py-1 border rounded bg-background"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={patchComponent.isPending}
+                        onClick={() => {
+                          const trimmedName = nameDraft.trim();
+                          if (trimmedName === "") {
+                            window.alert("Name cannot be blank.");
+                            return;
+                          }
+                          // Parse each non-empty line. A trailing `:N` (N a
+                          // positive integer) is split off as the line number;
+                          // anything else is treated as a bare path.
+                          const evidence = evidenceDraft
+                            .split("\n")
+                            .map((s) => s.trim())
+                            .filter((s) => s !== "")
+                            .map((s) => {
+                              const m = s.match(/^(.*):(\d+)$/);
+                              if (m) return { path: m[1]!, line: parseInt(m[2]!, 10) };
+                              return { path: s, line: null as number | null };
+                            });
+                          patchComponent.mutate(
+                            {
+                              scopeId,
+                              componentId: component.id,
+                              name: trimmedName !== component.name ? trimmedName : undefined,
+                              component_root: rootDraft.trim() === "" ? null : rootDraft.trim(),
+                              evidence,
+                            },
+                            {
+                              onSuccess: () => setEditingEvidence(false),
+                              onError: (err) => {
+                                window.alert(`Save failed: ${(err as Error).message}`);
+                              },
+                            },
+                          );
+                        }}
+                        className="px-2 py-1 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50"
+                      >
+                        {patchComponent.isPending ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingEvidence(false)}
+                        className="px-2 py-1 text-xs border rounded hover:bg-muted"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {component.component_root ? (
+                      <p className="font-mono text-xs mb-1">
+                        <span className="text-muted-foreground mr-1">root:</span>
+                        <FileLink template={sourceUrlTemplate} file={component.component_root}>
+                          {component.component_root}
+                        </FileLink>
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground italic mb-1">root: (not set)</p>
+                    )}
+                    {component.evidence && component.evidence.length > 0 ? (
+                      <ol className="space-y-0.5 list-decimal list-inside font-mono text-xs">
+                        {component.evidence.slice(0, 15).map((e, i) => (
+                          <li key={`${e.path}-${i}`}>
+                            <FileLink template={sourceUrlTemplate} file={e.path} line={e.line ?? undefined}>
+                              {e.path}{e.line != null ? `:${e.line}` : ""}
+                            </FileLink>
+                          </li>
+                        ))}
+                        {component.evidence.length > 15 && (
+                          <li className="text-muted-foreground italic list-none">…and {component.evidence.length - 15} more</li>
+                        )}
+                      </ol>
+                    ) : (
+                      <p className="text-xs text-muted-foreground italic">no evidence files</p>
+                    )}
+                  </>
+                )}
+              </div>
+
               {/* License details */}
               {component.licenses.length > 0 && (
                 <div>
@@ -1413,27 +1600,6 @@ function ScopeComponentRow({
                       <Badge key={i} variant="secondary" className="text-xs font-normal">{prettyLicense(lic)}</Badge>
                     ))}
                   </div>
-                </div>
-              )}
-
-              {/* Found in */}
-              {occurrences.length > 0 && (
-                <div>
-                  <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">
-                    Found in ({occurrences.length} location{occurrences.length !== 1 ? "s" : ""})
-                  </p>
-                  <ol className="space-y-0.5 font-mono text-xs">
-                    {occurrences.slice(0, 15).map((occ, i) => (
-                      <li key={i} className="text-muted-foreground">
-                        <FileLink template={sourceUrlTemplate} file={occ.path} line={occ.line ?? undefined}>
-                          {occ.path}{occ.line ? `:${occ.line}` : ""}
-                        </FileLink>
-                      </li>
-                    ))}
-                    {occurrences.length > 15 && (
-                      <li className="text-muted-foreground italic">…and {occurrences.length - 15} more</li>
-                    )}
-                  </ol>
                 </div>
               )}
 
@@ -1577,6 +1743,7 @@ function ComponentsTab({
                   <TableHead className="w-28">Ecosystem</TableHead>
                   <TableHead className="w-40">License</TableHead>
                   <TableHead className="w-64">Issues</TableHead>
+                  <TableHead className="w-12" />
                 </TableRow>
               </TableHeader>
               <TableBody>

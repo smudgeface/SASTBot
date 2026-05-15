@@ -1,220 +1,34 @@
 /**
- * scopeComponentService.ts — SBOM Component Recheck, Stage 1
+ * scopeComponentService.ts — scope-level component state.
  *
- * Provides the backfill that bootstraps `scope_components` from the existing
- * `sbom_components` data. This is an idempotent worker-boot hook following
- * the same pattern as backfillLlmSummaries, backfillCvssScores, etc.
+ * The two exports of note:
+ *   - `persistScanComponentsToScopeState`: the in-flight scan writer. Called
+ *     after Stage 2 (LLM augmentation) by the worker. Uses the deterministic
+ *     componentMatch chain to match each emitted sbom_component against
+ *     existing scope_components, updating identity fields on match and
+ *     inserting on miss.
+ *   - `materializeRecoveredComponents` / `rebuildComponentsFromScopeState`:
+ *     consumed by the SBOM recheck phase to keep the worker's in-memory list
+ *     in sync with the scope-level truth.
  *
- * See docs/SBOM_COMPONENT_RECHECK_PLAN.md for the full architectural rationale.
- *
- * Algorithm:
- *   For each ScanScope in the DB:
- *     1. Find the most-recent scan_run where status = 'success'. Skip if none.
- *     2. For each sbom_components row tied to that scan_run:
- *        - Upsert into scope_components keyed by (scope_id, name, version, purl).
- *          NULL version values are preserved — the unique constraint is defined
- *          as UNIQUE NULLS NOT DISTINCT (Postgres 15+) in the raw INSERT so that
- *          two rows with the same (scope_id, name, NULL, purl) correctly conflict.
- *          We fall back to a raw SQL INSERT … ON CONFLICT DO NOTHING to avoid
- *          Prisma's compound-unique upsert requirement that all key fields be
- *          non-null strings.
- *        - On insert: set firstSeenScanRunId = lastSeenScanRunId = scan_run_id,
- *          lastSeenAt = scan_run.created_at, dismissedStatus = 'active',
- *          source = 'scan'. Copy all component fields.
- *        - On conflict: no-op in Stage 1 (bootstrap only).
- *        - Insert the scan_run_components join row (ON CONFLICT DO NOTHING).
+ * The bootstrap backfill that previously ran on every worker boot
+ * (backfillScopeComponentsFromLatestScans) was removed: it predated the
+ * componentMatch chain, used a NULL-distinct ON CONFLICT clause that quietly
+ * duplicated version-NULL rows on each restart, and is no longer needed —
+ * the scan flow now bootstraps scope_components natively.
  */
 
 import { pino } from "pino";
 import { prisma } from "../db.js";
 import { loadConfig } from "../config.js";
 import type { SbomComponent } from "@prisma/client";
+import {
+  matchComponent,
+  type ComponentIdentity,
+  type MatchResult,
+} from "./componentMatch.js";
 
 const logger = pino({ level: loadConfig().logLevel, name: "scopeComponentService" });
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface BackfillSummary {
-  scopesProcessed: number;
-  scopesSkipped: number;
-  componentsInserted: number;
-  joinsInserted: number;
-}
-
-// ---------------------------------------------------------------------------
-// Backfill: promote sbom_components → scope_components for each scope's
-// latest successful scan run. Safe to re-run on every worker boot.
-// ---------------------------------------------------------------------------
-
-export async function backfillScopeComponentsFromLatestScans(): Promise<void> {
-  // Fetch every scope — we'll query its latest successful run individually.
-  const scopes = await prisma.scanScope.findMany({
-    select: { id: true, orgId: true },
-  });
-
-  if (scopes.length === 0) {
-    logger.info("[scopeComponentService] backfill: no scopes — skipping");
-    return;
-  }
-
-  logger.info({ scopeCount: scopes.length }, "[scopeComponentService] backfill: starting");
-
-  const summary: BackfillSummary = {
-    scopesProcessed: 0,
-    scopesSkipped: 0,
-    componentsInserted: 0,
-    joinsInserted: 0,
-  };
-
-  for (const scope of scopes) {
-    // Find the most-recent successful scan run for this scope.
-    const latestRun = await prisma.scanRun.findFirst({
-      where: { scopeId: scope.id, status: "success" },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, createdAt: true },
-    });
-
-    if (!latestRun) {
-      summary.scopesSkipped++;
-      continue;
-    }
-
-    // Fetch all sbom_components for that scan run.
-    const components = await prisma.sbomComponent.findMany({
-      where: { scanRunId: latestRun.id },
-    });
-
-    for (const c of components) {
-      // Extract evidencePath from llmEvidence if available. The plan calls this
-      // out as "new — was implicit in llmEvidence". We populate it here from
-      // the existing llmEvidence.path field so that Tier-1 file-existence
-      // recheck can use it in Stage 2 without parsing the JSONB.
-      let evidencePath: string | null = null;
-      if (c.llmEvidence && typeof c.llmEvidence === "object") {
-        const ev = c.llmEvidence as Record<string, unknown>;
-        if (typeof ev.path === "string" && ev.path) {
-          evidencePath = ev.path;
-        }
-      }
-
-      try {
-        // Use raw SQL for the scope_components upsert so we can correctly
-        // handle NULL versions. Prisma's compound-unique upsert requires all
-        // key fields to be non-null strings, but `version` is nullable here.
-        // Raw INSERT … ON CONFLICT DO NOTHING is the idempotent pattern used
-        // throughout this codebase (see backfillScanRunSeverities, etc.).
-        //
-        // The unique index "scope_components_scope_id_name_version_purl_key"
-        // uses standard Postgres NULL semantics (NULLs not equal), so two
-        // rows with version=NULL for the same (scope_id, name, purl) would
-        // not conflict. We rely on purl uniqueness as the practical
-        // deduplication key for components without a version — purlS for
-        // versionless components typically embed the name and are distinct
-        // per package.
-        const inserted = await prisma.$executeRawUnsafe(
-          `INSERT INTO scope_components (
-            id, scope_id, org_id,
-            name, version, purl, ecosystem,
-            licenses, component_type, scope, is_dev_only,
-            manifest_file, discovery_method, evidence_line,
-            evidence_path, llm_evidence, cpe,
-            source, dismissed_status,
-            first_seen_scan_run_id, last_seen_scan_run_id, last_seen_at,
-            created_at, updated_at
-          )
-          VALUES (
-            gen_random_uuid(), $1::uuid, $2::uuid,
-            $3, $4, $5, $6,
-            $7::text[], $8, $9, $10,
-            $11, $12, $13,
-            $14, $15::jsonb, $16,
-            'scan', 'active',
-            $17::uuid, $17::uuid, $18::timestamptz,
-            now(), now()
-          )
-          ON CONFLICT (scope_id, name, version, purl)
-          DO NOTHING`,
-          scope.id,
-          scope.orgId ?? null,
-          c.name,
-          c.version ?? null,
-          c.purl,
-          c.ecosystem ?? null,
-          `{${c.licenses.map((l) => `"${l.replace(/"/g, '\\"')}"`).join(",")}}`,
-          c.componentType,
-          c.scope ?? null,
-          c.isDevOnly,
-          c.manifestFile ?? null,
-          c.discoveryMethod ?? "manifest",
-          c.evidenceLine ?? null,
-          evidencePath ?? null,
-          c.llmEvidence !== null ? JSON.stringify(c.llmEvidence) : null,
-          c.cpe ?? null,
-          latestRun.id,
-          latestRun.createdAt.toISOString(),
-        );
-
-        summary.componentsInserted += inserted;
-
-        // Fetch the scope_component id (regardless of insert or conflict)
-        // so we can insert the join row.
-        const existing = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
-          `SELECT id FROM scope_components
-           WHERE scope_id = $1::uuid
-             AND name = $2
-             AND purl = $3
-             AND (version = $4 OR ($4 IS NULL AND version IS NULL))
-           LIMIT 1`,
-          scope.id,
-          c.name,
-          c.purl,
-          c.version ?? null,
-        );
-
-        if (existing.length === 0) {
-          logger.warn(
-            { scopeId: scope.id, purl: c.purl },
-            "[scopeComponentService] backfill: could not find scope_component after upsert — skipping join row",
-          );
-          continue;
-        }
-
-        const scopeComponentId = existing[0]!.id;
-
-        // Insert the join row. ON CONFLICT DO NOTHING for idempotency.
-        const joinInserted = await prisma.$executeRawUnsafe(
-          `INSERT INTO scan_run_components (scan_run_id, scope_component_id, discovery_method)
-           VALUES ($1::uuid, $2::uuid, $3)
-           ON CONFLICT (scan_run_id, scope_component_id) DO NOTHING`,
-          latestRun.id,
-          scopeComponentId,
-          c.discoveryMethod ?? "manifest",
-        );
-
-        summary.joinsInserted += joinInserted;
-      } catch (err) {
-        logger.warn(
-          { err: (err as Error).message, scopeId: scope.id, purl: c.purl },
-          "[scopeComponentService] backfill: error upserting component — skipping",
-        );
-      }
-    }
-
-    summary.scopesProcessed++;
-  }
-
-  logger.info(
-    {
-      scopesProcessed: summary.scopesProcessed,
-      scopesSkipped: summary.scopesSkipped,
-      componentsInserted: summary.componentsInserted,
-      joinsInserted: summary.joinsInserted,
-    },
-    "[scopeComponentService] backfill complete",
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Live scan path: persist augmented sbom_components into scope_components
@@ -244,9 +58,48 @@ export async function persistScanComponentsToScopeState(
 ): Promise<{ upserted: number; joinsInserted: number }> {
   let upserted = 0;
   let joinsInserted = 0;
+  const tierCounts: Record<string, number> = {};
+
+  // Pre-fetch all active scope_components once. The componentMatch chain
+  // operates on this cache; new inserts are appended to the cache so a
+  // later incoming component with the same identity matches the just-
+  // inserted row instead of producing a sibling duplicate.
+  type CacheRow = ComponentIdentity & { id: string };
+  const initialRows = await prisma.$queryRawUnsafe<
+    Array<{
+      id: string;
+      name: string;
+      version: string | null;
+      purl: string;
+      ecosystem: string | null;
+      component_root: string | null;
+      evidence_path: string | null;
+      cpe: string | null;
+      manifest_file: string | null;
+    }>
+  >(
+    `SELECT id, name, version, purl, ecosystem,
+            component_root, evidence_path, cpe, manifest_file
+     FROM scope_components
+     WHERE scope_id = $1::uuid
+       AND dismissed_status = 'active'`,
+    scopeId,
+  );
+  const cache: CacheRow[] = initialRows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    version: r.version,
+    purl: r.purl,
+    ecosystem: r.ecosystem,
+    componentRoot: r.component_root,
+    evidencePath: r.evidence_path,
+    cpe: r.cpe,
+    manifestFile: r.manifest_file,
+  }));
 
   for (const c of components) {
-    // Extract evidence_path from llmEvidence if not already a top-level field.
+    // Extract evidence_path from llmEvidence if not already a top-level field
+    // (back-compat with rows that pre-date the new fields).
     let evidencePath: string | null = (c as unknown as { evidencePath?: string | null }).evidencePath ?? null;
     if (!evidencePath && c.llmEvidence && typeof c.llmEvidence === "object") {
       const ev = c.llmEvidence as Record<string, unknown>;
@@ -255,125 +108,85 @@ export async function persistScanComponentsToScopeState(
       }
     }
 
+    const componentRoot = (c as unknown as { componentRoot?: string | null }).componentRoot ?? null;
+    // Evidence is jsonb on the row — pull it as unknown and coerce to a JSON
+    // string for the SQL ::jsonb cast below. Falls back to an empty array.
+    const rawEvidence = (c as unknown as { evidence?: unknown }).evidence;
+    const evidenceJson = Array.isArray(rawEvidence) ? JSON.stringify(rawEvidence) : "[]";
+    const incomingCpe = (c as unknown as { cpe?: string | null }).cpe ?? null;
+    const incoming: ComponentIdentity = {
+      name: c.name,
+      version: c.version ?? null,
+      purl: c.purl,
+      ecosystem: c.ecosystem ?? null,
+      componentRoot,
+      evidencePath,
+      cpe: incomingCpe,
+      manifestFile: c.manifestFile ?? null,
+    };
+
     try {
       let scopeComponentId: string | null = null;
+      let matchTier: MatchResult["tier"] | "insert" = "insert";
 
-      // Primary identity: evidence_path when present, ONLY for generic-ecosystem
-      // (vendored C/C++) components. The LLM picks a slightly different
-      // canonical name for the same vendored library each run ("Thorlabs SDK"
-      // / "thorlabs-sdk" / "thorlabs-motion-control"), so matching on
-      // (scope_id, name, version, purl) would let those name variants
-      // accumulate as separate rows. The vendored library lives at one
-      // specific path inside extern/ — that path is the stable identity.
-      //
-      // Gated on ecosystem = 'generic' because manifest-tracked ecosystems
-      // (npm, maven, pypi, nuget) all share their evidence_path = the lockfile,
-      // so path-based identity would falsely collapse legitimately distinct
-      // packages. For those ecosystems, the (scope_id, name, version, purl)
-      // fallback below is the correct identity. The matching DB-level
-      // partial unique index is also restricted to ecosystem = 'generic'
-      // (see migration 20260515001100_restrict_evidence_path_index_to_generic).
-      const incomingEcosystem = c.ecosystem ?? null;
-      const isGenericEcosystem = incomingEcosystem === "generic" || incomingEcosystem === null;
-      if (evidencePath && isGenericEcosystem) {
-        const matched = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
-          `SELECT id FROM scope_components
-           WHERE scope_id = $1::uuid
-             AND evidence_path = $2
-             AND (ecosystem = 'generic' OR ecosystem IS NULL)
-           LIMIT 1`,
-          scopeId,
-          evidencePath,
+      const match = matchComponent(incoming, cache);
+      if (match) {
+        scopeComponentId = match.matchedId;
+        matchTier = match.tier;
+        // Update the matched row: bump lifecycle + populate componentRoot /
+        // evidence if they were empty on the existing row (so the identity
+        // strengthens over time as the LLM emits richer data). jsonb_array_length
+        // is the jsonb equivalent of array_length here.
+        await prisma.$executeRawUnsafe(
+          `UPDATE scope_components SET
+            last_seen_scan_run_id = $1::uuid,
+            last_seen_at          = now(),
+            updated_at            = now(),
+            component_root = COALESCE(component_root, $3),
+            evidence = CASE
+              WHEN evidence IS NULL OR jsonb_array_length(evidence) = 0
+                THEN $4::jsonb
+              ELSE evidence
+            END,
+            dismissed_status = CASE
+              WHEN dismissed_status = 'removed' THEN 'active'
+              ELSE dismissed_status
+            END,
+            dismissed_reason = CASE
+              WHEN dismissed_status = 'removed' THEN NULL
+              ELSE dismissed_reason
+            END,
+            dismissed_at = CASE
+              WHEN dismissed_status = 'removed' THEN NULL
+              ELSE dismissed_at
+            END
+          WHERE id = $2::uuid`,
+          scanRunId,
+          scopeComponentId,
+          componentRoot ?? null,
+          evidenceJson,
         );
-        if (matched.length > 0) {
-          scopeComponentId = matched[0]!.id;
-          await prisma.$executeRawUnsafe(
-            `UPDATE scope_components SET
-              last_seen_scan_run_id = $1::uuid,
-              last_seen_at          = now(),
-              updated_at            = now(),
-              dismissed_status = CASE
-                WHEN dismissed_status = 'removed' THEN 'active'
-                ELSE dismissed_status
-              END,
-              dismissed_reason = CASE
-                WHEN dismissed_status = 'removed' THEN NULL
-                ELSE dismissed_reason
-              END,
-              dismissed_at = CASE
-                WHEN dismissed_status = 'removed' THEN NULL
-                ELSE dismissed_at
-              END
-            WHERE id = $2::uuid`,
-            scanRunId,
-            scopeComponentId,
-          );
-          upserted++;
+        upserted++;
+        // Strengthen the cached identity so subsequent incoming components
+        // match against the now-richer row.
+        const cached = cache.find((r) => r.id === scopeComponentId);
+        if (cached && !cached.componentRoot && componentRoot) {
+          cached.componentRoot = componentRoot;
         }
-      }
-
-      // Secondary identity: CPE. Path-agnostic, NVD-canonical. Catches the
-      // case where the same upstream library moves files between scans (LLM
-      // picks `extern/Foo/bar.h` one run and `extern/Foo/baz.h` the next,
-      // both with the same emitted CPE). Only kicks in when (a) the
-      // incoming component has a CPE and (b) evidence_path didn't already
-      // match an existing row. Note: we don't backfill CPE on
-      // evidence_path matches — that would risk colliding with another row
-      // in the same scope that already carries this CPE, which needs a
-      // merge rather than an update. Tracked as a future enhancement.
-      if (!scopeComponentId) {
-        const incomingCpe = (c as unknown as { cpe?: string | null }).cpe ?? null;
-        if (incomingCpe) {
-          const matched = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
-            `SELECT id FROM scope_components
-             WHERE scope_id = $1::uuid
-               AND cpe = $2
-             LIMIT 1`,
-            scopeId,
-            incomingCpe,
-          );
-          if (matched.length > 0) {
-            scopeComponentId = matched[0]!.id;
-            await prisma.$executeRawUnsafe(
-              `UPDATE scope_components SET
-                last_seen_scan_run_id = $1::uuid,
-                last_seen_at          = now(),
-                updated_at            = now(),
-                dismissed_status = CASE
-                  WHEN dismissed_status = 'removed' THEN 'active'
-                  ELSE dismissed_status
-                END,
-                dismissed_reason = CASE
-                  WHEN dismissed_status = 'removed' THEN NULL
-                  ELSE dismissed_reason
-                END,
-                dismissed_at = CASE
-                  WHEN dismissed_status = 'removed' THEN NULL
-                  ELSE dismissed_at
-                END
-              WHERE id = $2::uuid`,
-              scanRunId,
-              scopeComponentId,
-            );
-            upserted++;
-          }
-        }
-      }
-
-      // Tertiary identity: (scope_id, name, version, purl). Used for rows
-      // with neither an evidence_path match nor a CPE match — covers cdxgen
-      // manifest discovery, legacy rows, manual additions, and the first
-      // insertion of any new component. Uses raw SQL ON CONFLICT so NULL
-      // version values can collide (Prisma's compound upsert requires
-      // non-null keys).
-      if (!scopeComponentId) {
+      } else {
+        // No match — INSERT a fresh row. The (scope_id, name, version, purl)
+        // ON CONFLICT clause guards against the rare race where componentMatch
+        // missed an existing row but the strict identity collides (e.g. an
+        // identical row inserted in the same loop with NULL version against
+        // PG's NULL-distinct semantics).
         await prisma.$executeRawUnsafe(
           `INSERT INTO scope_components (
             id, scope_id, org_id,
             name, version, purl, ecosystem,
             licenses, component_type, scope, is_dev_only,
             manifest_file, discovery_method, evidence_line,
-            evidence_path, llm_evidence, cpe,
+            evidence_path, component_root, evidence,
+            llm_evidence, cpe,
             source, dismissed_status,
             first_seen_scan_run_id, last_seen_scan_run_id, last_seen_at,
             created_at, updated_at
@@ -383,15 +196,22 @@ export async function persistScanComponentsToScopeState(
             $3, $4, $5, $6,
             $7::text[], $8, $9, $10,
             $11, $12, $13,
-            $14, $15::jsonb, $16,
+            $14, $15, $16::jsonb,
+            $17::jsonb, $18,
             'scan', 'active',
-            $17::uuid, $17::uuid, now(),
+            $19::uuid, $19::uuid, now(),
             now(), now()
           )
           ON CONFLICT (scope_id, name, version, purl) DO UPDATE
             SET last_seen_scan_run_id = EXCLUDED.last_seen_scan_run_id,
                 last_seen_at          = EXCLUDED.last_seen_at,
                 updated_at            = now(),
+                component_root        = COALESCE(scope_components.component_root, EXCLUDED.component_root),
+                evidence = CASE
+                  WHEN scope_components.evidence IS NULL OR jsonb_array_length(scope_components.evidence) = 0
+                    THEN EXCLUDED.evidence
+                  ELSE scope_components.evidence
+                END,
                 dismissed_status = CASE
                   WHEN scope_components.dismissed_status = 'removed' THEN 'active'
                   ELSE scope_components.dismissed_status
@@ -418,8 +238,10 @@ export async function persistScanComponentsToScopeState(
           c.discoveryMethod ?? "manifest",
           c.evidenceLine ?? null,
           evidencePath ?? null,
+          componentRoot ?? null,
+          evidenceJson,
           c.llmEvidence !== null ? JSON.stringify(c.llmEvidence) : null,
-          (c as unknown as { cpe?: string | null }).cpe ?? null,
+          incomingCpe,
           scanRunId,
         );
 
@@ -447,7 +269,13 @@ export async function persistScanComponentsToScopeState(
         }
 
         scopeComponentId = inserted[0]!.id;
+
+        // Append to the cache so subsequent components in this loop can
+        // match against this row instead of inserting a sibling duplicate.
+        cache.push({ ...incoming, id: scopeComponentId });
       }
+
+      tierCounts[matchTier] = (tierCounts[matchTier] ?? 0) + 1;
 
       const joinInserted = await prisma.$executeRawUnsafe(
         `INSERT INTO scan_run_components (scan_run_id, scope_component_id, discovery_method)
@@ -468,7 +296,7 @@ export async function persistScanComponentsToScopeState(
   }
 
   logger.info(
-    { scanRunId, scopeId, upserted, joinsInserted },
+    { scanRunId, scopeId, upserted, joinsInserted, tierCounts },
     "[scopeComponentService] persistScanComponentsToScopeState complete",
   );
 
@@ -539,8 +367,11 @@ export async function rebuildComponentsFromScopeState(
 
   for (const sc of scopeRows) {
     // Ensure a sbom_components row exists for this scan_run / component.
-    // ON CONFLICT DO NOTHING: the augmentation pass may have already created
-    // the row; we just need to guarantee it's there for the curated-SBOM endpoint.
+    // Conflict target is (scan_run_id, purl): the unique index added in
+    // 20260515090000_dedup_sbom_components_by_purl. Without an explicit
+    // target this clause was a no-op (sbom_components has no other unique
+    // constraint), so every merge-followed-by-rebuild used to duplicate
+    // rows for every active scope_component. See migration comment.
     await prisma.$executeRawUnsafe(
       `INSERT INTO sbom_components (
          id,
@@ -560,7 +391,7 @@ export async function rebuildComponentsFromScopeState(
        INNER JOIN scan_run_components src ON src.scope_component_id = sc.id
          AND src.scan_run_id = $1::uuid
        WHERE sc.id = $2::uuid
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT (scan_run_id, purl) DO NOTHING`,
       scanRunId,
       sc.id,
     );
@@ -611,31 +442,45 @@ export async function materializeRecoveredComponents(
     where: { id: { in: recoveredScopeComponentIds } },
   });
 
-  const created: SbomComponent[] = [];
-  for (const sc of scopeRows) {
-    const row = await prisma.sbomComponent.create({
-      data: {
-        scanRunId,
-        name: sc.name,
-        version: sc.version,
-        purl: sc.purl,
-        ecosystem: sc.ecosystem,
-        licenses: sc.licenses,
-        componentType: sc.componentType,
-        scope: sc.scope,
-        isDevOnly: sc.isDevOnly,
-        manifestFile: sc.manifestFile,
-        discoveryMethod: "recheck_recovery",
-        evidenceLine: sc.evidenceLine,
-        llmEvidence: sc.llmEvidence ?? undefined,
-        cpe: sc.cpe,
-      },
-    });
-    created.push(row);
-  }
+  // createMany + skipDuplicates leans on the (scan_run_id, purl) unique index
+  // added in 20260515090000. Two scope_components rows for the same purl
+  // (legitimate during the transition window before the LLM merge phase has
+  // collapsed naming/version variants) would otherwise produce a Prisma
+  // P2002 here and abort the entire recheck recovery. With skipDuplicates,
+  // the second create silently no-ops and the caller still gets all rows
+  // from the post-create findMany below.
+  await prisma.sbomComponent.createMany({
+    data: scopeRows.map((sc) => ({
+      scanRunId,
+      name: sc.name,
+      version: sc.version,
+      purl: sc.purl,
+      ecosystem: sc.ecosystem,
+      licenses: sc.licenses,
+      componentType: sc.componentType,
+      scope: sc.scope,
+      isDevOnly: sc.isDevOnly,
+      manifestFile: sc.manifestFile,
+      discoveryMethod: "recheck_recovery",
+      evidenceLine: sc.evidenceLine,
+      llmEvidence: sc.llmEvidence ?? undefined,
+      cpe: sc.cpe,
+    })),
+    skipDuplicates: true,
+  });
+
+  // Re-fetch by (scan_run_id, purl) so the caller gets the canonical rows —
+  // whether freshly created or already present from a sibling scope_component
+  // sharing the same purl.
+  const created = await prisma.sbomComponent.findMany({
+    where: {
+      scanRunId,
+      purl: { in: scopeRows.map((sc) => sc.purl) },
+    },
+  });
 
   logger.info(
-    { scanRunId, materialized: created.length },
+    { scanRunId, requested: scopeRows.length, materialized: created.length },
     "[scopeComponentService] materializeRecoveredComponents complete",
   );
 

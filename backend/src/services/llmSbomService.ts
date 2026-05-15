@@ -30,6 +30,11 @@ import { decodeCredential } from "./credentialService.js";
 import { getOrCreateSettings } from "./settingsService.js";
 import { loadPrompt } from "./promptLoader.js";
 import type { CdxComponent } from "./sbomService.js";
+import {
+  matchComponent,
+  pickCanonicalName,
+  type ComponentIdentity,
+} from "./componentMatch.js";
 
 const logger = pino({ level: loadConfig().logLevel, name: "llmSbomService" });
 
@@ -62,9 +67,59 @@ export type DropRecord = z.infer<typeof DropRecord>;
 const AddRecord = z.object({
   type: z.literal("add"),
   name: z.string(),
-  version: z.string().nullable().optional(),
+  // The LLM sometimes emits the literal string "unknown" (or "" / "*") when
+  // it can't pin a version, instead of omitting the field or setting null.
+  // Without normalization those become distinct purls (e.g.
+  // `pkg:generic/yaffs2` vs `pkg:generic/yaffs2@unknown`) and bypass our
+  // unique index, which produces phantom duplicate components in the UI.
+  // Mirror the policy in nvdService.sanitizeVersion: coerce these to null.
+  version: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((v) => {
+      if (v == null) return null;
+      const trimmed = v.trim();
+      if (trimmed === "" || trimmed === "*") return null;
+      if (trimmed.toLowerCase() === "unknown") return null;
+      return trimmed;
+    }),
   /** Ecosystem slug: "npm" | "pypi" | "maven" | "nuget" | "generic" | etc. */
   ecosystem: z.string().nullable().optional(),
+  /**
+   * Stable identity: the shallowest repo-relative directory path that is
+   * exclusively owned by this upstream library (e.g. "extern/Xenomai",
+   * or "extern/Nerian/libnvshared" when sibling libs share a parent).
+   * This is the dedup key for vendored components — robust across scans
+   * even when the LLM picks different evidence_files for the same lib.
+   */
+  component_root: z.string().optional(),
+  /**
+   * Per-evidence locations (repo-relative). The LLM emits every file it
+   * found that demonstrates this component is present — headers, sources,
+   * READMEs, CMake files, etc. Each entry is either a plain string (path
+   * only, no line number — for vendored C/C++ libs) or an object with
+   * `{path, line}` (e.g. for lockfile-based packages where the line in
+   * `package-lock.json` is meaningful).
+   *
+   * Diagnostic-only; does not participate in dedup. The UI renders each
+   * entry as a clickable FileLink (with `$LINE` substitution when set).
+   */
+  evidence: z
+    .array(
+      z.union([
+        z.string(),
+        z.object({
+          path: z.string(),
+          line: z.number().int().nullable().optional(),
+        }),
+      ]),
+    )
+    .optional(),
+  /** Deprecated alias for `evidence`, accepted as plain string[]. */
+  evidence_paths: z.array(z.string()).optional(),
+  // Legacy single-file evidence path. Accepted for backwards-compat with
+  // older prompt versions; new prompts should emit `evidence` instead.
   evidence_path: z.string(),
   evidence_excerpt: z.string().optional(),
   llm_reason: z.string(),
@@ -537,6 +592,51 @@ export interface LlmEvidence {
   llmReason: string;
 }
 
+export interface EvidenceEntry {
+  path: string;
+  line: number | null;
+}
+
+/**
+ * Canonicalize the evidence shape on an AddRecord into EvidenceEntry[].
+ *
+ * The Zod schema accepts three back-compatible forms:
+ *   - `evidence` as `(string | {path, line?})[]` — new shape
+ *   - `evidence_paths` as `string[]` — legacy M7 shape
+ *   - `evidence_path` as `string` — legacy pre-M7 single-file shape
+ *
+ * Always returns a non-empty array (at minimum the legacy single
+ * evidence_path is included). Strings become `{path, line: null}`.
+ */
+function normalizeEvidence(r: AddRecord): EvidenceEntry[] {
+  const out: EvidenceEntry[] = [];
+  const seen = new Set<string>();
+  const push = (path: string, line: number | null): void => {
+    const trimmed = path.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    out.push({ path: trimmed, line });
+  };
+  if (r.evidence) {
+    for (const e of r.evidence) {
+      if (typeof e === "string") push(e, null);
+      else push(e.path, e.line ?? null);
+    }
+  }
+  if (r.evidence_paths) {
+    for (const p of r.evidence_paths) push(p, null);
+  }
+  if (r.evidence_path) push(r.evidence_path, null);
+  return out;
+}
+
+export interface ComponentIdentityMetadata {
+  /** Shallowest unique path — used as the dedup key downstream. */
+  componentRoot: string | null;
+  /** All evidence locations for this component. */
+  evidence: EvidenceEntry[];
+}
+
 export interface SbomAugmentationApplied {
   /** Final list of CdxComponents after keep/drop/add. */
   components: CdxComponent[];
@@ -544,6 +644,8 @@ export interface SbomAugmentationApplied {
   evidenceMap: Map<string, LlmEvidence>;
   /** Map from canonical component_id → CPE 2.3 string (for persistAugmentedComponents). */
   cpeMap: Map<string, string>;
+  /** Map from canonical component_id → identity metadata (component_root + evidence_paths). */
+  identityMap: Map<string, ComponentIdentityMetadata>;
 }
 
 /**
@@ -614,18 +716,150 @@ export function applySbomAugmentation(
   });
 
   // Synthesise added components.
+  //
+  // Intra-scan dedup uses the full componentMatch chain (path → CPE → PURL →
+  // normalized-name). When two adds collapse onto the same identity (e.g. the
+  // LLM emits "ophir-lm-measurement" and "ophir-lmmeasurement" both rooted at
+  // extern/Ophir), pickCanonicalName picks the more-kebab-case form to keep.
+  // Evidence/CPE maps from the dropped name route onto the kept name so
+  // downstream sees one canonical record.
   const addRecords = records.filter((r): r is AddRecord => r.type === "add");
-  const synthesised: CdxComponent[] = [];
+  const accepted: Array<{ identity: ComponentIdentity; record: AddRecord }> = [];
+  const skippedByName: string[] = [];
+
+  // Build a parallel identity list of the survivors (so matchComponent can
+  // also catch the "LLM-add overlaps with a cdxgen-discovered survivor"
+  // case beyond the existingKeys-by-name check below). Survivors carry no
+  // `id` field because we're operating on in-memory CdxComponents pre-DB,
+  // so they can only act as match TARGETS for adds-vs-survivors — they don't
+  // get their own id assigned here. We give them synthetic placeholder ids
+  // so matchComponent recognises them as candidates with identity.
+  const survivorIdentities: ComponentIdentity[] = survivors.map((c, idx) => {
+    const ecosystem = extractEcosystemFromPurl(c.purl);
+    const rootFromOccurrence = c.evidence?.occurrences?.[0]?.location ?? null;
+    return {
+      id: `__survivor_${idx}`,
+      name: c.name ?? "",
+      version: c.version ?? null,
+      purl: c.purl ?? "",
+      ecosystem,
+      componentRoot: rootFromOccurrence ? path.dirname(rootFromOccurrence) : null,
+      evidencePath: rootFromOccurrence,
+      cpe: null,
+      manifestFile: null,
+    };
+  });
+
   for (const r of addRecords) {
     if (existingKeys.has(r.name)) {
-      logger.debug(
-        { name: r.name },
-        "[llmSbomService] skipping add — component already exists",
-      );
+      skippedByName.push(r.name);
       continue;
     }
+    // Compose an identity for the incoming add. componentRoot is taken
+    // verbatim when emitted by the LLM; otherwise the parent dir of
+    // evidence_path is a reasonable proxy (the dedup chain falls back to
+    // CPE/PURL/name when this is null).
+    const ecosystem = r.ecosystem ?? "generic";
+    const purl = `pkg:${ecosystem}/${encodeURIComponent(r.name)}${r.version ? `@${encodeURIComponent(r.version)}` : ""}`;
+    const componentRoot = r.component_root ?? path.dirname(r.evidence_path);
+    const incomingIdentity: ComponentIdentity = {
+      name: r.name,
+      version: r.version ?? null,
+      purl,
+      ecosystem,
+      componentRoot,
+      evidencePath: r.evidence_path,
+      cpe: r.cpe ?? null,
+      manifestFile: null,
+    };
+
+    // Run the matcher against (a) already-accepted adds and (b) survivors.
+    const candidates: ComponentIdentity[] = [
+      ...accepted.map((a) => a.identity),
+      ...survivorIdentities,
+    ];
+    const match = matchComponent(incomingIdentity, candidates);
+
+    if (match) {
+      if (match.matchedId.startsWith("__survivor_")) {
+        // Survivor already covers this — skip the add entirely.
+        logger.info(
+          { addedName: r.name, tier: match.tier },
+          "[llmSbomService] add overlaps with cdxgen survivor — skipped",
+        );
+        continue;
+      }
+      // Match against another LLM add. Collapse onto the canonical name.
+      const priorIndex = accepted.findIndex((a) => a.identity.id === match.matchedId);
+      if (priorIndex < 0) continue;
+      const priorEntry = accepted[priorIndex]!;
+      const canonical = pickCanonicalName([priorEntry.record.name, r.name]);
+      const keep = canonical === r.name ? r : priorEntry.record;
+      const drop = keep === r ? priorEntry.record : r;
+      logger.info(
+        {
+          keptName: keep.name,
+          droppedName: drop.name,
+          tier: match.tier,
+          componentRoot,
+        },
+        "[llmSbomService] collapsing two adds via componentMatch",
+      );
+      // Merge evidence from the dropped record into the kept one. Normalize
+      // string | {path, line} → {path, line} and dedupe by path (line is
+      // diagnostic only and may differ harmlessly across runs).
+      const keepEvidence = normalizeEvidence(keep);
+      const dropEvidence = normalizeEvidence(drop);
+      const seen = new Set<string>();
+      const mergedEvidence: EvidenceEntry[] = [];
+      for (const e of [...keepEvidence, ...dropEvidence]) {
+        if (seen.has(e.path)) continue;
+        seen.add(e.path);
+        mergedEvidence.push(e);
+      }
+      const mergedRecord: AddRecord = { ...keep, evidence: mergedEvidence };
+
+      // Re-route evidence/cpe maps onto the kept name.
+      if (drop.name !== keep.name) {
+        const droppedEvidence = evidenceMap.get(drop.name);
+        if (droppedEvidence && !evidenceMap.has(keep.name)) {
+          evidenceMap.set(keep.name, droppedEvidence);
+        }
+        evidenceMap.delete(drop.name);
+        const droppedCpe = cpeMap.get(drop.name);
+        if (droppedCpe && !cpeMap.has(keep.name)) {
+          cpeMap.set(keep.name, droppedCpe);
+        }
+        cpeMap.delete(drop.name);
+      }
+
+      accepted[priorIndex] = {
+        record: mergedRecord,
+        identity: {
+          ...priorEntry.identity,
+          name: keep.name,
+          evidencePath: mergedEvidence[0]?.path ?? priorEntry.identity.evidencePath,
+        },
+      };
+      continue;
+    }
+
+    // No match — accept as a new component. Assign a synthetic id so
+    // future adds in this loop can match against it.
+    accepted.push({
+      record: r,
+      identity: { ...incomingIdentity, id: `__add_${accepted.length}` },
+    });
+  }
+
+  const synthesised: CdxComponent[] = [];
+  const identityMap = new Map<string, ComponentIdentityMetadata>();
+  for (const entry of accepted) {
+    const r = entry.record;
     const eco = r.ecosystem ?? "generic";
     const purl = `pkg:${eco}/${encodeURIComponent(r.name)}${r.version ? `@${encodeURIComponent(r.version)}` : ""}`;
+    const evidence = normalizeEvidence(r);
+    const componentRoot = r.component_root ?? path.dirname(r.evidence_path);
     synthesised.push({
       name: r.name,
       version: r.version ?? undefined,
@@ -634,16 +868,21 @@ export function applySbomAugmentation(
       discoveryMethod: "llm_augmentation",
     } as CdxComponent & { discoveryMethod: string });
     existingKeys.add(r.name);
+    identityMap.set(r.name, { componentRoot, evidence });
     logger.info(
-      { name: r.name, version: r.version, evidencePath: r.evidence_path },
+      { name: r.name, version: r.version, componentRoot, evidence },
       "[llmSbomService] adding component",
     );
+  }
+  if (skippedByName.length > 0) {
+    logger.debug({ count: skippedByName.length, names: skippedByName.slice(0, 5) }, "[llmSbomService] skipped adds — name already known");
   }
 
   return {
     components: [...survivors, ...synthesised],
     evidenceMap,
     cpeMap,
+    identityMap,
   };
 }
 

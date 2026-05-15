@@ -252,6 +252,97 @@ export function scanScopeToOut(s: ScanScope): ScanScopeOut {
   };
 }
 
+/**
+ * Convert a ScopeComponent row to the same SbomComponentOut shape used by the
+ * scan-detail view. Used by the Scope page's Components tab so manual deletes
+ * and merges on scope_components flow straight into the UI. Per-scan
+ * `occurrences` are pulled from the matching sbom_components row when available
+ * (lookup keyed on lastSeenScanRunId + purl); empty array when no match.
+ *
+ * scan_run_id in the response is set to lastSeenScanRunId — the most recent
+ * scan that observed this component — so the UI still has a scan to link to
+ * when needed.
+ */
+export function scopeComponentToOut(
+  c: {
+    id: string;
+    name: string;
+    version: string | null;
+    purl: string;
+    ecosystem: string | null;
+    licenses: string[];
+    componentType: string;
+    scope: string | null;
+    isDevOnly: boolean;
+    manifestFile: string | null;
+    discoveryMethod: string | null;
+    evidencePath: string | null;
+    llmEvidence: unknown;
+    cpe: string | null;
+    componentRoot: string | null;
+    evidence: unknown;
+    lastSeenScanRunId: string | null;
+  },
+): SbomComponentOut {
+  let llmEvidence: { path: string; excerpt: string | null; llmReason: string } | null = null;
+  if (c.llmEvidence && typeof c.llmEvidence === "object") {
+    const ev = c.llmEvidence as Record<string, unknown>;
+    if (typeof ev.llmReason === "string") {
+      llmEvidence = {
+        path: typeof ev.path === "string" ? ev.path : "",
+        excerpt: typeof ev.excerpt === "string" ? ev.excerpt : null,
+        llmReason: ev.llmReason,
+      };
+    }
+  }
+  // Parse evidence jsonb into {path, line?}[] for the API response.
+  const evidence = parseEvidence(c.evidence);
+  return {
+    id: c.id,
+    // scan_run_id is the most-recent scan that observed this component, used
+    // by the UI's scan-link affordances. Null for manual-override rows that
+    // have never been seen by a scan.
+    scan_run_id: c.lastSeenScanRunId,
+    name: c.name,
+    version: c.version,
+    purl: c.purl,
+    ecosystem: c.ecosystem,
+    licenses: c.licenses,
+    component_type: c.componentType,
+    scope: c.scope,
+    is_dev_only: c.isDevOnly,
+    manifest_file: c.manifestFile ?? null,
+    discovery_method: c.discoveryMethod ?? null,
+    occurrences: [],
+    ...(llmEvidence ? { llm_evidence: llmEvidence } : {}),
+    component_root: c.componentRoot ?? null,
+    evidence,
+  };
+}
+
+/**
+ * Normalize a jsonb `evidence` column value into the API's
+ * `{ path: string, line: number | null }[]` shape. Defensive about legacy
+ * data: each entry may be either a bare string (from a legacy row) or an
+ * object; non-object/non-string entries are skipped.
+ */
+function parseEvidence(value: unknown): Array<{ path: string; line: number | null }> {
+  if (!Array.isArray(value)) return [];
+  const out: Array<{ path: string; line: number | null }> = [];
+  for (const e of value as unknown[]) {
+    if (typeof e === "string" && e.trim() !== "") {
+      out.push({ path: e, line: null });
+    } else if (e !== null && typeof e === "object") {
+      const r = e as Record<string, unknown>;
+      const path = typeof r.path === "string" ? r.path : "";
+      if (!path) continue;
+      const line = typeof r.line === "number" ? r.line : null;
+      out.push({ path, line });
+    }
+  }
+  return out;
+}
+
 export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
   // Parse llmEvidence from JSONB if present.
   let llmEvidence: { path: string; excerpt: string | null; llmReason: string } | null = null;
@@ -294,6 +385,8 @@ export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
     discovery_method: c.discoveryMethod ?? null,
     occurrences,
     ...(llmEvidence ? { llm_evidence: llmEvidence } : {}),
+    component_root: (c as unknown as { componentRoot?: string | null }).componentRoot ?? null,
+    evidence: parseEvidence((c as unknown as { evidence?: unknown }).evidence),
   };
 }
 

@@ -22,8 +22,9 @@ import {
   SbomComponentOutSchema,
   SeveritySchema,
   FindingTypeSchema,
+  UuidSchema,
 } from "../schemas.js";
-import { jiraTicketToOut, sastIssueToOut, scaIssueToOut, scanRunToOut, sbomComponentToOut } from "../services/mappers.js";
+import { jiraTicketToOut, sastIssueToOut, scaIssueToOut, scanRunToOut, sbomComponentToOut, scopeComponentToOut } from "../services/mappers.js";
 import { linkSastIssueToTicket, linkScaIssueToTicket, refreshTicket, unlinkSastIssue, unlinkScaIssue } from "../services/jiraTicketService.js";
 
 // Query-string boolean parser. `z.coerce.boolean()` is a footgun in query-
@@ -571,6 +572,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
 
   // M6q: ScopeComponentOutSchema extends SbomComponentOutSchema with
   // linked_issue_ids (scope-level concept only; not on scan endpoint).
+  // M7: the row id IS the scope_components.id — the trashcan delete passes it
+  // directly, no second lookup needed.
   const ScopeComponentOutSchema = SbomComponentOutSchema.extend({
     linked_issue_ids: z.object({
       sca: z.array(z.string().uuid()),
@@ -608,18 +611,24 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         select: { id: true, lastScanRunId: true },
       });
       if (!scope) return reply.code(404).send({ detail: "Scope not found" });
-      if (!scope.lastScanRunId) return { items: [], total: 0, page: req.query.page, page_size: req.query.page_size, total_dev: 0, total_runtime: 0 };
+
+      // Components tab reads from scope_components — the durable, deduped,
+      // manually-editable truth set for this scope. Manual deletes / LLM
+      // merges / lifecycle dismissals all mutate scope_components, so this
+      // is the table the operator-facing list MUST reflect. Per-scan SBOM
+      // history remains on sbom_components and is read by the scan-detail
+      // page (which reads scan-local data only — never reverses to scope).
 
       const { page, page_size, has_findings, exclude_dev_only } = req.query;
-      const baseWhere: Record<string, unknown> = { scanRunId: scope.lastScanRunId };
-      if (has_findings === true) {
-        baseWhere.findings = { some: {} };
-      }
+      const baseWhere: Record<string, unknown> = {
+        scopeId: scope.id,
+        dismissedStatus: "active",
+      };
 
       // Always compute dev/runtime split counts before applying the dev filter.
       const [total_dev, total_runtime] = await Promise.all([
-        prisma.sbomComponent.count({ where: { ...baseWhere, isDevOnly: true } }),
-        prisma.sbomComponent.count({ where: { ...baseWhere, isDevOnly: false } }),
+        prisma.scopeComponent.count({ where: { ...baseWhere, isDevOnly: true } }),
+        prisma.scopeComponent.count({ where: { ...baseWhere, isDevOnly: false } }),
       ]);
 
       const where = { ...baseWhere };
@@ -628,15 +637,30 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const skip = (page - 1) * page_size;
-      const [comps, total] = await Promise.all([
-        prisma.sbomComponent.findMany({
+      const [scopeRows, total] = await Promise.all([
+        prisma.scopeComponent.findMany({
           where,
           orderBy: { name: "asc" },
           skip,
           take: page_size,
         }),
-        prisma.sbomComponent.count({ where }),
+        prisma.scopeComponent.count({ where }),
       ]);
+
+      // has_findings: keep only rows whose package has a sca_issue at scope
+      // level. Post-query filter — scope_components has no direct join.
+      let comps = scopeRows;
+      if (has_findings === true) {
+        const names = scopeRows.map((r) => r.name);
+        if (names.length > 0) {
+          const findingsRows = await prisma.scaIssue.findMany({
+            where: { scopeId: scope.id, packageName: { in: names } },
+            select: { packageName: true },
+          });
+          const withFindings = new Set(findingsRows.map((f) => f.packageName));
+          comps = scopeRows.filter((r) => withFindings.has(r.name));
+        }
+      }
 
       // M6q: derive linked_issue_ids in a single batched query per endpoint call.
       // SCA: match by scopeId + packageName + lastSeenScanRunId = scope.lastScanRunId.
@@ -648,9 +672,8 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
             where: {
               scopeId: scope.id,
               packageName: { in: componentNames },
-              lastSeenScanRunId: scope.lastScanRunId,
             },
-            select: { id: true, packageName: true, latestPackageVersion: true },
+            select: { id: true, packageName: true },
           })
         : [];
 
@@ -662,9 +685,14 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         scaByName.set(issue.packageName, existing);
       }
 
+      // Per-scan `occurrences` is no longer fetched: legacy data was lifted
+      // into scope_components.evidence_paths by migration
+      // 20260515123000_backfill_evidence_paths_from_occurrences, and the
+      // Components UI now renders solely from scope_components fields.
+
       return {
         items: comps.map((c) => ({
-          ...sbomComponentToOut(c),
+          ...scopeComponentToOut(c),
           linked_issue_ids: {
             sca: scaByName.get(c.name) ?? [],
             sast: [], // SAST-to-component links are rare; populated in future if needed
@@ -676,6 +704,160 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         total_dev,
         total_runtime,
       };
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // DELETE /scopes/:id/components/:componentId — manual component removal
+  // ---------------------------------------------------------------------------
+  //
+  // Operator-driven cleanup for residual dup rows the deterministic matcher
+  // doesn't catch (LLM naming variants that elude every tier of the chain,
+  // legacy rows pre-dating component_root, etc.). Hard delete — cascades the
+  // scan_run_components join table. sbom_components is per-scan audit and is
+  // untouched. The next scan re-emits real components; the componentMatch
+  // chain collapses them into the canonical row, so this is safe to use
+  // freely.
+
+  typed.delete(
+    "/api/scopes/:id/components/:componentId",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["scopes"],
+        summary: "Delete a scope component (manual cleanup of dup rows)",
+        params: z.object({ id: UuidSchema, componentId: UuidSchema }),
+        response: {
+          204: z.null(),
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const scope = await prisma.scanScope.findFirst({
+        where: { id: req.params.id, orgId: orgId ?? null },
+        select: { id: true },
+      });
+      if (!scope) return reply.code(404).send({ detail: "Scope not found" });
+
+      const component = await prisma.scopeComponent.findFirst({
+        where: { id: req.params.componentId, scopeId: scope.id },
+        select: { id: true, name: true },
+      });
+      if (!component) return reply.code(404).send({ detail: "Component not found in this scope" });
+
+      await prisma.scopeComponent.delete({ where: { id: component.id } });
+      return reply.code(204).send();
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // PATCH /scopes/:id/components/:componentId — manual edits
+  // ---------------------------------------------------------------------------
+  //
+  // Operator-driven update of identity fields on a scope_component. Used to
+  // backfill or correct component_root and evidence_paths when the LLM picked
+  // something wrong (or didn't pick anything at all on older rows). Setting
+  // `source = 'manual_override'` is intentional: marking the row as operator-
+  // managed prevents the next scan's auto-upsert from overwriting the values
+  // (persistScanComponentsToScopeState explicitly skips manual_override rows).
+
+  const PatchComponentBodySchema = z.object({
+    name: z.string().min(1).optional(),
+    component_root: z.string().nullable().optional(),
+    /** Each entry is {path, line?}. The frontend submits a parsed form from
+     *  a textarea that allows `path:line` shorthand on each line. */
+    evidence: z
+      .array(
+        z.object({
+          path: z.string().min(1),
+          line: z.number().int().positive().nullable().optional(),
+        }),
+      )
+      .optional(),
+  });
+
+  typed.patch(
+    "/api/scopes/:id/components/:componentId",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["scopes"],
+        summary: "Edit a scope component's identity fields (component_root, evidence_paths)",
+        params: z.object({ id: UuidSchema, componentId: UuidSchema }),
+        body: PatchComponentBodySchema,
+        response: {
+          200: z.object({ ok: z.literal(true) }),
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const scope = await prisma.scanScope.findFirst({
+        where: { id: req.params.id, orgId: orgId ?? null },
+        select: { id: true },
+      });
+      if (!scope) return reply.code(404).send({ detail: "Scope not found" });
+
+      const component = await prisma.scopeComponent.findFirst({
+        where: { id: req.params.componentId, scopeId: scope.id },
+        select: { id: true },
+      });
+      if (!component) return reply.code(404).send({ detail: "Component not found in this scope" });
+
+      const data: Record<string, unknown> = { source: "manual_override" };
+      if (req.body.name !== undefined) {
+        const trimmed = req.body.name.trim();
+        if (trimmed === "") {
+          return reply.code(400).send({ detail: "name cannot be blank" });
+        }
+        data.name = trimmed;
+      }
+      if (req.body.component_root !== undefined) {
+        // Normalize blank string to null.
+        const trimmed = req.body.component_root?.trim() ?? null;
+        data.componentRoot = trimmed === "" ? null : trimmed;
+      }
+      if (req.body.evidence !== undefined) {
+        // Preserve order; dedupe by trimmed path (line is diagnostic so
+        // first-wins). Empty paths are filtered.
+        const seen = new Set<string>();
+        const cleaned: Array<{ path: string; line: number | null }> = [];
+        for (const e of req.body.evidence) {
+          const p = e.path.trim();
+          if (p === "" || seen.has(p)) continue;
+          seen.add(p);
+          cleaned.push({ path: p, line: e.line ?? null });
+        }
+        data.evidence = cleaned;
+      }
+
+      try {
+        await prisma.scopeComponent.update({
+          where: { id: component.id },
+          data,
+        });
+      } catch (err) {
+        // P2002 = unique constraint violation. Rename collided with an
+        // existing (scope_id, name, version, purl) row. Return a useful
+        // message; operator can delete the duplicate first if they want to
+        // proceed with the rename.
+        const code = (err as { code?: string }).code;
+        if (code === "P2002") {
+          return reply.code(400).send({
+            detail: "A component with this name + version + purl already exists in this scope. Delete the duplicate first, then rename.",
+          });
+        }
+        throw err;
+      }
+
+      return { ok: true as const };
     },
   );
 
