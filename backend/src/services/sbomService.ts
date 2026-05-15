@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { toRepoRelative } from "./scopePath.js";
 import { extractOccurrences, resolveManifestLines, ScopeFileIndex } from "./sbomOccurrences.js";
 import type { ComponentOccurrence } from "./sbomOccurrences.js";
+import { readManifestSnippet } from "./manifestSnippet.js";
 
 import { Prisma } from "@prisma/client";
 import type { PrismaClient, SbomComponent } from "@prisma/client";
@@ -750,6 +751,40 @@ export async function persistAugmentedComponents(
     await resolveManifestLines(occurrences, canonicalName, scopeDir || null, scopePath, lockfileCache, scopeIndex);
     const cpe = cpeMap?.get(canonicalName);
     const identity = identityMap?.get(canonicalName);
+    const manifestFile = sr ? toRepoRelative(scopePath, sr) : null;
+
+    // Identity-shaped evidence (the small list rendered as "Evidence" in the
+    // detail panel). Two shapes by priority:
+    //   1. LLM-supplied identityMap with componentRoot (vendored library).
+    //      Use the LLM evidence directly — the prompt already prefers the
+    //      shallowest unique directory.
+    //   2. cdxgen-survivor with manifestFile → resolve the lockfile line +
+    //      ±3-line snippet so the panel can show a code preview.
+    //   3. Nothing — leave empty; falls back to component_root display
+    //      from the column for downstream consumers.
+    let identityEvidence: Array<{ path: string; line?: number | null; snippet?: string | null }> | undefined;
+    if (identity?.evidence && identity.evidence.length > 0) {
+      identityEvidence = identity.evidence.map((e) => ({
+        path: e.path,
+        ...(e.line != null ? { line: e.line } : {}),
+      }));
+    } else if (manifestFile && scopeDir) {
+      // Resolve relative to scopeDir; manifestFile is repo-relative (e.g.
+      // "GoWeb/GoMaxUI/package-lock.json"). toScopeRelative would normally
+      // strip the scope-path prefix, but the file is read by joining
+      // scopeDir + scope-relative path. We already have repo-relative —
+      // strip the leading scopePath when present.
+      const scopeRelative = manifestFile.startsWith(`${scopePath.replace(/^\//, "")}/`)
+        ? manifestFile.slice(scopePath.replace(/^\//, "").length + 1)
+        : manifestFile;
+      const ms = await readManifestSnippet(scopeDir, scopeRelative, canonicalName);
+      identityEvidence = [{
+        path: manifestFile,
+        line: ms.line,
+        snippet: ms.snippet,
+      }];
+    }
+
     augRows.push({
       scanRunId,
       name: canonicalName,
@@ -760,16 +795,18 @@ export async function persistAugmentedComponents(
       componentType: c.type ?? "library",
       scope: c.scope ?? null,
       isDevOnly: extractIsDevOnly(c),
-      manifestFile: sr ? toRepoRelative(scopePath, sr) : null,
+      manifestFile,
       // M6p Stage 2: discoveryMethod is "llm_augmentation" for LLM-added
       // components, "manifest" for cdxgen-sourced ones that survived.
       discoveryMethod: (c as CdxComponent & { discoveryMethod?: string }).discoveryMethod ?? "manifest",
       llmEvidence: evidence ? (evidence as unknown as Prisma.InputJsonValue) : undefined,
       occurrences,
       ...(cpe ? { cpe } : {}),
-      // M7: stable identity + diagnostic evidence list for vendored adds.
+      // M7: stable identity primitive for vendored libraries — also the dedup
+      // key in the componentMatch chain.
       ...(identity?.componentRoot ? { componentRoot: identity.componentRoot } : {}),
-      ...(identity?.evidence ? { evidence: identity.evidence as unknown as Prisma.InputJsonValue } : {}),
+      // Identity-shaped evidence (small; renders as "Evidence" in the UI).
+      ...(identityEvidence ? { evidence: identityEvidence as unknown as Prisma.InputJsonValue } : {}),
     });
   }
 

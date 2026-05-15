@@ -578,12 +578,20 @@ model ScopeComponent {
   // the LLM picking different evidence_files for the same library across scans.
   // Null for manifest-tracked components (npm/pypi/etc.) where purl is identity.
   componentRoot   String?   @map("component_root")
-  // Per-evidence locations (repo-relative). Each entry is {path, line?}
-  // where path is a repo-relative file and line is optional (useful for
-  // lockfile-based packages — the line where the dep is declared). The LLM
-  // emits headers, sources, READMEs, CMake files, etc. Diagnostic-only —
-  // does not participate in dedup.
+  // Identity-shaped evidence: WHERE the analyzer concluded this component
+  // is present in the source. Small (~1 entry). Two shapes:
+  //   - Manifest-tracked package: {path: manifest_file, line: <lockfile
+  //     entry line>, snippet: <±3 lines>}.
+  //   - Vendored library: {path: component_root}. No line, no snippet.
+  // The user-facing detail panel renders these with a code preview when
+  // snippet is present. Operator-curated rows (source='manual_override')
+  // are never overwritten by the persist flow.
   evidence        Json      @default("[]") @map("evidence")
+  // Usage locations: WHERE the component is referenced from. Long list of
+  // {path, line?} pulled from sbom_components.occurrences at scan-write
+  // time. Clickable file:line links — no snippets. The scan-page Components
+  // tab renders the same list straight from sbom_components.occurrences.
+  usage           Json      @default("[]") @map("usage")
   // Deprecated: legacy single-file evidence path. Kept for backwards-compat
   // reads against existing rows; new writes populate `evidence` instead.
   evidencePath    String?   @map("evidence_path")

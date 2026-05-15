@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { Prisma, PrismaClient, SbomComponent, ScanFinding } from "@prisma/client";
@@ -10,6 +9,7 @@ import { upsertScaIssueFromDetection } from "./issueService.js";
 import { computeCvss40BaseScore } from "./cvss4.js";
 import { toRepoRelative, toScopeRelative } from "./scopePath.js";
 import { normalizeManifestPath } from "./sbomService.js";
+import { readManifestSnippet } from "./manifestSnippet.js";
 
 const logger = pino({ level: loadConfig().logLevel, name: "osvService" });
 
@@ -84,54 +84,6 @@ function parseCvssScore(scoreOrVector: string): number | null {
  * OSV records sometimes include only one type — most modern GitHub-reviewed
  * advisories only ship CVSS_V4 now, so falling back is essential.
  */
-// ---------------------------------------------------------------------------
-// Manifest snippet (read ±3 lines around the package declaration)
-// ---------------------------------------------------------------------------
-
-const MANIFEST_CONTEXT_LINES = 3;
-
-/**
- * Open the manifest file at scopeDir/manifestPath, find the line that mentions
- * the package name, and return that line plus ±3 surrounding lines. Used by
- * the SCA detail view to mirror SAST's code-context display.
- *
- * Heuristic: the first line containing the package name (quoted or unquoted)
- * is treated as the declaration. For package-lock.json this matches the
- * `"<name>": {` entry; for Cargo.toml it matches `name = "<name>"`; for
- * requirements.txt it matches `<name>==`. Good enough for the common cases.
- */
-async function readManifestSnippet(
-  scopeDir: string,
-  manifestPath: string,
-  packageName: string,
-): Promise<{ line: number | null; snippet: string | null }> {
-  try {
-    const content = await readFile(join(scopeDir, manifestPath), "utf8");
-    const lines = content.split("\n");
-    // Search patterns in priority order: quoted, == (pip), ~= (pip), word-boundary fallback.
-    const patterns = [
-      `"${packageName}"`,
-      `'${packageName}'`,
-      `${packageName}==`,
-      `${packageName}~=`,
-      packageName,
-    ];
-    let matchIdx = -1;
-    for (const p of patterns) {
-      matchIdx = lines.findIndex((l) => l.includes(p));
-      if (matchIdx !== -1) break;
-    }
-    if (matchIdx === -1) return { line: null, snippet: null };
-
-    const from = Math.max(0, matchIdx - MANIFEST_CONTEXT_LINES);
-    const to = Math.min(lines.length, matchIdx + MANIFEST_CONTEXT_LINES + 1);
-    const snippet = lines.slice(from, to).join("\n");
-    return { line: matchIdx + 1, snippet };
-  } catch {
-    return { line: null, snippet: null };
-  }
-}
-
 function pickCvss(entries: OsvSeverityEntry[]): { vector: string | null; score: number | null } {
   const v4 = entries.find((s) => s.type === "CVSS_V4");
   if (v4) return { vector: v4.score, score: parseCvssScore(v4.score) };

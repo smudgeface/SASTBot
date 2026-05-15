@@ -367,10 +367,18 @@ export interface SbomComponent {
   llm_evidence?: LlmEvidence | null;
   /** M7: shallowest directory uniquely owned by this component (dedup identity). */
   component_root?: string | null;
-  /** M7: per-evidence locations (clickable in component panel). Each entry is
-   *  {path, line?} — line is optional (set for lockfile-based packages, null
-   *  for vendored libs). */
-  evidence?: Array<{ path: string; line: number | null }>;
+  /** Identity-shaped evidence — the small list of locations that establish
+   *  this component is present. For manifest-tracked packages, one entry
+   *  per representative manifest with `{path, line, snippet}` (snippet is
+   *  ±3 lines of the lockfile entry). For vendored libraries, one entry
+   *  with `{path: component_root}`. Renders as the "Evidence" section
+   *  in the component detail panel, with a code preview when snippet is set. */
+  evidence?: Array<{ path: string; line?: number | null; snippet?: string | null }>;
+  /** Usage list — where the component is imported / included from. Long
+   *  list of {path, line?}, rendered as clickable file:line links. The
+   *  same data as `occurrences` for scan-page rows; both are populated
+   *  identically to keep call sites symmetric. */
+  usage?: ComponentOccurrence[];
 }
 
 export interface ScanFinding {

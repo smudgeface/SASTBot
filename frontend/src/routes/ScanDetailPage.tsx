@@ -392,6 +392,40 @@ function ScanComponentRow({
         <TableRow className="bg-muted/20 hover:bg-muted/20">
           <TableCell colSpan={6} className="py-4 px-6">
             <div className="space-y-4 text-sm">
+              {/* Evidence — identity proof. Small list ({lockfile,line,snippet}
+                  for manifest-tracked; {component_root} for vendored). */}
+              {(component.evidence && component.evidence.length > 0) || component.component_root ? (
+                <div>
+                  <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">Evidence</p>
+                  {component.component_root && (
+                    <p className="font-mono text-xs mb-1">
+                      <span className="text-muted-foreground mr-1">root:</span>
+                      <FileLink template={sourceUrlTemplate} file={component.component_root}>
+                        {component.component_root}
+                      </FileLink>
+                    </p>
+                  )}
+                  {component.evidence && component.evidence.length > 0 && (
+                    <div className="space-y-2">
+                      {component.evidence.map((e, i) => (
+                        <div key={`${e.path}-${i}`}>
+                          <p className="font-mono text-xs">
+                            <FileLink template={sourceUrlTemplate} file={e.path} line={e.line ?? undefined}>
+                              {e.path}{e.line != null ? `:${e.line}` : ""}
+                            </FileLink>
+                          </p>
+                          {e.snippet && (
+                            <pre className="text-[10px] whitespace-pre-wrap bg-muted rounded px-2 py-1 mt-1 overflow-x-auto">
+                              {e.snippet}
+                            </pre>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
               {/* License details */}
               {component.licenses.length > 0 && (
                 <div>
@@ -404,11 +438,11 @@ function ScanComponentRow({
                 </div>
               )}
 
-              {/* Found in */}
+              {/* Usage — where the component is imported / included from. */}
               {occurrences.length > 0 && (
                 <div>
                   <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">
-                    Found in ({occurrences.length} location{occurrences.length !== 1 ? "s" : ""})
+                    Usage ({occurrences.length} location{occurrences.length !== 1 ? "s" : ""})
                   </p>
                   <ol className="space-y-0.5 font-mono text-xs">
                     {occurrences.slice(0, 15).map((occ, i) => (
@@ -425,7 +459,7 @@ function ScanComponentRow({
                 </div>
               )}
 
-              {/* LLM augmentation evidence */}
+              {/* LLM augmentation rationale (one-sentence "why this is here"). */}
               {component.llm_evidence && (
                 <div>
                   <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">LLM augmentation</p>

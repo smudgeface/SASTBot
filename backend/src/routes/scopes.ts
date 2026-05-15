@@ -193,12 +193,26 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         const repo = scope.repo as { name: string; defaultBranch: string };
 
         const TERMINAL = ["suppressed", "false_positive", "fixed"] as string[];
+        // Mirror the SCA/SAST tab default filter: only count issues last seen
+        // in the latest completed scan or any in-flight scan. Without this,
+        // SAST stale issues (lifecycle never auto-resolved because there's
+        // no SCA-style auto-fix sweep for SAST) inflate the top-card count
+        // while the tab default filter hides them — the numbers disagree.
+        const activeRun = activeByScope.get(scope.id);
+        const validScanIds = scope.lastScanRunId
+          ? activeRun ? [scope.lastScanRunId, activeRun.id] : [scope.lastScanRunId]
+          : null;
+        const lastSeenFilter = validScanIds
+          ? { lastSeenScanRunId: validScanIds.length === 1 ? validScanIds[0] : { in: validScanIds } }
+          : {};
         const activeWhere = (sev: string) => ({
           scopeId: scope.id, dismissedStatus: { notIn: TERMINAL }, latestSeverity: sev,
+          ...lastSeenFilter,
         });
         const activeSastWhere = (sev: string) => ({
           scopeId: scope.id, latestSeverity: sev,
           triageStatus: { notIn: TERMINAL },
+          ...lastSeenFilter,
         });
         const combined = async (sev: string) => {
           const [sca, sast] = await Promise.all([
@@ -219,15 +233,17 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           scaPendingCount,
         ] = await Promise.all([
           prisma.sastIssue.count({
-            where: { scopeId: scope.id, triageStatus: { notIn: TERMINAL } },
+            where: { scopeId: scope.id, triageStatus: { notIn: TERMINAL }, ...lastSeenFilter },
           }),
-          prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: { notIn: TERMINAL } } }),
+          prisma.scaIssue.count({
+            where: { scopeId: scope.id, dismissedStatus: { notIn: TERMINAL }, ...lastSeenFilter },
+          }),
           combined("critical"),
           combined("high"),
           combined("medium"),
           combined("low"),
-          prisma.sastIssue.count({ where: { scopeId: scope.id, triageStatus: "pending" } }),
-          prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "pending" } }),
+          prisma.sastIssue.count({ where: { scopeId: scope.id, triageStatus: "pending", ...lastSeenFilter } }),
+          prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "pending", ...lastSeenFilter } }),
         ]);
         const pendingTriageCount = sastPendingCount + scaPendingCount;
 
@@ -297,12 +313,31 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       const lastScanRunId = scope.lastScanRunId;
 
       const TERMINAL_D = ["suppressed", "false_positive", "fixed"] as string[];
+      // Mirror the SCA/SAST tab default filter — see /api/scopes for the
+      // rationale. The activeRun lookup must come first so the count queries
+      // can include in-flight scan IDs in the lastSeenScanRunId filter.
+      const activeRun = await prisma.scanRun.findFirst({
+        where: { scopeId: scope.id, status: { in: ["pending", "running"] } },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true, status: true, startedAt: true,
+          currentPhase: true, phaseProgress: true,
+        },
+      });
+      const validScanIds = lastScanRunId
+        ? activeRun ? [lastScanRunId, activeRun.id] : [lastScanRunId]
+        : null;
+      const lastSeenFilter = validScanIds
+        ? { lastSeenScanRunId: validScanIds.length === 1 ? validScanIds[0] : { in: validScanIds } }
+        : {};
       const activeWhereD = (sev: string) => ({
         scopeId: scope.id, dismissedStatus: { notIn: TERMINAL_D }, latestSeverity: sev,
+        ...lastSeenFilter,
       });
       const activeSastWhereD = (sev: string) => ({
         scopeId: scope.id, latestSeverity: sev,
         triageStatus: { notIn: TERMINAL_D },
+        ...lastSeenFilter,
       });
       const combinedD = async (sev: string) => {
         const [sca, sast] = await Promise.all([
@@ -323,32 +358,25 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         scaPendingCountD,
         resolvedSastCount,
         resolvedScaCount,
-        activeRun,
       ] = await Promise.all([
         prisma.sastIssue.count({
-          where: { scopeId: scope.id, triageStatus: { notIn: TERMINAL_D } },
+          where: { scopeId: scope.id, triageStatus: { notIn: TERMINAL_D }, ...lastSeenFilter },
         }),
-        prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: { notIn: TERMINAL_D } } }),
+        prisma.scaIssue.count({
+          where: { scopeId: scope.id, dismissedStatus: { notIn: TERMINAL_D }, ...lastSeenFilter },
+        }),
         combinedD("critical"),
         combinedD("high"),
         combinedD("medium"),
         combinedD("low"),
-        prisma.sastIssue.count({ where: { scopeId: scope.id, triageStatus: "pending" } }),
-        prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "pending" } }),
+        prisma.sastIssue.count({ where: { scopeId: scope.id, triageStatus: "pending", ...lastSeenFilter } }),
+        prisma.scaIssue.count({ where: { scopeId: scope.id, dismissedStatus: "pending", ...lastSeenFilter } }),
         lastScanRunId
           ? prisma.sastIssue.count({ where: { scopeId: scope.id, lastSeenScanRunId: { not: lastScanRunId } } })
           : 0,
         lastScanRunId
           ? prisma.scaIssue.count({ where: { scopeId: scope.id, lastSeenScanRunId: { not: lastScanRunId } } })
           : 0,
-        prisma.scanRun.findFirst({
-          where: { scopeId: scope.id, status: { in: ["pending", "running"] } },
-          orderBy: { createdAt: "desc" },
-          select: {
-            id: true, status: true, startedAt: true,
-            currentPhase: true, phaseProgress: true,
-          },
-        }),
       ]);
       const pendingTriageCount = sastPendingCountD + scaPendingCountD;
 
@@ -663,7 +691,11 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // M6q: derive linked_issue_ids in a single batched query per endpoint call.
-      // SCA: match by scopeId + packageName + lastSeenScanRunId = scope.lastScanRunId.
+      // SCA: match by scopeId + (packageName, latestPackageVersion). Without
+      //   the version key, two scope_component rows for distinct versions of
+      //   the same package (e.g. core-js@2.5.6 and core-js@3.6.0) merge into
+      //   one issue list. A version-less component row falls back to
+      //   name-only matching against version-less issues.
       // SAST: match by scopeId + reachableCallSites referencing the component's purl
       //       (narrow set; most components will have no SAST links).
       const componentNames = comps.map((c) => c.name);
@@ -673,16 +705,21 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
               scopeId: scope.id,
               packageName: { in: componentNames },
             },
-            select: { id: true, packageName: true },
+            select: { id: true, packageName: true, latestPackageVersion: true },
           })
         : [];
 
-      // Build map: componentName → sca issue ids
-      const scaByName = new Map<string, string[]>();
+      // Build map: (componentName, version) → sca issue ids. Issues without
+      // a recorded version fall into the `null` bucket so a version-less
+      // component row still matches them.
+      const scaKey = (name: string, version: string | null): string =>
+        `${name} ${version ?? ""}`;
+      const scaByKey = new Map<string, string[]>();
       for (const issue of scaIssues) {
-        const existing = scaByName.get(issue.packageName) ?? [];
+        const k = scaKey(issue.packageName, issue.latestPackageVersion);
+        const existing = scaByKey.get(k) ?? [];
         existing.push(issue.id);
-        scaByName.set(issue.packageName, existing);
+        scaByKey.set(k, existing);
       }
 
       // Per-scan `occurrences` is no longer fetched: legacy data was lifted
@@ -694,7 +731,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         items: comps.map((c) => ({
           ...scopeComponentToOut(c),
           linked_issue_ids: {
-            sca: scaByName.get(c.name) ?? [],
+            sca: scaByKey.get(scaKey(c.name, c.version)) ?? [],
             sast: [], // SAST-to-component links are rare; populated in future if needed
           },
         })),

@@ -281,6 +281,7 @@ export function scopeComponentToOut(
     cpe: string | null;
     componentRoot: string | null;
     evidence: unknown;
+    usage: unknown;
     lastSeenScanRunId: string | null;
   },
 ): SbomComponentOut {
@@ -295,8 +296,10 @@ export function scopeComponentToOut(
       };
     }
   }
-  // Parse evidence jsonb into {path, line?}[] for the API response.
+  // Identity-shaped evidence (small list, with optional snippet for manifest hits).
   const evidence = parseEvidence(c.evidence);
+  // Usage list — same {path, line?} shape as occurrences on the scan side.
+  const usage = parseOccurrenceList(c.usage);
   return {
     id: c.id,
     // scan_run_id is the most-recent scan that observed this component, used
@@ -313,7 +316,12 @@ export function scopeComponentToOut(
     is_dev_only: c.isDevOnly,
     manifest_file: c.manifestFile ?? null,
     discovery_method: c.discoveryMethod ?? null,
-    occurrences: [],
+    // Backwards-compat: legacy callers still read `occurrences`. The scope
+    // page now exposes the same data under `usage`; populate both with
+    // identical content from the `usage` column so old clients don't
+    // regress mid-rollout.
+    occurrences: usage,
+    usage,
     ...(llmEvidence ? { llm_evidence: llmEvidence } : {}),
     component_root: c.componentRoot ?? null,
     evidence,
@@ -321,12 +329,39 @@ export function scopeComponentToOut(
 }
 
 /**
- * Normalize a jsonb `evidence` column value into the API's
- * `{ path: string, line: number | null }[]` shape. Defensive about legacy
- * data: each entry may be either a bare string (from a legacy row) or an
- * object; non-object/non-string entries are skipped.
+ * Normalize a jsonb identity `evidence` column value into
+ * `{path, line?, snippet?}[]` for the API. Each entry may be a bare
+ * string (legacy rows) or an object; non-object/non-string entries are
+ * skipped. Snippet is preserved verbatim when present.
  */
-function parseEvidence(value: unknown): Array<{ path: string; line: number | null }> {
+function parseEvidence(
+  value: unknown,
+): Array<{ path: string; line: number | null; snippet: string | null }> {
+  if (!Array.isArray(value)) return [];
+  const out: Array<{ path: string; line: number | null; snippet: string | null }> = [];
+  for (const e of value as unknown[]) {
+    if (typeof e === "string" && e.trim() !== "") {
+      out.push({ path: e, line: null, snippet: null });
+    } else if (e !== null && typeof e === "object") {
+      const r = e as Record<string, unknown>;
+      const path = typeof r.path === "string" ? r.path : "";
+      if (!path) continue;
+      const line = typeof r.line === "number" ? r.line : null;
+      const snippet = typeof r.snippet === "string" ? r.snippet : null;
+      out.push({ path, line, snippet });
+    }
+  }
+  return out;
+}
+
+/**
+ * Normalize a jsonb usage/occurrences column value into `{path, line?}[]`.
+ * Symmetric helper to parseEvidence but without the snippet field —
+ * usage entries are clickable links, not snippet previews.
+ */
+function parseOccurrenceList(
+  value: unknown,
+): Array<{ path: string; line: number | null }> {
   if (!Array.isArray(value)) return [];
   const out: Array<{ path: string; line: number | null }> = [];
   for (const e of value as unknown[]) {
@@ -384,6 +419,10 @@ export function sbomComponentToOut(c: SbomComponent): SbomComponentOut {
     manifest_file: c.manifestFile ?? null,
     discovery_method: c.discoveryMethod ?? null,
     occurrences,
+    // Mirror occurrences under `usage` so scope-page and scan-page consumers
+    // share one field name on the wire — even though sbom_components stores
+    // it as `occurrences` and scope_components stores it as `usage`.
+    usage: occurrences,
     ...(llmEvidence ? { llm_evidence: llmEvidence } : {}),
     component_root: (c as unknown as { componentRoot?: string | null }).componentRoot ?? null,
     evidence: parseEvidence((c as unknown as { evidence?: unknown }).evidence),

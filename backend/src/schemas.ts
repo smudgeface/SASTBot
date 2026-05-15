@@ -462,17 +462,24 @@ export const SbomComponentOutSchema = z.object({
   llm_evidence: LlmEvidenceSchema.optional(),
   /** M7: shallowest directory uniquely owned by this component (dedup identity). */
   component_root: z.string().nullable().optional(),
-  /** M7: per-evidence locations (diagnostic, clickable in UI). Each entry is
-   *  {path, line?} where line is optional (lockfile-line for npm/pypi, null
-   *  for vendored libs). */
+  /** Identity-shaped evidence: WHERE the analyzer concluded the component
+   *  is present. Small list (~1 entry).
+   *    - Manifest-tracked: {path: <lockfile>, line, snippet} — UI renders a
+   *      code-context preview.
+   *    - Vendored: {path: <component_root>} — no line or snippet.
+   *  Operator-curated rows (source='manual_override') own these values. */
   evidence: z
     .array(
       z.object({
         path: z.string(),
         line: z.number().int().nullable().optional(),
+        snippet: z.string().nullable().optional(),
       }),
     )
     .optional(),
+  /** Usage locations: WHERE the component is imported/included from. Long
+   *  list of {path, line?} — clickable file:line, no snippets needed. */
+  usage: z.array(ComponentOccurrenceSchema).optional(),
 });
 export type SbomComponentOut = z.infer<typeof SbomComponentOutSchema>;
 

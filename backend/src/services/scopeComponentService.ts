@@ -109,10 +109,29 @@ export async function persistScanComponentsToScopeState(
     }
 
     const componentRoot = (c as unknown as { componentRoot?: string | null }).componentRoot ?? null;
-    // Evidence is jsonb on the row — pull it as unknown and coerce to a JSON
-    // string for the SQL ::jsonb cast below. Falls back to an empty array.
+    // Evidence (identity) — small jsonb array of {path, line?, snippet?}.
+    // Lifted directly from sbom_components.evidence which persistAugmentedComponents
+    // now populates for both LLM-vendored (componentRoot only) and
+    // cdxgen-survivor (manifest_file + line + snippet) rows.
     const rawEvidence = (c as unknown as { evidence?: unknown }).evidence;
-    const evidenceJson = Array.isArray(rawEvidence) ? JSON.stringify(rawEvidence) : "[]";
+    const evidenceArr: unknown[] = Array.isArray(rawEvidence) ? rawEvidence : [];
+    const evidenceJson = JSON.stringify(evidenceArr);
+    // Usage — long jsonb array of {path, line?} lifted from
+    // sbom_components.occurrences. The scope-page detail panel renders this
+    // as the "Usage" list (clickable file:line links).
+    const rawOccurrences = (c as unknown as { occurrences?: unknown }).occurrences;
+    const usageArr: unknown[] = Array.isArray(rawOccurrences) ? rawOccurrences : [];
+    const usageJson = JSON.stringify(usageArr);
+    // True when at least one incoming evidence entry has either a numeric
+    // line or a non-empty snippet — gates the "refresh existing identity
+    // when richer data arrives" branch of the upsert CASE so we don't churn
+    // rows where the new payload is no richer than what's already there.
+    const incomingEvidenceIsRicher = evidenceArr.some(
+      (e) => e !== null && typeof e === "object" &&
+        (typeof (e as { line?: unknown }).line === "number" ||
+         (typeof (e as { snippet?: unknown }).snippet === "string" &&
+          ((e as { snippet?: string }).snippet?.length ?? 0) > 0)),
+    );
     const incomingCpe = (c as unknown as { cpe?: string | null }).cpe ?? null;
     const incoming: ComponentIdentity = {
       name: c.name,
@@ -144,9 +163,21 @@ export async function persistScanComponentsToScopeState(
             updated_at            = now(),
             component_root = COALESCE(component_root, $3),
             evidence = CASE
+              WHEN source = 'manual_override' THEN evidence
               WHEN evidence IS NULL OR jsonb_array_length(evidence) = 0
                 THEN $4::jsonb
+              WHEN $5::boolean
+                AND NOT EXISTS (
+                  SELECT 1 FROM jsonb_array_elements(evidence) AS e
+                  WHERE (e->>'line') IS NOT NULL
+                     OR ((e->>'snippet') IS NOT NULL AND length(e->>'snippet') > 0)
+                )
+                THEN $4::jsonb
               ELSE evidence
+            END,
+            usage = CASE
+              WHEN source = 'manual_override' THEN usage
+              ELSE $6::jsonb
             END,
             dismissed_status = CASE
               WHEN dismissed_status = 'removed' THEN 'active'
@@ -165,6 +196,8 @@ export async function persistScanComponentsToScopeState(
           scopeComponentId,
           componentRoot ?? null,
           evidenceJson,
+          incomingEvidenceIsRicher,
+          usageJson,
         );
         upserted++;
         // Strengthen the cached identity so subsequent incoming components
@@ -186,7 +219,7 @@ export async function persistScanComponentsToScopeState(
             licenses, component_type, scope, is_dev_only,
             manifest_file, discovery_method, evidence_line,
             evidence_path, component_root, evidence,
-            llm_evidence, cpe,
+            llm_evidence, cpe, usage,
             source, dismissed_status,
             first_seen_scan_run_id, last_seen_scan_run_id, last_seen_at,
             created_at, updated_at
@@ -197,7 +230,7 @@ export async function persistScanComponentsToScopeState(
             $7::text[], $8, $9, $10,
             $11, $12, $13,
             $14, $15, $16::jsonb,
-            $17::jsonb, $18,
+            $17::jsonb, $18, $21::jsonb,
             'scan', 'active',
             $19::uuid, $19::uuid, now(),
             now(), now()
@@ -208,9 +241,21 @@ export async function persistScanComponentsToScopeState(
                 updated_at            = now(),
                 component_root        = COALESCE(scope_components.component_root, EXCLUDED.component_root),
                 evidence = CASE
+                  WHEN scope_components.source = 'manual_override' THEN scope_components.evidence
                   WHEN scope_components.evidence IS NULL OR jsonb_array_length(scope_components.evidence) = 0
                     THEN EXCLUDED.evidence
+                  WHEN $20::boolean
+                    AND NOT EXISTS (
+                      SELECT 1 FROM jsonb_array_elements(scope_components.evidence) AS e
+                      WHERE (e->>'line') IS NOT NULL
+                         OR ((e->>'snippet') IS NOT NULL AND length(e->>'snippet') > 0)
+                    )
+                    THEN EXCLUDED.evidence
                   ELSE scope_components.evidence
+                END,
+                usage = CASE
+                  WHEN scope_components.source = 'manual_override' THEN scope_components.usage
+                  ELSE EXCLUDED.usage
                 END,
                 dismissed_status = CASE
                   WHEN scope_components.dismissed_status = 'removed' THEN 'active'
@@ -243,6 +288,8 @@ export async function persistScanComponentsToScopeState(
           c.llmEvidence !== null ? JSON.stringify(c.llmEvidence) : null,
           incomingCpe,
           scanRunId,
+          incomingEvidenceIsRicher,
+          usageJson,
         );
 
         upserted++;

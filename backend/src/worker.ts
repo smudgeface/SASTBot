@@ -900,6 +900,83 @@ backfillSbomManifestFiles()
     logger.warn({ err }, "[worker] sbom manifest_file → SCA origin backfill chain failed");
   });
 
+// Split evidence/usage refactor: fill in line + snippet on scope_components
+// rows whose evidence was written as path-only by the split-evidence-usage
+// migration. Reads the lockfile from the retained repo cache and uses
+// readManifestSnippet to find the line where the package is declared.
+// Skips manual_override rows (operators own those) and rows whose evidence
+// already carries a line. Idempotent.
+async function backfillScopeComponentEvidenceSnippets(): Promise<void> {
+  const { repoCachePath } = await import("./services/repoCache.js");
+  const { stat } = await import("node:fs/promises");
+  const { readManifestSnippet } = await import("./services/manifestSnippet.js");
+
+  const scopes = await prisma.scanScope.findMany({
+    where: { repo: { retainClone: true } },
+    select: { id: true, repoId: true, path: true },
+  });
+  let refreshed = 0;
+  for (const scope of scopes) {
+    const cacheDir = repoCachePath(scope.repoId);
+    try { await stat(cacheDir); } catch { continue; }
+    const scopeDir = scope.path === "/" || scope.path === "" ? cacheDir : join(cacheDir, scope.path);
+
+    // Pull rows whose evidence is a non-empty array with no line yet, and
+    // whose manifest_file is set (i.e. manifest-tracked packages where we
+    // can resolve a lockfile line). `manual_override` rows are operator-
+    // curated — skip them so we don't trample an explicit edit.
+    const rows = await prisma.$queryRawUnsafe<Array<{
+      id: string;
+      name: string;
+      manifest_file: string | null;
+      evidence: unknown;
+    }>>(
+      `SELECT id, name, manifest_file, evidence
+       FROM scope_components
+       WHERE scope_id = $1::uuid
+         AND source <> 'manual_override'
+         AND manifest_file IS NOT NULL
+         AND jsonb_typeof(evidence) = 'array'
+         AND jsonb_array_length(evidence) > 0
+         AND NOT EXISTS (
+           SELECT 1 FROM jsonb_array_elements(evidence) AS e
+           WHERE (e->>'line') IS NOT NULL
+              OR ((e->>'snippet') IS NOT NULL AND length(e->>'snippet') > 0)
+         )`,
+      scope.id,
+    );
+
+    for (const row of rows) {
+      if (!row.manifest_file) continue;
+      // manifest_file is repo-rooted; readManifestSnippet wants scope-relative.
+      const prefix = scope.path === "/" || scope.path === "" ? "" : scope.path.replace(/^\//, "").replace(/\/$/, "") + "/";
+      const scopeRel = prefix && row.manifest_file.startsWith(prefix)
+        ? row.manifest_file.slice(prefix.length)
+        : row.manifest_file;
+      const ms = await readManifestSnippet(scopeDir, scopeRel, row.name);
+      if (ms.line == null && ms.snippet == null) continue;
+      const enriched = [{
+        path: row.manifest_file,
+        ...(ms.line != null ? { line: ms.line } : {}),
+        ...(ms.snippet != null ? { snippet: ms.snippet } : {}),
+      }];
+      await prisma.$executeRawUnsafe(
+        `UPDATE scope_components SET evidence = $1::jsonb, updated_at = now() WHERE id = $2::uuid`,
+        JSON.stringify(enriched),
+        row.id,
+      );
+      refreshed++;
+    }
+  }
+  if (refreshed > 0) {
+    logger.info({ refreshed }, "[worker] backfilled scope_components evidence (line + snippet)");
+  }
+}
+
+backfillScopeComponentEvidenceSnippets().catch((err) => {
+  logger.warn({ err }, "[worker] scope-component evidence snippet backfill failed");
+});
+
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {

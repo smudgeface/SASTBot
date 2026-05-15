@@ -1561,35 +1561,65 @@ function ScopeComponentRow({
                   </div>
                 ) : (
                   <>
-                    {component.component_root ? (
+                    {component.component_root && (
                       <p className="font-mono text-xs mb-1">
                         <span className="text-muted-foreground mr-1">root:</span>
                         <FileLink template={sourceUrlTemplate} file={component.component_root}>
                           {component.component_root}
                         </FileLink>
                       </p>
-                    ) : (
-                      <p className="text-xs text-muted-foreground italic mb-1">root: (not set)</p>
                     )}
                     {component.evidence && component.evidence.length > 0 ? (
-                      <ol className="space-y-0.5 list-decimal list-inside font-mono text-xs">
-                        {component.evidence.slice(0, 15).map((e, i) => (
-                          <li key={`${e.path}-${i}`}>
-                            <FileLink template={sourceUrlTemplate} file={e.path} line={e.line ?? undefined}>
-                              {e.path}{e.line != null ? `:${e.line}` : ""}
-                            </FileLink>
-                          </li>
+                      <div className="space-y-2">
+                        {component.evidence.map((e, i) => (
+                          <div key={`${e.path}-${i}`}>
+                            <p className="font-mono text-xs">
+                              <FileLink template={sourceUrlTemplate} file={e.path} line={e.line ?? undefined}>
+                                {e.path}{e.line != null ? `:${e.line}` : ""}
+                              </FileLink>
+                            </p>
+                            {e.snippet && (
+                              <pre className="text-[10px] whitespace-pre-wrap bg-muted rounded px-2 py-1 mt-1 overflow-x-auto">
+                                {e.snippet}
+                              </pre>
+                            )}
+                          </div>
                         ))}
-                        {component.evidence.length > 15 && (
-                          <li className="text-muted-foreground italic list-none">…and {component.evidence.length - 15} more</li>
-                        )}
-                      </ol>
-                    ) : (
-                      <p className="text-xs text-muted-foreground italic">no evidence files</p>
-                    )}
+                      </div>
+                    ) : !component.component_root ? (
+                      <p className="text-xs text-muted-foreground italic">no evidence</p>
+                    ) : null}
                   </>
                 )}
               </div>
+
+              {/* Usage — where the component is imported / included from.
+                  Long list of clickable file:line links; no snippets. Empty
+                  for components that the LLM added without any reference
+                  sites (vendored libs that ship as headers/binaries). */}
+              {(() => {
+                const usage = component.usage ?? component.occurrences ?? [];
+                if (usage.length === 0) return null;
+                return (
+                  <div>
+                    <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                      Usage ({usage.length} location{usage.length !== 1 ? "s" : ""})
+                    </p>
+                    <ol className="space-y-0.5 font-mono text-xs">
+                      {usage.slice(0, 15).map((u, i) => (
+                        <li key={`${u.path}-${i}`} className="text-muted-foreground">
+                          <FileLink template={sourceUrlTemplate} file={u.path} line={u.line ?? undefined}>
+                            {u.path}{u.line != null ? `:${u.line}` : ""}
+                          </FileLink>
+                        </li>
+                      ))}
+                      {usage.length > 15 && (
+                        <li className="text-muted-foreground italic">…and {usage.length - 15} more</li>
+                      )}
+                    </ol>
+                  </div>
+                );
+              })()}
 
               {/* License details */}
               {component.licenses.length > 0 && (
