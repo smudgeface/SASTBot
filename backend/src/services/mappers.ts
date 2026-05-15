@@ -541,6 +541,8 @@ function toSastSeverity(value: string): SastSeverity {
 const ALLOWED_TRIAGE_STATUS: ReadonlyArray<SastTriageStatus> = [
   "pending",
   "confirmed",
+  "planned",        // linked to a Jira ticket; sub-state from jira.statusCategory
+  "fixed",          // issue no longer detected in latest scan (auto-set by worker)
   "false_positive",
   "suppressed",
   "error",
