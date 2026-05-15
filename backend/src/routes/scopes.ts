@@ -464,18 +464,29 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      // By default hide issues not seen in the latest scan. Include any
-      // in-progress scan_runs as well so that issues just re-detected by an
-      // active scan (which bumps their lastSeenScanRunId to that run's id)
-      // remain visible mid-scan instead of vanishing from the tab until the
-      // scope's lastScanRunId advances at finalize.
-      if (!include_resolved && lastScanRunId && !seen_since_last_scan) {
-        const inFlight = await prisma.scanRun.findMany({
-          where: { scopeId: req.params.id, status: { in: ["pending", "running"] } },
-          select: { id: true },
-        });
-        const validIds = [lastScanRunId, ...inFlight.map((r) => r.id)];
-        where.lastSeenScanRunId = validIds.length === 1 ? validIds[0] : { in: validIds };
+      // Default tab filter is "open issues in the latest scan":
+      //   1. lastSeenScanRunId IN [latest, ...inFlight] — hide stale rows
+      //      from prior scans (with any active scan included so mid-scan
+      //      re-detections don't vanish until the run finalizes).
+      //   2. triageStatus NOT IN [fixed, suppressed, false_positive] —
+      //      hide rows the operator has already resolved.
+      // Both are gated on !include_resolved so the toggle's label matches
+      // its effect; an explicit `triage_status` filter (operator clicked
+      // "Fixed"/"Won't fix"/"Invalid") suppresses #2 so they can still see
+      // the curated subset. Without #2 the tab pill count diverged from
+      // the top-card "Open SCA/SAST" aggregate, which uses the same gate.
+      if (!include_resolved) {
+        if (lastScanRunId && !seen_since_last_scan) {
+          const inFlight = await prisma.scanRun.findMany({
+            where: { scopeId: req.params.id, status: { in: ["pending", "running"] } },
+            select: { id: true },
+          });
+          const validIds = [lastScanRunId, ...inFlight.map((r) => r.id)];
+          where.lastSeenScanRunId = validIds.length === 1 ? validIds[0] : { in: validIds };
+        }
+        if (!triage_status?.length) {
+          where.triageStatus = { notIn: ["suppressed", "false_positive", "fixed"] };
+        }
       }
 
       const skip = (page - 1) * page_size;
@@ -553,18 +564,27 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      // By default hide issues not seen in the latest scan. Include any
-      // in-progress scan_runs as well so that issues just re-detected by an
-      // active scan (which bumps their lastSeenScanRunId to that run's id)
-      // remain visible mid-scan instead of vanishing from the tab until the
-      // scope's lastScanRunId advances at finalize.
-      if (!include_resolved && lastScanRunId && !seen_since_last_scan) {
-        const inFlight = await prisma.scanRun.findMany({
-          where: { scopeId: req.params.id, status: { in: ["pending", "running"] } },
-          select: { id: true },
-        });
-        const validIds = [lastScanRunId, ...inFlight.map((r) => r.id)];
-        where.lastSeenScanRunId = validIds.length === 1 ? validIds[0] : { in: validIds };
+      // Default tab filter is "open issues in the latest scan":
+      //   1. lastSeenScanRunId IN [latest, ...inFlight] — hide stale rows
+      //      from prior scans.
+      //   2. dismissedStatus NOT IN [fixed, suppressed, false_positive] —
+      //      hide rows the operator has already resolved.
+      // Both gated on !include_resolved. An explicit dismissed_status(es)
+      // filter (operator clicked "Fixed"/"Won't fix"/"Invalid") suppresses
+      // #2 so the curated subset still works. Keeps the tab pill aligned
+      // with the top-card aggregate, which uses the same gate.
+      if (!include_resolved) {
+        if (lastScanRunId && !seen_since_last_scan) {
+          const inFlight = await prisma.scanRun.findMany({
+            where: { scopeId: req.params.id, status: { in: ["pending", "running"] } },
+            select: { id: true },
+          });
+          const validIds = [lastScanRunId, ...inFlight.map((r) => r.id)];
+          where.lastSeenScanRunId = validIds.length === 1 ? validIds[0] : { in: validIds };
+        }
+        if (!dismissed_statuses?.length && !dismissed_status) {
+          where.dismissedStatus = { notIn: ["suppressed", "false_positive", "fixed"] };
+        }
       }
 
       // Always compute dev/runtime split counts (unaffected by exclude_dev_only filter).
