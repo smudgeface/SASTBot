@@ -258,20 +258,29 @@ export async function persistScanComponentsToScopeState(
     try {
       let scopeComponentId: string | null = null;
 
-      // Primary identity: evidence_path when present. The LLM picks a slightly
-      // different canonical name for the same vendored library each run
-      // ("Thorlabs SDK" / "thorlabs-sdk" / "thorlabs-motion-control"), so
-      // matching on (scope_id, name, version, purl) would let those name
-      // variants accumulate as separate rows. The vendored library lives at
-      // one specific path inside extern/ — that path is the stable identity.
-      // When an existing row matches, update its last-seen markers but
-      // preserve the existing name (first-seen wins, stable for operator
-      // memory). Bad LLM names get cleaned up via a future manual rename UI.
-      if (evidencePath) {
+      // Primary identity: evidence_path when present, ONLY for generic-ecosystem
+      // (vendored C/C++) components. The LLM picks a slightly different
+      // canonical name for the same vendored library each run ("Thorlabs SDK"
+      // / "thorlabs-sdk" / "thorlabs-motion-control"), so matching on
+      // (scope_id, name, version, purl) would let those name variants
+      // accumulate as separate rows. The vendored library lives at one
+      // specific path inside extern/ — that path is the stable identity.
+      //
+      // Gated on ecosystem = 'generic' because manifest-tracked ecosystems
+      // (npm, maven, pypi, nuget) all share their evidence_path = the lockfile,
+      // so path-based identity would falsely collapse legitimately distinct
+      // packages. For those ecosystems, the (scope_id, name, version, purl)
+      // fallback below is the correct identity. The matching DB-level
+      // partial unique index is also restricted to ecosystem = 'generic'
+      // (see migration 20260515001100_restrict_evidence_path_index_to_generic).
+      const incomingEcosystem = c.ecosystem ?? null;
+      const isGenericEcosystem = incomingEcosystem === "generic" || incomingEcosystem === null;
+      if (evidencePath && isGenericEcosystem) {
         const matched = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
           `SELECT id FROM scope_components
            WHERE scope_id = $1::uuid
              AND evidence_path = $2
+             AND (ecosystem = 'generic' OR ecosystem IS NULL)
            LIMIT 1`,
           scopeId,
           evidencePath,
