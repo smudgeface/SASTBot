@@ -1425,3 +1425,145 @@ SBOM mismatch. All shipped as their own commits.
   candidate work for a future milestone.
 
 
+## M7 — deterministic component dedup, scope_components as durable truth, evidence with line numbers (2026-05-15)
+
+Component-identity refactor closing a long tail of dup bugs and giving
+operators direct edit/delete control over the scope inventory. Single
+all-day session; committed as `c5005f8`.
+
+### What shipped
+
+**Identity & dedup**
+
+- **`componentMatch.ts` — 7-tier deterministic chain.** Each tier is a
+  progressively-tolerant identity predicate: (1) component_root exact
+  equality, (2) component_root prefix containment, (3) CPE exact, (4) CPE
+  vendor+product (version-agnostic), (5) PURL exact, (6) normalized name
+  + version (lowercase + strip `[-_\s]` + drop `lib` prefix — tolerates
+  LLM naming drift across scans), (7) manifest_file + name. First match
+  wins. Used in both `applySbomAugmentation` (intra-scan dedup against
+  cdxgen survivors AND prior LLM adds) and
+  `persistScanComponentsToScopeState` (vs DB).
+- **`component_root` field** — the shallowest repo-relative directory
+  exclusively owned by an upstream library (e.g. `extern/Xenomai`, or
+  `extern/Nerian/libnvshared` when sibling libs share a parent). LLM
+  emits it on every `add` record. Stable across scans even when the LLM
+  picks different specific evidence files for the same library.
+- **`evidence` jsonb of `{path, line?}`** replaces the flat `evidence_paths`
+  text[]. Line numbers were always available on `sbom_components.occurrences`
+  but discarded by the M7 string-array shape. Restoring them makes lockfile
+  links (`package-lock.json:1234`) clickable through to the exact line via
+  the existing `$LINE` URL template.
+
+**Operator UX**
+
+- **Trashcan delete** on each row in the Components tab.
+  `DELETE /api/scopes/:id/components/:componentId` hard-deletes; the next
+  scan re-emits real components and the match chain collapses them.
+  Confirm dialog kept to one short line ("The next scan may re-add it if
+  it's found in the repo.") — no jargon.
+- **Inline edit** (pencil icon in the Evidence section header).
+  `PATCH /api/scopes/:id/components/:componentId` accepts name,
+  component_root, evidence (textarea where each line is a path with an
+  optional `:N` suffix → parsed into `{path, line}`). Marks the row
+  `source='manual_override'` so future scans don't overwrite curated values.
+  Rename collisions surface as 400 with a useful message.
+- **Component detail panel** reordered: Evidence section now sits at the
+  top above LLM augmentation.
+
+**Data flow correctness**
+
+- **Scope page Components tab now reads `scope_components`, not
+  `sbom_components`.** This was the missing piece of the M7 architecture
+  — the table that the trashcan delete + LLM merge + inline edit all
+  mutate is now the table the UI displays. Manual edits propagate
+  immediately; deleted rows actually disappear from the list. The
+  scan-detail page (`/scans/:id`) is unchanged — it still reads its own
+  `sbom_components` for per-scan audit. **Invariant:** data flows scan →
+  scope, never the reverse.
+- **"Found in" section dropped** from the Components panel; the Evidence
+  section is the single source of file-location display on the scope
+  page. Existing `occurrences` data was lifted into
+  `scope_components.evidence` by migration 20260515123000.
+- **Removed `backfillScopeComponentsFromLatestScans` entirely** (was a
+  worker boot hook). Its legacy ON CONFLICT clause silently duplicated
+  version-NULL rows on every restart because of Postgres NULL-distinct
+  semantics. The in-flight scan flow now bootstraps `scope_components`
+  natively via componentMatch — the boot backfill was dead-on-arrival.
+
+**Augmentation prompt / Zod schema hardening**
+
+- **`version`-Zod-transform on `AddRecord`**: coerces sentinel strings
+  (`"unknown"`, `"*"`, `""`) to null at parse time, so the synthesized
+  purl is canonical (`pkg:generic/yaffs2`, not `pkg:generic/yaffs2@unknown`).
+  Catches a class of LLM-output drift at the boundary instead of letting
+  it create twin rows in the DB.
+- **SAST detection prompt examples compacted** to single-line JSON.
+  The prior version had pretty-printed examples that the LLM occasionally
+  copied verbatim — those mid-stream newlines defeated the JSONL parser.
+  Detection parse-error rate on FSS dropped from 5 → 2 in the next scan.
+- **Parse-error samples logged at info level** from detection + recheck,
+  giving us actual visibility next time something parses oddly.
+
+**Migrations applied this session**
+
+| Migration | Purpose |
+|---|---|
+| `20260515090000_dedup_sbom_components_by_purl` | re-pointed scan_findings, deleted dups, added unique index `(scan_run_id, purl)` |
+| `20260515093000_normalize_unknown_versions` | merged `version="unknown"` siblings; normalized solos to NULL with stripped purl |
+| `20260515103000_add_component_root_and_evidence_paths` | new columns + backfill from `evidence_path` parent dir |
+| `20260515113000_cleanup_existing_scope_component_dups` | merged scope_components by (normalized_name, version) — collapsed Boost×2, OpenGL×2, Nerian variants |
+| `20260515123000_backfill_evidence_paths_from_occurrences` | lifted per-scan `occurrences` paths into scope-level `evidence_paths` |
+| `20260515133000_evidence_to_jsonb` | `evidence_paths text[]` → `evidence jsonb` (array of `{path, line?}`) on both tables |
+
+### What we learned
+
+- **The rebuild bug that started the day** was `rebuildComponentsFromScopeState`
+  using `INSERT … ON CONFLICT DO NOTHING` with no unique index to drive the
+  conflict resolution — every merge-followed-by-rebuild silently doubled
+  the per-scan row count. Adding the partial unique index on
+  `sbom_components(scan_run_id, purl)` made the existing clause finally do
+  what it claimed to do. **Lesson:** never assume `ON CONFLICT DO NOTHING`
+  is meaningful without a matching unique constraint.
+- **Postgres NULL-distinct semantics keep biting**. The
+  `(scope_id, name, version, purl)` unique constraint allows two
+  `(…, NULL, …)` rows to coexist because NULL ≠ NULL — that's how the
+  duplicate Boost / OpenGL rows survived every prior dedup pass and how
+  the boot backfill silently re-injected them on each worker restart.
+  **Lesson:** when version is nullable, the unique key must either
+  treat NULL as distinct deliberately (and have a second index that
+  handles NULL-version cases) or be paired with `NULLS NOT DISTINCT`
+  (PG 15+).
+- **Two-tables-for-one-thing is a footgun.** `sbom_components` (per-scan
+  audit) and `scope_components` (durable state) are conceptually
+  different and the user-facing UI was reading from the wrong one. The
+  fix wasn't to collapse them (that would violate scan-page audit
+  semantics) but to make each surface read from the table that matches
+  its semantic role.
+- **"Shallowest unique path" is the right identity primitive for vendored
+  libs**, not "deepest" or "the specific file." The LLM picks different
+  evidence files for the same lib across scans (`extern/Xenomai/include/xeno_config.h`
+  one run, `extern/Xenomai/README` the next); the shared root
+  `extern/Xenomai` is stable. The 8-step match chain falls back to
+  CPE / normalized name when the root is missing or shared with sibling
+  sub-libs.
+- **Backfills accumulate sins**. Every time we add a column and write a
+  "safe to re-run on boot" backfill, we accumulate a ticking-bug-future
+  every time we change semantics. The boot backfill removed today was
+  innocent at write-time and quietly destructive a few schema migrations
+  later. Better to bootstrap from the live scan flow when possible.
+
+### Known follow-ups (next session)
+
+- **Bugs on the Gocator Classic `/GoWeb` scope's Components tab** —
+  scope has 2436 active rows (npm-heavy), behaviour there hasn't been
+  verified after today's switch from sbom_components → scope_components.
+  Expect issues around pagination, occurrences→evidence lifting, and
+  LLM-rename collisions on common npm packages.
+- **`/scans/:id` Components tab isn't loading correctly anymore.** Not
+  investigated this session — likely a downstream effect of the data-flow
+  refactor.
+- **Manual ADD component** (companion to manual delete) — operator-driven
+  insertion of a scope_component the LLM missed, with on-save OSV+NVD
+  lookup. Captured in `project_pending_features.md`.
+
