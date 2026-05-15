@@ -1051,6 +1051,7 @@ const worker = new Worker<ScanJobData>(
       let finalComponents = cleanedComponents;
       let sbomEvidenceMap = new Map<string, { path: string; excerpt: string | null; llmReason: string }>();
       let sbomCpeMap = new Map<string, string>();
+      let augmentationFailed = false;
       const sbomTokenBudget = 200_000;
 
       try {
@@ -1123,6 +1124,7 @@ const worker = new Worker<ScanJobData>(
         // Fall back to Stage-1 output; evidence map stays empty.
         finalComponents = cleanedComponents;
         sbomEvidenceMap = new Map();
+        augmentationFailed = true;
       } finally {
         await cleanupSbomTmp(scanRunId);
       }
@@ -1155,19 +1157,33 @@ const worker = new Worker<ScanJobData>(
       // rows for every component surfaced by the augmentation pass. Must happen
       // before the recheck phase so the candidate set (active rows NOT in this
       // run's join table) is correctly populated.
-      try {
-        const scopeState = await persistScanComponentsToScopeState(
-          scanRunId,
-          run.scopeId,
-          run.orgId,
-          components,
+      //
+      // Gated on augmentation success: when augmentation fails, `components` is
+      // the Stage-1 cdxgen-cleaned output, which for most repos is dominated by
+      // CMake probe noise (Eigen find_package() targets, etc.). Persisting that
+      // noise into scope_components pollutes the durable truth set with rows
+      // that aren't real components. The recheck phase below will still run
+      // and use existing scope_components as its truth set, so prior-run
+      // recovery still works.
+      if (!augmentationFailed) {
+        try {
+          const scopeState = await persistScanComponentsToScopeState(
+            scanRunId,
+            run.scopeId,
+            run.orgId,
+            components,
+          );
+          log.info(scopeState, "[worker] scope_components state updated");
+        } catch (err) {
+          // Non-fatal: the scan should not die from a scope-state failure.
+          // The recheck phase will simply find zero candidates for this run
+          // (they won't have join rows) and become a no-op.
+          log.error({ err: (err as Error).message }, "[worker] scope_components persistence failed — continuing");
+        }
+      } else {
+        log.warn(
+          "[worker] skipping scope_components persistence — augmentation failed, Stage-1 output is dominated by noise (CMake probes, etc.); not promoting to scope-level truth set",
         );
-        log.info(scopeState, "[worker] scope_components state updated");
-      } catch (err) {
-        // Non-fatal: the scan should not die from a scope-state failure.
-        // The recheck phase will simply find zero candidates for this run
-        // (they won't have join rows) and become a no-op.
-        log.error({ err: (err as Error).message }, "[worker] scope_components persistence failed — continuing");
       }
 
       // ── Step 3.97: LLM SBOM component recheck ───────────────────────────

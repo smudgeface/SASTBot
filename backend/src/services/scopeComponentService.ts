@@ -543,12 +543,14 @@ export async function rebuildComponentsFromScopeState(
     // the row; we just need to guarantee it's there for the curated-SBOM endpoint.
     await prisma.$executeRawUnsafe(
       `INSERT INTO sbom_components (
+         id,
          scan_run_id, name, version, purl, ecosystem,
          licenses, component_type, scope, is_dev_only,
          manifest_file, discovery_method, evidence_line,
          llm_evidence, cpe
        )
        SELECT
+         gen_random_uuid(),
          $1::uuid, sc.name, sc.version, sc.purl, sc.ecosystem,
          sc.licenses, sc.component_type, sc.scope, sc.is_dev_only,
          sc.manifest_file,
