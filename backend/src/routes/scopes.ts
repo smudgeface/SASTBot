@@ -435,9 +435,18 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      // By default hide issues not seen in the latest scan
+      // By default hide issues not seen in the latest scan. Include any
+      // in-progress scan_runs as well so that issues just re-detected by an
+      // active scan (which bumps their lastSeenScanRunId to that run's id)
+      // remain visible mid-scan instead of vanishing from the tab until the
+      // scope's lastScanRunId advances at finalize.
       if (!include_resolved && lastScanRunId && !seen_since_last_scan) {
-        where.lastSeenScanRunId = lastScanRunId;
+        const inFlight = await prisma.scanRun.findMany({
+          where: { scopeId: req.params.id, status: { in: ["pending", "running"] } },
+          select: { id: true },
+        });
+        const validIds = [lastScanRunId, ...inFlight.map((r) => r.id)];
+        where.lastSeenScanRunId = validIds.length === 1 ? validIds[0] : { in: validIds };
       }
 
       const skip = (page - 1) * page_size;
@@ -515,8 +524,18 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
+      // By default hide issues not seen in the latest scan. Include any
+      // in-progress scan_runs as well so that issues just re-detected by an
+      // active scan (which bumps their lastSeenScanRunId to that run's id)
+      // remain visible mid-scan instead of vanishing from the tab until the
+      // scope's lastScanRunId advances at finalize.
       if (!include_resolved && lastScanRunId && !seen_since_last_scan) {
-        where.lastSeenScanRunId = lastScanRunId;
+        const inFlight = await prisma.scanRun.findMany({
+          where: { scopeId: req.params.id, status: { in: ["pending", "running"] } },
+          select: { id: true },
+        });
+        const validIds = [lastScanRunId, ...inFlight.map((r) => r.id)];
+        where.lastSeenScanRunId = validIds.length === 1 ? validIds[0] : { in: validIds };
       }
 
       // Always compute dev/runtime split counts (unaffected by exclude_dev_only filter).
