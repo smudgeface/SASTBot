@@ -913,7 +913,19 @@ const worker = new Worker<ScanJobData>(
 
     await prisma.scanRun.update({
       where: { id: scanRunId },
-      data: { status: "running", startedAt: new Date() },
+      data: {
+        status: "running",
+        startedAt: new Date(),
+        // On BullMQ retry, the prior attempt may have left error / warnings /
+        // finishedAt populated. Clear them so the new attempt starts clean —
+        // otherwise the UI shows stale failure messages on a now-running
+        // scan, the elapsed-time calculation produces 0/negative seconds
+        // (when finishedAt < startedAt), and stale error-severity warnings
+        // would falsely mark the eventually-completed scan untrustworthy.
+        finishedAt: null,
+        error: null,
+        warnings: [],
+      },
     });
 
     // Retry-idempotency: BullMQ retries the same scan_run_id on worker
