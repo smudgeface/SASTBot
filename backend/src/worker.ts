@@ -37,7 +37,7 @@ import {
   cleanupSbomTmp,
   runSbomAugmentation,
 } from "./services/llmSbomService.js";
-import { persistScanComponentsToScopeState, materializeRecoveredComponents } from "./services/scopeComponentService.js";
+import { persistScanComponentsToScopeState, materializeRecoveredComponents, rebuildComponentsFromScopeState } from "./services/scopeComponentService.js";
 import { runSbomRecheck } from "./services/llmSbomRecheckService.js";
 import type { ScanWarning } from "./schemas.js";
 import { Prisma } from "@prisma/client";
@@ -1128,7 +1128,7 @@ const worker = new Worker<ScanJobData>(
       }
 
       // ── Step 3.9: persist augmented components + raw SBOM ────────────────
-      const components = await prisma.$transaction(async (tx) => {
+      let components = await prisma.$transaction(async (tx) => {
         // Store the raw SBOM and the augmented component count on the run row
         // now so partial failures still leave the SBOM downloadable.
         await tx.scanRun.update({
@@ -1200,6 +1200,8 @@ const worker = new Worker<ScanJobData>(
           {
             recovered: recheckResult.recovered.length,
             removed: recheckResult.removed.length,
+            mergeGroups: recheckResult.merged.length,
+            mergedRowsRemoved: recheckResult.mergedRowsRemoved,
             capped: recheckResult.capped,
             parseErrors: recheckResult.parseErrors.length,
             exitCode: recheckResult.exitCode,
@@ -1229,6 +1231,28 @@ const worker = new Worker<ScanJobData>(
             log.error(
               { err: (err as Error).message },
               "[worker] failed to materialize recovered components — recheck verdicts applied but downstream passes will miss them this run",
+            );
+          }
+        }
+
+        // After all recheck verdicts (present/removed/merge) have been applied,
+        // rebuild the in-memory components array from the post-recheck DB state.
+        // This ensures OSV/NVD/detection see the canonical scope-state names,
+        // not whatever labels the LLM emitted this run that may now be merged
+        // away. Only necessary when merges occurred (otherwise the array is
+        // already accurate), but safe to run unconditionally.
+        if (recheckResult.mergedRowsRemoved > 0) {
+          try {
+            const rebuilt = await rebuildComponentsFromScopeState(scanRunId, run.scopeId);
+            components = rebuilt;
+            log.info(
+              { rebuilt: rebuilt.length, mergedRowsRemoved: recheckResult.mergedRowsRemoved },
+              "[worker] in-memory components rebuilt from scope state after dedup",
+            );
+          } catch (err) {
+            log.error(
+              { err: (err as Error).message },
+              "[worker] failed to rebuild components from scope state — using pre-merge in-memory list",
             );
           }
         }

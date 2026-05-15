@@ -467,6 +467,114 @@ export async function persistScanComponentsToScopeState(
 }
 
 // ---------------------------------------------------------------------------
+// Rebuild the in-memory components array from scope_components post-recheck.
+// ---------------------------------------------------------------------------
+
+/**
+ * After all recheck verdicts (present/removed/merge) have been applied,
+ * rebuild the in-memory components array from `scope_components` active rows
+ * that have a `scan_run_components` join for this scan_run.
+ *
+ * This ensures OSV/NVD/detection see the canonical scope-state names, not
+ * whatever labels the LLM emitted this run that may now be merged away.
+ *
+ * For each returned row, also ensures a corresponding `sbom_components` row
+ * exists for this scan_run (insert if missing). This keeps the curated SBOM
+ * endpoint consistent with the in-memory list.
+ */
+export async function rebuildComponentsFromScopeState(
+  scanRunId: string,
+  scopeId: string,
+): Promise<SbomComponent[]> {
+  // Fetch all scope_components that have a join row for this scan_run and
+  // are still active (merges delete scope_components rows, so removed/dropped
+  // ones will naturally be absent here).
+  const scopeRows = await prisma.$queryRawUnsafe<Array<{
+    id: string;
+    name: string;
+    version: string | null;
+    purl: string;
+    ecosystem: string | null;
+    licenses: string[];
+    component_type: string;
+    scope: string | null;
+    is_dev_only: boolean;
+    manifest_file: string | null;
+    discovery_method: string | null;
+    evidence_line: number | null;
+    evidence_path: string | null;
+    llm_evidence: unknown;
+    cpe: string | null;
+  }>>(
+    `SELECT
+       sc.id, sc.name, sc.version, sc.purl, sc.ecosystem,
+       sc.licenses, sc.component_type, sc.scope, sc.is_dev_only,
+       sc.manifest_file, sc.discovery_method, sc.evidence_line,
+       sc.evidence_path, sc.llm_evidence, sc.cpe
+     FROM scope_components sc
+     INNER JOIN scan_run_components src ON src.scope_component_id = sc.id
+       AND src.scan_run_id = $1::uuid
+     WHERE sc.scope_id = $2::uuid
+       AND sc.dismissed_status = 'active'
+     ORDER BY sc.name ASC`,
+    scanRunId,
+    scopeId,
+  );
+
+  if (scopeRows.length === 0) {
+    logger.info({ scanRunId, scopeId }, "[scopeComponentService] rebuildComponentsFromScopeState: no rows");
+    return [];
+  }
+
+  const rebuilt: SbomComponent[] = [];
+
+  for (const sc of scopeRows) {
+    // Ensure a sbom_components row exists for this scan_run / component.
+    // ON CONFLICT DO NOTHING: the augmentation pass may have already created
+    // the row; we just need to guarantee it's there for the curated-SBOM endpoint.
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO sbom_components (
+         scan_run_id, name, version, purl, ecosystem,
+         licenses, component_type, scope, is_dev_only,
+         manifest_file, discovery_method, evidence_line,
+         llm_evidence, cpe,
+         created_at, updated_at
+       )
+       SELECT
+         $1::uuid, sc.name, sc.version, sc.purl, sc.ecosystem,
+         sc.licenses, sc.component_type, sc.scope, sc.is_dev_only,
+         sc.manifest_file,
+         COALESCE(src.discovery_method, sc.discovery_method, 'manifest'),
+         sc.evidence_line, sc.llm_evidence, sc.cpe,
+         now(), now()
+       FROM scope_components sc
+       INNER JOIN scan_run_components src ON src.scope_component_id = sc.id
+         AND src.scan_run_id = $1::uuid
+       WHERE sc.id = $2::uuid
+       ON CONFLICT DO NOTHING`,
+      scanRunId,
+      sc.id,
+    );
+
+    // Fetch the sbom_components row (the one we just ensured exists).
+    const sbomRow = await prisma.sbomComponent.findFirst({
+      where: { scanRunId, purl: sc.purl, name: sc.name },
+    });
+
+    if (sbomRow) {
+      rebuilt.push(sbomRow);
+    }
+  }
+
+  logger.info(
+    { scanRunId, scopeId, rebuilt: rebuilt.length, scopeRows: scopeRows.length },
+    "[scopeComponentService] rebuildComponentsFromScopeState complete",
+  );
+
+  return rebuilt;
+}
+
+// ---------------------------------------------------------------------------
 // Materialize recovered components into per-scan sbom_components rows.
 // ---------------------------------------------------------------------------
 
