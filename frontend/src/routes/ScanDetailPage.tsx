@@ -812,7 +812,7 @@ export default function ScanDetailPage() {
   const [sastDisplayed, setSastDisplayed] = useState<number | null>(null);
   const [componentsDisplayed, setComponentsDisplayed] = useState<number | null>(null);
 
-  const repo = repos.data?.find((r) => r.id === scan.data?.repo_id);
+  const repo = repos.data?.items.find((r) => r.id === scan.data?.repo_id);
   const repoName = repo?.name;
   const sourceUrlTemplate = repo?.source_url_template ?? null;
 

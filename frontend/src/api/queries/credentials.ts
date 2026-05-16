@@ -5,14 +5,26 @@ import type {
   Credential,
   CredentialCreateInput,
   CredentialRotateInput,
+  Paginated,
 } from "@/api/types";
 
 export const credentialsKey = ["admin", "credentials"] as const;
 
-export function useCredentials() {
-  return useQuery<Credential[]>({
-    queryKey: credentialsKey,
-    queryFn: () => apiFetch<Credential[]>("/admin/credentials"),
+export interface CredentialsListFilters {
+  page?: number;
+  page_size?: number;
+}
+
+export function useCredentials(filters: CredentialsListFilters = {}) {
+  return useQuery<Paginated<Credential>>({
+    queryKey: [...credentialsKey, filters],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (filters.page) params.set("page", String(filters.page));
+      if (filters.page_size) params.set("page_size", String(filters.page_size));
+      const qs = params.toString();
+      return apiFetch<Paginated<Credential>>(`/admin/credentials${qs ? `?${qs}` : ""}`);
+    },
   });
 }
 

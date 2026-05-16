@@ -1,6 +1,38 @@
 import { useState } from "react";
 import { KeyRound, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 
+const CREDS_PAGE_SIZE = 100;
+
+function Pager({
+  page,
+  pageSize,
+  total,
+  onPage,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPage: (p: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 px-1">
+      <span>
+        {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
+      </span>
+      <div className="flex gap-1">
+        <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+          ‹
+        </Button>
+        <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>
+          ›
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 import {
   useCreateCredential,
   useCredentials,
@@ -72,13 +104,15 @@ function ExpiresCell({ expiresAt }: { expiresAt: string | null }) {
 }
 
 export default function CredentialsPage() {
-  const credentials = useCredentials();
+  const [page, setPage] = useState(1);
+  const credentials = useCredentials({ page, page_size: CREDS_PAGE_SIZE });
   const [addOpen, setAddOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<Credential | null>(null);
   const [rotateTarget, setRotateTarget] = useState<Credential | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Credential | null>(null);
 
-  const items = credentials.data ?? [];
+  const items = credentials.data?.items ?? [];
+  const total = credentials.data?.total ?? 0;
 
   return (
     <div className="space-y-6">
@@ -95,7 +129,7 @@ export default function CredentialsPage() {
         </Button>
       </div>
 
-      {!credentials.isLoading && items.length === 0 ? (
+      {!credentials.isLoading && total === 0 ? (
         <Card>
           <CardHeader className="flex flex-row items-center gap-3">
             <KeyRound className="h-5 w-5 text-muted-foreground" />
@@ -114,7 +148,7 @@ export default function CredentialsPage() {
         </Card>
       ) : null}
 
-      {items.length > 0 ? (
+      {total > 0 ? (
         <Card>
           <Table>
             <TableHeader>
@@ -186,6 +220,11 @@ export default function CredentialsPage() {
               ))}
             </TableBody>
           </Table>
+          {credentials.data && (
+            <div className="px-4 pb-4">
+              <Pager page={page} pageSize={CREDS_PAGE_SIZE} total={credentials.data.total} onPage={setPage} />
+            </div>
+          )}
         </Card>
       ) : null}
 

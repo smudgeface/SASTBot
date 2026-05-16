@@ -1,10 +1,11 @@
 import { FileSearch } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useMe } from "@/api/queries/auth";
 import { useRepos } from "@/api/queries/repos";
 import { useScans, useCancelScan } from "@/api/queries/scans";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -17,6 +18,38 @@ import {
 import { formatDate } from "@/lib/format";
 import { ScanStatusBadge } from "@/components/ScanStatusBadge";
 import { SeverityCountChips } from "@/components/SeverityCountChips";
+
+const PAGE_SIZE = 50;
+
+function Pager({
+  page,
+  pageSize,
+  total,
+  onPage,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPage: (p: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 px-1">
+      <span>
+        {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
+      </span>
+      <div className="flex gap-1">
+        <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+          ‹
+        </Button>
+        <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>
+          ›
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function formatDuration(startedAt: string | null, finishedAt: string | null): string {
   if (!startedAt) return "—";
@@ -31,7 +64,8 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
 
 export default function ScansPage() {
   const navigate = useNavigate();
-  const scans = useScans();
+  const [page, setPage] = useState(1);
+  const scans = useScans({ page, page_size: PAGE_SIZE });
   const repos = useRepos();
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
@@ -39,12 +73,13 @@ export default function ScansPage() {
 
   const repoNameById = useMemo(() => {
     const m = new Map<string, string>();
-    repos.data?.forEach((r) => m.set(r.id, r.name));
+    repos.data?.items.forEach((r) => m.set(r.id, r.name));
     return m;
   }, [repos.data]);
 
-  const items = scans.data ?? [];
-  const empty = !scans.isLoading && items.length === 0;
+  const items = scans.data?.items ?? [];
+  const total = scans.data?.total ?? 0;
+  const empty = !scans.isLoading && total === 0;
 
   return (
     <div className="space-y-6">
@@ -78,7 +113,7 @@ export default function ScansPage() {
           <CardHeader className="pb-0">
             <CardTitle className="text-base flex items-center gap-2">
               <FileSearch className="h-4 w-4" />
-              {items.length} scan{items.length !== 1 ? "s" : ""}
+              {total} scan{total !== 1 ? "s" : ""}
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-4">
@@ -152,6 +187,7 @@ export default function ScansPage() {
               })}
             </TableBody>
           </Table>
+          <Pager page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
           </CardContent>
         </Card>
       ) : null}

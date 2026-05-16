@@ -22,7 +22,7 @@ export default function SastSarifViewerPage() {
   const sarif = useSastSarif(id);
   const repos = useRepos();
 
-  const repoName = repos.data?.find((r) => r.id === scan.data?.repo_id)?.name ?? "scan";
+  const repoName = repos.data?.items.find((r) => r.id === scan.data?.repo_id)?.name ?? "scan";
   const filename = `sast-${repoName}-${(id ?? "").slice(0, 8)}.sarif.json`;
 
   return (

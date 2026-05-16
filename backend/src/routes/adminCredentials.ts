@@ -5,12 +5,13 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 import {
   CredentialCreateSchema,
-  CredentialListSchema,
+  CredentialListQuerySchema,
   CredentialOutSchema,
   CredentialRenameSchema,
   CredentialRotateSchema,
   ErrorSchema,
   IdParamsSchema,
+  PaginatedSchema,
 } from "../schemas.js";
 import {
   CredentialInUseError,
@@ -34,20 +35,25 @@ const adminCredentialsRoutes: FastifyPluginAsync = async (app) => {
       preHandler: [app.requireAdmin],
       schema: {
         tags: ["admin", "credentials"],
-        summary: "List credential metadata (NEVER plaintext)",
+        summary: "List credential metadata — NEVER plaintext (paginated)",
+        querystring: CredentialListQuerySchema,
         response: {
-          200: CredentialListSchema,
+          200: PaginatedSchema(CredentialOutSchema),
           401: ErrorSchema,
           403: ErrorSchema,
         },
       },
     },
     async (req) => {
-      const creds = await listCredentials(req.user?.orgId ?? null);
-      // Batch-fetch all references in parallel; could later be a single
-      // grouped query if the credential count grows.
-      const refs = await Promise.all(creds.map((c) => credentialReferences(c.id)));
-      return creds.map((c, i) => credentialToOut(c, refs[i]));
+      const { page, page_size } = req.query;
+      const skip = (page - 1) * page_size;
+      const all = await listCredentials(req.user?.orgId ?? null);
+      const total = all.length;
+      const page_creds = all.slice(skip, skip + page_size);
+      // Batch-fetch references only for the current page — avoids N+1 on large lists.
+      const refs = await Promise.all(page_creds.map((c) => credentialReferences(c.id)));
+      const items = page_creds.map((c, i) => credentialToOut(c, refs[i]));
+      return { items, total, page, page_size };
     },
   );
 

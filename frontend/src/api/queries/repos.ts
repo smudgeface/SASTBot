@@ -1,15 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/api/client";
-import type { Repo, RepoUpsertInput } from "@/api/types";
+import type { Paginated, Repo, RepoUpsertInput } from "@/api/types";
 
 export const reposKey = ["admin", "repos"] as const;
 export const repoKey = (id: string) => ["admin", "repos", id] as const;
 
-export function useRepos() {
-  return useQuery<Repo[]>({
-    queryKey: reposKey,
-    queryFn: () => apiFetch<Repo[]>("/admin/repos"),
+export interface ReposListFilters {
+  page?: number;
+  page_size?: number;
+}
+
+export function useRepos(filters: ReposListFilters = {}) {
+  return useQuery<Paginated<Repo>>({
+    queryKey: [...reposKey, filters],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (filters.page) params.set("page", String(filters.page));
+      if (filters.page_size) params.set("page_size", String(filters.page_size));
+      const qs = params.toString();
+      return apiFetch<Paginated<Repo>>(`/admin/repos${qs ? `?${qs}` : ""}`);
+    },
   });
 }
 

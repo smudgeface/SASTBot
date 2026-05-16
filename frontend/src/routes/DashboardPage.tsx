@@ -11,12 +11,12 @@ export default function DashboardPage() {
   const repos = useRepos();
   const scans = useScans();
 
-  const repoCount = repos.data?.length ?? 0;
+  const repoCount = repos.data?.total ?? 0;
 
   const scansThisWeek = (() => {
     if (!scans.data) return null;
     const cutoff = Date.now() - ONE_WEEK_MS;
-    return scans.data.filter((s) => new Date(s.created_at).getTime() >= cutoff).length;
+    return scans.data.items.filter((s) => new Date(s.created_at).getTime() >= cutoff).length;
   })();
 
   return (

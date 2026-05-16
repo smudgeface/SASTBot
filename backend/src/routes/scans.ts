@@ -10,7 +10,7 @@ import {
   PaginatedSchema,
   SastScanQuerySchema,
   ScanFindingOutSchema,
-  ScanRunListSchema,
+  ScanRunListQuerySchema,
   ScanRunOutSchema,
   SastIssueOutSchema,
   SbomComponentOutSchema,
@@ -28,21 +28,30 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       preHandler: [app.authenticate],
       schema: {
         tags: ["scans"],
-        summary: "List scan runs visible to the current org",
+        summary: "List scan runs visible to the current org (paginated)",
+        querystring: ScanRunListQuerySchema,
         response: {
-          200: ScanRunListSchema,
+          200: PaginatedSchema(ScanRunOutSchema),
           401: ErrorSchema,
         },
       },
     },
     async (req) => {
       const orgId = req.user?.orgId ?? null;
-      const runs = await prisma.scanRun.findMany({
-        where: { orgId: orgId ?? null },
-        include: { scope: { select: { path: true } } },
-        orderBy: { createdAt: "desc" },
-      });
-      return runs.map(scanRunToOut);
+      const { page, page_size } = req.query;
+      const skip = (page - 1) * page_size;
+      const where = { orgId: orgId ?? null };
+      const [runs, total] = await Promise.all([
+        prisma.scanRun.findMany({
+          where,
+          include: { scope: { select: { path: true } } },
+          orderBy: { createdAt: "desc" },
+          skip,
+          take: page_size,
+        }),
+        prisma.scanRun.count({ where }),
+      ]);
+      return { items: runs.map(scanRunToOut), total, page, page_size };
     },
   );
 

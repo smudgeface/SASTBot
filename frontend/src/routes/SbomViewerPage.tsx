@@ -22,7 +22,7 @@ export default function SbomViewerPage() {
   const sbom = useSbomJson(id);
   const repos = useRepos();
 
-  const repoName = repos.data?.find((r) => r.id === scan.data?.repo_id)?.name ?? "scan";
+  const repoName = repos.data?.items.find((r) => r.id === scan.data?.repo_id)?.name ?? "scan";
   const filename = `sbom-${repoName}-${(id ?? "").slice(0, 8)}.cdx.json`;
 
   return (

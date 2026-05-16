@@ -4,8 +4,9 @@ import { z } from "zod";
 import {
   ErrorSchema,
   IdParamsSchema,
+  PaginatedSchema,
   RepoCreateSchema,
-  RepoListSchema,
+  RepoListQuerySchema,
   RepoOutSchema,
   RepoUpdateSchema,
   ScanRunListSchema,
@@ -35,14 +36,19 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
       preHandler: [app.requireAdmin],
       schema: {
         tags: ["admin", "repos"],
-        summary: "List repos for the current org",
-        response: { 200: RepoListSchema, 401: ErrorSchema, 403: ErrorSchema },
+        summary: "List repos for the current org (paginated)",
+        querystring: RepoListQuerySchema,
+        response: { 200: PaginatedSchema(RepoOutSchema), 401: ErrorSchema, 403: ErrorSchema },
       },
     },
     async (req) => {
       const orgId = req.user?.orgId ?? null;
-      const repos = await listRepos(orgId);
-      return repos.map(repoToOut);
+      const { page, page_size } = req.query;
+      const skip = (page - 1) * page_size;
+      const all = await listRepos(orgId);
+      const total = all.length;
+      const items = all.slice(skip, skip + page_size).map(repoToOut);
+      return { items, total, page, page_size };
     },
   );
 

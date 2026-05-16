@@ -187,6 +187,9 @@ const EnvSchema = z.object({
   // named volume mounted into both the backend and worker services so
   // either can purge the cache.
   CLONE_CACHE_DIR: z.string().default("/app/clones"),
+  // Number of BullMQ scan jobs the worker processes in parallel.
+  // Default 2; hard-capped at 4 to avoid overloading the host.
+  SCAN_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(2),
 });
 
 // ---------------------------------------------------------------------------
@@ -206,6 +209,7 @@ export type AppConfig = {
   cloneCacheDir: string;
   authRateLimitMax: number;
   authRateLimitWindowMs: number;
+  scanWorkerConcurrency: number;
 };
 
 let cached: AppConfig | null = null;
@@ -299,6 +303,7 @@ export function loadConfig(): AppConfig {
     cloneCacheDir: parsed.data.CLONE_CACHE_DIR,
     authRateLimitMax: parsed.data.AUTH_RATE_LIMIT_MAX,
     authRateLimitWindowMs: parsed.data.AUTH_RATE_LIMIT_WINDOW_MS,
+    scanWorkerConcurrency: parsed.data.SCAN_WORKER_CONCURRENCY,
   };
   return cached;
 }

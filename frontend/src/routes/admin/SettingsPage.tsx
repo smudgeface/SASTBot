@@ -82,9 +82,9 @@ export default function SettingsPage() {
     setNvdCredChoice(data.nvd_credential_id ? "existing" : "new");
   }, [settings.data]);
 
-  const jiraOptions = credentials.data?.filter((c) => c.kind.startsWith("jira")) ?? [];
-  const llmOptions = credentials.data?.filter((c) => c.kind === "llm_api_key") ?? [];
-  const nvdOptions = credentials.data?.filter((c) => c.kind === "nvd_api_key") ?? [];
+  const jiraOptions = credentials.data?.items.filter((c) => c.kind.startsWith("jira")) ?? [];
+  const llmOptions = credentials.data?.items.filter((c) => c.kind === "llm_api_key") ?? [];
+  const nvdOptions = credentials.data?.items.filter((c) => c.kind === "nvd_api_key") ?? [];
 
   const buildJiraCred = (): AdminSettingsUpdate["jira_credential"] => {
     if (jiraCredChoice !== "new") return null;

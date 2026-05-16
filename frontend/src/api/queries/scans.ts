@@ -5,6 +5,11 @@ import { apiFetch } from "@/api/client";
 import type { Paginated, Scan, SastIssue, SbomComponent, ScanFinding } from "@/api/types";
 import type { IssueSortKey, IssueSortDir } from "./scopes";
 
+export interface ScansListFilters {
+  page?: number;
+  page_size?: number;
+}
+
 export const scansKey = ["scans"] as const;
 
 /**
@@ -30,14 +35,20 @@ function liveRefetchInterval(qc: ReturnType<typeof useQueryClient>, scanId: stri
  * running, so the UI feels live without manual refresh. Once everything
  * is terminal (`success` | `failed`) the refetch stops.
  */
-export function useScans() {
-  return useQuery<Scan[]>({
-    queryKey: scansKey,
-    queryFn: () => apiFetch<Scan[]>("/scans"),
+export function useScans(filters: ScansListFilters = {}) {
+  return useQuery<Paginated<Scan>>({
+    queryKey: [...scansKey, filters],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (filters.page) params.set("page", String(filters.page));
+      if (filters.page_size) params.set("page_size", String(filters.page_size));
+      const qs = params.toString();
+      return apiFetch<Paginated<Scan>>(`/scans${qs ? `?${qs}` : ""}`);
+    },
     refetchInterval: (query) => {
       const data = query.state.data;
       if (!data) return false;
-      const live = data.some((s) => s.status === "pending" || s.status === "running");
+      const live = data.items.some((s) => s.status === "pending" || s.status === "running");
       return live ? 2000 : false;
     },
   });
