@@ -1659,3 +1659,163 @@ all-day session; committed as `c5005f8`.
   insertion of a scope_component the LLM missed, with on-save OSV+NVD
   lookup. Captured in `project_pending_features.md`.
 
+## Production readiness — six-stream sprint (2026-05-16)
+
+Plan: `docs/PROD_READINESS_PLAN.md`. Six work items sequenced as one
+foundation stream + three waves. Multi-agent execution: main agent
+supervised, Sonnet sub-agents implemented each stream. One focused
+commit per stream.
+
+### What shipped
+
+- **Stream 0 — Layered runtime config (`e2dd0f8`).** `backend/src/config.ts`
+  is now a three-source loader: env vars (lowest precedence) → YAML
+  config file → CLI args (highest). YAML location resolves via
+  `SASTBOT_CONFIG_FILE` → `/etc/sastbot/config.yaml` → repo-local
+  `backend/config.local.yaml`. All three normalize to one canonical
+  `SCREAMING_SNAKE_CASE` key before the existing Zod schema validates,
+  so every downstream `config.MASTER_KEY` / `config.DATABASE_URL`
+  import keeps working unchanged. CLI parsed via Node built-in
+  `node:util`'s `parseArgs`. Added `yaml` dep. New `docs/user/`
+  scaffold (`README.md` index + `configuration.md` reference) and
+  README pointer.
+
+- **Stream A — Auth hardening + dev-escape-hatch (`44a37d6`).**
+  `@fastify/rate-limit` (Redis-backed, `skipOnError: true`) on
+  `/auth/login` and `/auth/logout`: 10 attempts per 60 s per IP, both
+  thresholds tunable via `AUTH_RATE_LIMIT_MAX` /
+  `AUTH_RATE_LIMIT_WINDOW_MS`. `BOOTSTRAP_ADMIN_PASSWORD` is no longer
+  silently honoured in prod — when `NODE_ENV=production` and the env
+  is set, the config loader throws a `ConfigError` and the backend
+  refuses to boot. Frontend login form parses `retryAfter` from the
+  429 JSON body and runs a per-second countdown on the disabled
+  Submit button.
+
+- **Stream F — Admin DB backup (`4c4bc97`).** `GET /admin/db/backup`
+  streams a `pg_dump --format=custom --compress=9` of the live
+  database into the HTTP response via `reply.hijack()` (bypasses the
+  Zod serializer; no in-memory buffering). DB password passed only
+  via `PGPASSWORD` env, never argv — `pg_dump` is never logged with
+  credentials. `postgresql-client-16` installed from the PostgreSQL
+  APT repo in `docker/backend.Dockerfile` (matching the Postgres 16
+  server pinned in compose). "Download backup" card on the admin
+  Settings page.
+
+- **Stream B — Pagination + worker concurrency (`40b657d`).**
+  `/scans`, `/admin/repos`, `/admin/credentials` now return
+  `{items, total, page, page_size}` (clean break — frontend hooks
+  updated in the same commit). Defaults: 50/200 max for `/scans`,
+  100/500 for the two admin routes. New `SCAN_WORKER_CONCURRENCY`
+  env (default 2, max 4) drives BullMQ's `Worker({concurrency})`.
+  Frontend list pages reuse the `Pager` pattern landed for SCA/SAST
+  tables in `03ac821`.
+
+- **Stream D — Per-repo LLM token budgets (`5901457`).** Four
+  nullable Int columns on `Repo`: `llmSbomTokenBudget`,
+  `llmSbomRecheckTokenBudget`, `llmSastTokenBudget`,
+  `llmRecheckTokenBudget`. NULL → fall back to the worker's
+  hardcoded defaults (200k / 50k / 300k / 50k respectively).
+  Migration `20260516165953_add_per_repo_llm_token_budgets`. Repo
+  edit dialog grows a pre-collapsed "Token budgets" section with
+  four number inputs (empty → NULL → default). Worker live-progress
+  label simplified — phase prefix flows from the existing
+  `SCAN_PHASE_LABELS` table; redundant per-call label strings
+  removed.
+
+- **Stream E — `parseErrors` raw on scan warnings (`c03504d`).**
+  `ScanWarningSchema` gains optional `details: z.unknown()`. Worker
+  passes `detection.parseErrors.slice(0, 5)` (and recheck +
+  augmentation equivalents) into `details`, with each `raw` capped
+  at 2 KB by `truncateParseErrors` — UTF-8-safe (uses `TextDecoder`
+  to avoid splitting multi-byte chars). Frontend `ScanDetailPage`
+  renders a native `<details>` per warning when `details` is a
+  well-typed `{raw, reason}[]`; warnings without `details` are
+  unchanged. 7 new unit tests cover the truncation helper.
+
+- **Stream C — Scan resilience (`c39fb47`).** Three layers:
+  - **Wall-clock cap** on `claude -p`. Defaults 60 min detection /
+    30 min recheck (`CLAUDE_DETECTION_TIMEOUT_MS`,
+    `CLAUDE_RECHECK_TIMEOUT_MS`). On timeout: SIGTERM → 5 s grace →
+    SIGKILL. Sets `killedReason="timeout"`.
+  - **Stdout staleness heartbeat**. Default 5 min
+    (`CLAUDE_STDOUT_STALENESS_MS`); resets on every stdout chunk.
+    Same kill ladder. Sets `killedReason="staleness"`.
+  - **Retry once** on `exitCode != 0 && records.length === 0`,
+    fresh tmpdir, **full token budget**. No retry if the subprocess
+    was killed by a watchdog (timeout / staleness) — those exits
+    aren't candidates. Retry emits an `info`-severity warning
+    documenting doubled spend. 0-record clean exit emits an
+    `error`-severity `sast_detection_failed` warning so the
+    existing `hasErrorWarnings` gate marks the scan degraded
+    instead of "success".
+  
+  11 new tests on mocked spawn + fake timers cover all four paths.
+  BullMQ lock-extension errors on laptop sleep: investigated, no
+  fix needed — BullMQ's built-in lock renewal + stalled-job recovery
+  handle this and the worker's job-entry idempotency clears any
+  stale state on re-queue.
+
+### What we learned
+
+- **Foundation streams pay for themselves.** Wiring the three-source
+  config loader before Wave 1 meant Streams A/B/C each added their
+  knobs (rate-limit thresholds, `SCAN_WORKER_CONCURRENCY`, claude
+  watchdog timeouts) as one-line Zod additions — no per-stream
+  re-litigation of "where does the env var live, what's the YAML
+  shape, how do we test it?" The cost was a single extra commit
+  before Wave 1; the saving was three streams that didn't have to
+  decide.
+
+- **Parallel sub-agents on disjoint files lands cleanly when the
+  seams are named upfront.** Each Wave-2 prompt explicitly listed
+  off-limits files for the other parallel streams. Zero conflicts
+  in three parallel commits touching `worker.ts`, `schemas.ts`,
+  `config.ts`, and `docs/user/configuration.md`. The one near-miss
+  — Stream B observing tsc errors in Stream D's in-flight Repo Zod
+  changes — resolved itself once Stream D's commit landed.
+
+- **`reply.hijack()` is the right escape hatch for streaming large
+  binary bodies from Fastify.** Fastify's typed routes assume
+  serialized JSON. For `pg_dump` (binary, potentially gigabytes,
+  streamed), hijack-and-pipe to the raw HTTP response is
+  cleaner than trying to satisfy `octet-stream` content-types
+  through the type-provider plumbing.
+
+- **The 6 h 37 m hung `/GoWeb` detection has a name now.** The
+  staleness heartbeat would have caught it inside 5 minutes
+  instead of waiting for a token budget that wasn't going to fire.
+  Wall-clock cap is the second backstop, retry is the third. The
+  natural stop signal is still the token budget — these are nets,
+  not steering wheels.
+
+- **`pg_dump` major-version pinning is non-optional.** Debian's
+  default `postgresql-client` package typically lags the server by
+  a major. Installing `postgresql-client-16` from the PostgreSQL
+  APT repo means the dump format matches the running Postgres 16
+  server. Add to the Dockerfile boilerplate when bumping the DB
+  major.
+
+- **Always pass watchdog kill state into the retry decision.**
+  Without `killedReason`, a timeout-induced exit-1 looks identical
+  to a legitimate LLM crash and would trigger another full-budget
+  attempt — exactly the wrong response to a stuck subprocess.
+  The retry path checks `killedReason == null` before re-spawning.
+
+### Known follow-ups (next session)
+
+- **Browser smoke-test on the rebuilt image.** Streams A, F, B, D
+  all touched UI surfaces; the running containers cache prior
+  builds. A fresh `docker compose up --build` is needed to verify
+  the rate-limit countdown, download-backup button, three new
+  pagers, and the token-budgets dialog end-to-end.
+
+- **`pg_dump` route timing on a non-trivial DB.** Verified clean
+  on an empty DB (the route returns 500 cleanly when the binary is
+  missing pre-rebuild). The Fastify request timeout and any proxy
+  layer should be re-checked once the homelab Postgres has more
+  data — pg_dump on multi-GB DBs can take minutes.
+
+- **`/admin/repos` paginates in memory.** Stream B sliced after
+  `listRepos()` loads all rows — fine at current admin scale,
+  needs a DB-level skip/take if repo counts grow.
+
