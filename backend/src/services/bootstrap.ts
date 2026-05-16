@@ -28,9 +28,9 @@ export async function bootstrapIfEmpty(): Promise<void> {
 
   const config = loadConfig();
   const email = config.bootstrapAdminEmail;
-  // Honor BOOTSTRAP_ADMIN_PASSWORD as a dev convenience; otherwise random.
-  // Loud warning when the env override is in use so it can't sneak into prod
-  // via a copy-pasted env file.
+  // BOOTSTRAP_ADMIN_PASSWORD is a dev-only convenience; the config loader already
+  // rejects it in NODE_ENV=production. Emit a loud warning on every boot so it
+  // cannot silently slip into a shared deployment via a copy-pasted env file.
   const usingFixedPassword = !!config.bootstrapAdminPassword;
   const password = config.bootstrapAdminPassword ?? randomBytes(18).toString("base64url");
   const passwordHash = await hashPassword(password);

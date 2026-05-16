@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ShieldCheck } from "lucide-react";
 
@@ -19,17 +19,68 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  // Rate-limit countdown: number of seconds remaining, null when not rate-limited.
+  const [retryAfterSecs, setRetryAfterSecs] = useState<number | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // If the user is already authenticated (e.g. returning visit), skip login.
   useEffect(() => {
     if (user) navigate("/dashboard", { replace: true });
   }, [user, navigate]);
 
+  // Tick the countdown down every second.
+  const startCountdown = useCallback((seconds: number) => {
+    // Clear any previous interval.
+    if (countdownRef.current !== null) clearInterval(countdownRef.current);
+
+    setRetryAfterSecs(seconds);
+
+    countdownRef.current = setInterval(() => {
+      setRetryAfterSecs((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(countdownRef.current!);
+          countdownRef.current = null;
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1_000);
+  }, []);
+
+  // Clean up interval on unmount.
+  useEffect(() => {
+    return () => {
+      if (countdownRef.current !== null) clearInterval(countdownRef.current);
+    };
+  }, []);
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    // Don't submit while rate-limited.
+    if (retryAfterSecs !== null) return;
+
     try {
       await login.mutateAsync({ email, password });
       navigate("/dashboard", { replace: true });
     } catch (err) {
+      if (err instanceof ApiError && err.status === 429) {
+        // Extract Retry-After from the error body (fastify/rate-limit sets it).
+        // The header value is in seconds; fall back to 60 if missing or unparseable.
+        const body = err.body as Record<string, unknown> | null;
+        const rawRetryAfter =
+          body && typeof body === "object" && "retryAfter" in body
+            ? body["retryAfter"]
+            : null;
+        const seconds =
+          typeof rawRetryAfter === "number"
+            ? Math.ceil(rawRetryAfter)
+            : typeof rawRetryAfter === "string"
+              ? Math.ceil(Number(rawRetryAfter))
+              : 60;
+        startCountdown(isNaN(seconds) || seconds <= 0 ? 60 : seconds);
+        return;
+      }
+
       const description =
         err instanceof ApiError
           ? err.status === 401
@@ -39,6 +90,8 @@ export default function LoginPage() {
       toast({ variant: "destructive", title: "Sign-in failed", description });
     }
   };
+
+  const isRateLimited = retryAfterSecs !== null;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/40 p-6">
@@ -62,6 +115,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                disabled={isRateLimited}
               />
             </div>
             <div className="space-y-1.5">
@@ -73,10 +127,24 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                disabled={isRateLimited}
               />
             </div>
-            <Button type="submit" className="w-full" disabled={login.isPending}>
-              {login.isPending ? "Signing in…" : "Sign in"}
+            {isRateLimited && (
+              <p className="text-sm text-destructive">
+                Too many attempts. Please wait {retryAfterSecs}s before trying again.
+              </p>
+            )}
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={login.isPending || isRateLimited}
+            >
+              {login.isPending
+                ? "Signing in…"
+                : isRateLimited
+                  ? `Wait ${retryAfterSecs}s…`
+                  : "Sign in"}
             </Button>
           </form>
         </CardContent>

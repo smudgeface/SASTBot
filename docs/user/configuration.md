@@ -75,11 +75,32 @@ All three are equivalent. If all three are present, the CLI value wins.
 | `PORT` | `port` | `--port` | `8000` | TCP port the backend listens on. |
 | `CLONE_CACHE_DIR` | `clone_cache_dir` | `--clone-cache-dir` | `/app/clones` | Directory where the worker keeps retained per-repo git clones between scans. In Docker Compose this is a named volume shared between the `backend` and `worker` services. |
 
+### Auth rate-limiting
+
+`/auth/login` and `/auth/logout` are protected by a per-IP sliding-window
+rate limiter (Redis-backed). When a client exceeds the limit, the backend
+returns HTTP 429 with a `Retry-After` header. The login UI renders a countdown
+and blocks the submit button for the duration.
+
+| Key (env form) | YAML form | CLI form | Default | Description |
+|----------------|-----------|----------|---------|-------------|
+| `AUTH_RATE_LIMIT_MAX` | `auth_rate_limit_max` | `--auth-rate-limit-max` | `10` | Maximum requests to `/auth/login` or `/auth/logout` per IP per window before returning HTTP 429. |
+| `AUTH_RATE_LIMIT_WINDOW_MS` | `auth_rate_limit_window_ms` | `--auth-rate-limit-window-ms` | `60000` | Length of the rate-limit sliding window in milliseconds. Default is 60 000 ms (1 minute). |
+
+The limiter uses Redis so limits survive backend process restarts. If Redis is
+unreachable, the limiter falls back to in-memory counting for the current
+process lifetime — no one is locked out by a Redis outage.
+
+If you are running SASTBot behind a reverse proxy (nginx, Traefik, etc.), verify
+that `X-Forwarded-For` is being forwarded correctly. The backend sets
+`trustProxy: true` in Fastify, so it reads the client IP from that header.
+Confirm your proxy is not forwarding a stale or attacker-controlled value.
+
 ### Dev-only (remove before production)
 
 | Key (env form) | YAML form | CLI form | Default | Description |
 |----------------|-----------|----------|---------|-------------|
-| `BOOTSTRAP_ADMIN_PASSWORD` | `bootstrap_admin_password` | `--bootstrap-admin-password` | _(unset)_ | When set, the bootstrap admin is created with this exact password instead of a random one. Convenient when iterating with `docker compose down -v`. **Leave UNSET in production.** Slated for removal in the pre-launch security cleanup (Stream A of the production-readiness plan). |
+| `BOOTSTRAP_ADMIN_PASSWORD` | `bootstrap_admin_password` | `--bootstrap-admin-password` | _(unset)_ | When set, the bootstrap admin is created with this exact password instead of a random one. Convenient when iterating with `docker compose down -v`. **Setting this key when `NODE_ENV=production` is a hard boot-time config error** — the backend refuses to start and prints: `BOOTSTRAP_ADMIN_PASSWORD must not be set in production (NODE_ENV=production). Remove it from your environment or config file.` This makes it impossible to accidentally ship the dev escape hatch to a shared deployment. |
 
 ### Docker Compose convenience variables
 
@@ -94,6 +115,48 @@ are not validated by the Zod schema directly.
 | `POSTGRES_HOST` | Database URL composer (default port `5432`). |
 | `POSTGRES_PORT` | Database URL composer (default `5432`). |
 | `SASTBOT_CONFIG_FILE` | Path to the YAML config file. Overrides the default search path. |
+
+## Database backup
+
+SASTBot provides an admin-only endpoint (`GET /admin/db/backup`) that streams a
+full database backup as an HTTP download. The backup is triggered from the
+**Settings** page in the admin UI via the "Download backup" button.
+
+### How it works
+
+- `pg_dump` runs **inside the backend container** and connects to the same
+  `DATABASE_URL` that the application itself uses.
+- The connection password is passed via the `PGPASSWORD` environment variable
+  (never via command-line arguments, which would be visible in process listings).
+- The dump is streamed directly into the HTTP response — it is never buffered
+  in memory — so it is safe for databases of any size.
+- Format: `--format=custom --compress=9`. The resulting `.dump` file is
+  smaller than a plain SQL dump and supports parallel restore.
+
+### Restoring a backup
+
+```bash
+pg_restore --clean --if-exists -d <dbname> sastbot-backup-<timestamp>.dump
+```
+
+Or to a fresh database:
+
+```bash
+createdb <newdb>
+pg_restore -d <newdb> sastbot-backup-<timestamp>.dump
+```
+
+### Requirements
+
+The backend image includes `postgresql-client-16` (installed from the
+PostgreSQL APT repository to match the Postgres 16 server version in compose).
+No additional configuration is needed — the binary is on `PATH` and the
+connection details are derived automatically from `DATABASE_URL`.
+
+### No configurable knobs
+
+There are currently no environment variables for the backup endpoint.
+The binary path (`pg_dump`) is hardcoded and resolved from `PATH`.
 
 ## Coming soon
 

@@ -172,6 +172,57 @@ describe("loadConfig", () => {
     expect(cfg.logLevel).toBe("debug");
   });
 
+  // ---------------------------------------------------------------------------
+  // BOOTSTRAP_ADMIN_PASSWORD production gate (Stream A)
+  // ---------------------------------------------------------------------------
+
+  it("rejects BOOTSTRAP_ADMIN_PASSWORD when NODE_ENV=production", () => {
+    process.env.MASTER_KEY = validKey;
+    process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/db";
+    process.env.BOOTSTRAP_ADMIN_PASSWORD = "admin";
+    process.env.NODE_ENV = "production";
+
+    expect(() => loadConfig()).toThrow(ConfigError);
+    // Verify the error message mentions NODE_ENV=production so operators know what to fix.
+    expect(() => loadConfig()).toThrow(/NODE_ENV=production/);
+  });
+
+  it("allows BOOTSTRAP_ADMIN_PASSWORD when NODE_ENV is not production", () => {
+    process.env.MASTER_KEY = validKey;
+    process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/db";
+    process.env.BOOTSTRAP_ADMIN_PASSWORD = "devpassword";
+    process.env.NODE_ENV = "development";
+
+    const cfg = loadConfig();
+    expect(cfg.bootstrapAdminPassword).toBe("devpassword");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Rate-limit config defaults (Stream A)
+  // ---------------------------------------------------------------------------
+
+  it("rate-limit defaults to 10/60000ms when vars are absent", () => {
+    process.env.MASTER_KEY = validKey;
+    process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/db";
+    delete process.env.AUTH_RATE_LIMIT_MAX;
+    delete process.env.AUTH_RATE_LIMIT_WINDOW_MS;
+
+    const cfg = loadConfig();
+    expect(cfg.authRateLimitMax).toBe(10);
+    expect(cfg.authRateLimitWindowMs).toBe(60_000);
+  });
+
+  it("rate-limit config is overridable via env vars", () => {
+    process.env.MASTER_KEY = validKey;
+    process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/db";
+    process.env.AUTH_RATE_LIMIT_MAX = "5";
+    process.env.AUTH_RATE_LIMIT_WINDOW_MS = "30000";
+
+    const cfg = loadConfig();
+    expect(cfg.authRateLimitMax).toBe(5);
+    expect(cfg.authRateLimitWindowMs).toBe(30_000);
+  });
+
   it("CLI arg wins over both env and YAML", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sastbot-test-"));
     const yamlPath = path.join(tmp, "config.yaml");

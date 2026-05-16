@@ -1,5 +1,6 @@
 import cookiePlugin from "@fastify/cookie";
 import corsPlugin from "@fastify/cors";
+import rateLimitPlugin from "@fastify/rate-limit";
 import swaggerPlugin from "@fastify/swagger";
 import swaggerUiPlugin from "@fastify/swagger-ui";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -13,8 +14,9 @@ import {
 import { loadConfig } from "./config.js";
 import { prisma, registerPrismaShutdown } from "./db.js";
 import authPlugin from "./plugins/auth.js";
-import { closeRedis } from "./queue/connection.js";
+import { closeRedis, getRedis } from "./queue/connection.js";
 import { closeScanQueue } from "./queue/scanQueue.js";
+import adminBackupRoutes from "./routes/adminBackup.js";
 import adminCredentialsRoutes from "./routes/adminCredentials.js";
 import adminReposRoutes from "./routes/adminRepos.js";
 import adminSettingsRoutes from "./routes/adminSettings.js";
@@ -52,6 +54,15 @@ export async function buildServer(): Promise<FastifyInstance> {
   });
 
   await app.register(cookiePlugin, {});
+
+  // Rate-limiting for auth endpoints. Redis-backed so limits survive process
+  // restarts. skipOnError: true means a Redis outage falls back to in-memory
+  // counting rather than locking everyone out.
+  await app.register(rateLimitPlugin, {
+    global: false, // opt-in per-route; only auth routes need it
+    redis: getRedis(),
+    skipOnError: true,
+  });
 
   await app.register(swaggerPlugin, {
     openapi: {
@@ -91,6 +102,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(adminReposRoutes);
   await app.register(adminSettingsRoutes);
   await app.register(adminCredentialsRoutes);
+  await app.register(adminBackupRoutes);
   await app.register(scansRoutes);
   await app.register(scopesRoutes);
 

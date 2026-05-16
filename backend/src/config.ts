@@ -172,10 +172,14 @@ const EnvSchema = z.object({
   // DEV-ONLY convenience: when set, bootstrapIfEmpty uses this exact value
   // for the bootstrap admin password instead of a random base64url string.
   // Lets the operator restart with a wiped DB and still log in with the
-  // same known credential. Production deployments must leave this UNSET so
-  // the password is random per boot. See "Pre-launch closing tasks" in the
-  // pending-features memory; this stanza is slated for removal at launch.
+  // same known credential.
+  // HARD RULE: setting this in NODE_ENV=production is a boot-time config error.
   BOOTSTRAP_ADMIN_PASSWORD: z.string().optional(),
+  // Rate-limiting for /auth/login and /auth/logout (Redis-backed).
+  // AUTH_RATE_LIMIT_MAX: maximum requests per window per IP (default 10).
+  AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+  // AUTH_RATE_LIMIT_WINDOW_MS: sliding window length in milliseconds (default 60 000 = 1 min).
+  AUTH_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   // pino requires lowercase level names ("info" not "INFO").
   LOG_LEVEL: z.string().default("info").transform((v) => v.toLowerCase()),
   PORT: z.coerce.number().int().positive().default(8000),
@@ -200,6 +204,8 @@ export type AppConfig = {
   logLevel: string;
   port: number;
   cloneCacheDir: string;
+  authRateLimitMax: number;
+  authRateLimitWindowMs: number;
 };
 
 let cached: AppConfig | null = null;
@@ -269,6 +275,17 @@ export function loadConfig(): AppConfig {
     );
   }
 
+  // Production guard: BOOTSTRAP_ADMIN_PASSWORD must never be set in production.
+  // It is a dev-only escape hatch that would allow a predictable password to slip
+  // into a shared deployment. Fail fast so there is no ambiguity.
+  if (parsed.data.BOOTSTRAP_ADMIN_PASSWORD !== undefined && process.env["NODE_ENV"] === "production") {
+    throw new ConfigError(
+      "BOOTSTRAP_ADMIN_PASSWORD must not be set in production (NODE_ENV=production). " +
+      "Remove it from your environment or config file. " +
+      "This variable is a dev-only escape hatch and is unsafe in a shared deployment.",
+    );
+  }
+
   cached = {
     masterKey,
     databaseUrl: parsed.data.DATABASE_URL,
@@ -280,6 +297,8 @@ export function loadConfig(): AppConfig {
     logLevel: parsed.data.LOG_LEVEL,
     port: parsed.data.PORT,
     cloneCacheDir: parsed.data.CLONE_CACHE_DIR,
+    authRateLimitMax: parsed.data.AUTH_RATE_LIMIT_MAX,
+    authRateLimitWindowMs: parsed.data.AUTH_RATE_LIMIT_WINDOW_MS,
   };
   return cached;
 }

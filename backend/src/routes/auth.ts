@@ -17,6 +17,25 @@ import {
 } from "../security/sessions.js";
 import { userToOut } from "../services/mappers.js";
 
+/** Build the rate-limit config for auth endpoints from app config. */
+function authRateLimit() {
+  const cfg = loadConfig();
+  return {
+    max: cfg.authRateLimitMax,
+    timeWindow: cfg.authRateLimitWindowMs,
+    // Use the configured values, not a hardcoded key prefix, so the
+    // window is per-IP and independent for each route.
+    keyGenerator: (req: { ip: string }) => req.ip,
+    // Emit standard Retry-After header so the frontend can render a countdown.
+    addHeaders: {
+      "x-ratelimit-limit": true,
+      "x-ratelimit-remaining": true,
+      "x-ratelimit-reset": true,
+      "retry-after": true,
+    },
+  };
+}
+
 function cookieOptions(): {
   httpOnly: boolean;
   sameSite: "lax";
@@ -48,6 +67,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
   typed.post(
     "/auth/login",
     {
+      config: { rateLimit: authRateLimit() },
       schema: {
         tags: ["auth"],
         summary: "Log in with email + password",
@@ -78,6 +98,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
   typed.post(
     "/auth/logout",
     {
+      config: { rateLimit: authRateLimit() },
       schema: {
         tags: ["auth"],
         summary: "Log out — revoke current session",
