@@ -21,7 +21,8 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "bootstrap-admin": "tsx src/cli/bootstrap-admin.ts",
-    "dry-run-llm-sast": "tsx src/cli/dry-run-llm-sast.ts"
+    "dry-run-llm-sast": "tsx src/cli/dry-run-llm-sast.ts",
+    "dedup-sast-issues": "tsx src/cli/dedup-sast-issues.ts"
   },
   "dependencies": {
     "@cyclonedx/cdxgen": "^12.2.1",

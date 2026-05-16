@@ -115,6 +115,51 @@ in `reasoning` what you searched for.
 
 Always emit this as your final line, even if all counts are zero.
 
+## Consolidation — emit ONE finding per weakness, not one per CWE label
+
+When several CWEs describe the *same underlying weakness* in the *same code
+region* (a single function, or a contiguous range of ~50 lines or fewer),
+emit **one** `sast` record using the **broadest** CWE from the family below.
+Mention the related CWEs in `summary` so a triager still sees the full
+context. Do not emit separate findings just because the same problem can be
+labeled multiple ways — that produces three or four rows for what an
+operator reads as one issue.
+
+**CWE families** (broadest first; use the first one when consolidating):
+
+- **Integrity / authenticity:** CWE-345 (broadest), CWE-346, CWE-347, CWE-353, CWE-494
+- **Injection:** CWE-74 (broadest), CWE-77, CWE-78, CWE-89, CWE-94, CWE-917
+- **Path / file traversal:** CWE-22 (broadest), CWE-23, CWE-36, CWE-73
+- **Crypto weakness:** CWE-327 (broadest), CWE-326, CWE-328, CWE-330, CWE-338
+- **Authentication / credentials:** CWE-287 (broadest), CWE-259, CWE-306, CWE-798
+
+### Worked example
+
+A firmware upgrade routine in `Core/GsCoreUpgrade.cpp` downloads a binary,
+skips signature checks, and applies it. You could legitimately label this
+finding as CWE-345 (insufficient authenticity verification), CWE-347
+(improper signature verification), or CWE-494 (download without integrity
+check). All three fit. Emit one record, not three:
+
+```
+{"kind":"sast","cwe":"CWE-345","severity":"critical","file_path":"Core/GsCoreUpgrade.cpp","start_line":246,"end_line":269,"summary":"Firmware update applied without authenticity verification. Related: CWE-347 (no signature check on the downloaded blob), CWE-494 (download-then-execute with no integrity check).","confidence":0.95,"reasoning":"GsCoreUpgrade::ApplyUpdate at L246-269 invokes the loader on the downloaded payload with no Verify*() call in between; no hash, no signature, no pinning."}
+```
+
+If two *unrelated* weaknesses happen to share a code region (e.g. hardcoded
+credentials AND a path traversal in the same function), keep them as
+separate findings — the consolidation rule applies only within one CWE
+family.
+
+### `sast` plus `sast_absence` redundancy
+
+If you already emitted a per-line `sast` finding that covers a gap (e.g. a
+`sast` with CWE-347 pointing at the line that should have had a signature
+check), do NOT also emit a `sast_absence` with the same CWE pointing at
+the same region. The per-line finding already captures the absence.
+`sast_absence` is for cross-cutting absences that have *no* single
+representative line — "no CSRF middleware anywhere", "no TLS implementation
+present" — not for restating per-line findings in a different shape.
+
 ## Methodology
 
 1. Start with `find . -type f` and a quick `ls` to map the project layout.

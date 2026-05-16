@@ -4,6 +4,98 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## SAST dedup — same-scope merger + cross-file recheck verdict (2026-05-15)
+
+### What shipped
+
+- **Same-scope programmatic merger.** New `backend/src/services/sastDedup.ts`
+  with `mergeDuplicateSastIssues(client, scopeId, scanRunId, options?)`. Reads
+  `pending`-status SAST issues for a scope; groups by `latestFilePath`; builds
+  line-proximity clusters (overlap or ≤5 lines apart); union-finds each cluster
+  on CWE-family overlap. Five CWE families seeded: integrity, injection, path
+  traversal, crypto, authentication. Survivor pick: highest severity → widest
+  range → lowest id. Re-points `ScaIssue.reachableViaSastFingerprint` from
+  merged → survivor fingerprint, unions CWE ids onto survivor, appends a
+  `See also: …` footer to the survivor's summary, lifts `jiraTicketId` only
+  if survivor has none, then deletes merged rows. Operator-curated rows
+  (`confirmed`/`planned`/terminal) are never touched.
+
+- **Worker wire-up.** Called after `applyRecheckVerdicts` and before the
+  `sastFindingCount` denorm + SARIF regen, gated on `!hasErrorWarnings`
+  (same rule as the SCA auto-fix sweep). Emits an info-severity
+  `sast_duplicates_merged` warning when anything was merged.
+
+- **Cross-file recheck verdict.** `RecheckVerdictRecord` gained
+  `verdict: "duplicate_of"` with a `duplicate_of: <target-id>` field.
+  `applyRecheckVerdicts` performs the same merge actions (re-point, union,
+  lift, delete). Refuses to merge operator-curated rows away (falls back to
+  `still_present`). Worker now builds and passes a `duplicateTargets` list
+  (all `pending`/`error` SAST issues in scope) into the recheck pass.
+
+- **Prompt updates.**
+  - `sast_detection.md` gained a Consolidation section: when multiple CWEs
+    describe the same weakness in the same region, emit ONE record using
+    the broadest CWE (the family table is duplicated in the prompt) and
+    list related CWEs in `summary`. Includes a worked example using the
+    CWE-345/347/494 firmware-upgrade cluster, plus a rule against emitting
+    a `sast_absence` when a per-line `sast` already covers the gap.
+  - `sast_recheck.md` documents the new `duplicate_of` verdict, points at
+    a new `{{DUPLICATE_TARGETS_PATH}}` JSONL input, and adds a Duplicates
+    section telling the LLM when to merge (same-bug, different file/line)
+    vs. when not (unrelated CWEs that happen to share a file).
+
+- **One-off broad cleanup CLI.** `backend/src/cli/dedup-sast-issues.ts`
+  (`pnpm run dedup-sast-issues [--apply] [--scope-id <uuid>]`) reuses the
+  same merger code via a new `dryRun` option. Default is preview-only;
+  `--apply` writes. Idempotent — re-running on already-deduped state
+  reports zero clusters.
+
+- **Applied on homelab.** 18 rows merged into 14 survivors across all 3
+  scopes. The originally-reported FocalSpec case in
+  `GoSensor/.../GsCoreUpgrade.cpp` collapsed from 5 rows → 2 (line 210
+  standalone stays separate; lines 246-269 become the critical-severity
+  survivor carrying CWEs `{345, 494, 347}` and a `See also` footer).
+
+### What we learned
+
+- **The duplication wasn't limited to the one cluster the user spotted.**
+  The survey before applying found 79 file collisions across 3 scopes —
+  `GsHttpServer.cpp` alone had 15 pending rows that the merger collapsed
+  to 11. Visual spot-checks are useful for triggering investigation but
+  miss the long tail; treat the reported case as one symptom and survey
+  the table.
+
+- **CWE-family curation is the right abstraction, not graph traversal.**
+  The five hand-picked families catch the LLM's actual labeling drift
+  (CWE-345 ↔ CWE-347 ↔ CWE-494 on the same integrity check; CWE-77 ↔ -78
+  ↔ -94 on the same exec) without overcollapsing distinct weaknesses. A
+  derived-from-CWE-graph approach would have folded unrelated weaknesses
+  (CWE-22 has parents that lead to CWE-707 → CWE-707 children include
+  injection and crypto sub-trees) into one mega-family.
+
+- **Operator-curated rows must be invariant under remediation.** The same
+  rule applies in three places now: the same-scope merger only touches
+  `pending`; the recheck `duplicate_of` path refuses to delete
+  `confirmed`/`planned`; the existing auto-fix sweep already left them
+  alone. Keep this consistent — the alternative is operators losing their
+  triage work to a worker pass and never trusting the tool again.
+
+- **Same merger code, two callers (worker + CLI).** Adding `dryRun` to the
+  merger let the one-off broad-cleanup script reuse the exact same logic
+  the worker will run on every future scan. No second implementation to
+  drift from the first.
+
+- **Per-line `sast_absence` was a redundant emission pattern.** The
+  detection prompt previously let the LLM emit both a `sast` finding at
+  the line that should have had a signature check AND a `sast_absence`
+  finding pointing at the same line. They're the same finding in two
+  shapes. New consolidation rule in `sast_detection.md` says: emit only
+  `sast` when there's a per-line locus; reserve `sast_absence` for
+  genuinely cross-cutting absences (no CSRF middleware anywhere, no TLS
+  implementation present).
+
+---
+
 ## M6n — SBOM/SCA dev-tool filtering (2026-05-09)
 
 ### What shipped

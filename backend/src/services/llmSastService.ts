@@ -506,9 +506,12 @@ export async function cleanupTmp(scanRunId: string): Promise<void> {
 
 const RecheckVerdictRecord = z.object({
   id: z.string(),
-  verdict: z.enum(["still_present", "fixed", "file_deleted"]),
+  verdict: z.enum(["still_present", "fixed", "file_deleted", "duplicate_of"]),
   reasoning: z.string(),
   current_snippet: z.string().optional(),
+  /** Required when verdict === "duplicate_of"; the SastIssue.id of the target
+   *  the candidate is being folded into. Ignored on other verdicts. */
+  duplicate_of: z.string().optional(),
 });
 export type RecheckVerdictRecord = z.infer<typeof RecheckVerdictRecord>;
 
@@ -518,8 +521,21 @@ const RecheckCompleteRecord = z.object({
   still_present: z.number().int().nonnegative().optional(),
   fixed: z.number().int().nonnegative().optional(),
   file_deleted: z.number().int().nonnegative().optional(),
+  duplicate_of: z.number().int().nonnegative().optional(),
 });
 export type RecheckCompleteRecord = z.infer<typeof RecheckCompleteRecord>;
+
+/** Reference list the recheck LLM consults when deciding whether a candidate
+ *  is actually a relocated / re-labeled variant of an issue already alive in
+ *  this scope. Issues that ARE in the latest detection (re-emitted this run)
+ *  plus the recheck candidates themselves are all valid duplicate targets. */
+export interface RecheckDuplicateTarget {
+  id: string;
+  file: string;
+  line: number;
+  cwe: string;
+  summary: string;
+}
 
 export interface RecheckIssueInput {
   /** SastIssue.id — round-trips through the LLM so we can map verdict back. */
@@ -539,6 +555,12 @@ export interface RunRecheckInput {
    *  cwd=scopeDir and needs paths it can read directly). */
   scopePath: string;
   issues: RecheckIssueInput[];
+  /** Active SAST issues in this scope that the candidate could be a duplicate
+   *  of (after relocation / re-labeling). Includes the re-emitted issues from
+   *  the latest detection AND the recheck candidates themselves — both are
+   *  valid merge targets. Paths are repo-rooted; runRecheck translates them
+   *  before writing the prompt input file. */
+  duplicateTargets: RecheckDuplicateTarget[];
   tokenBudget: number;
   /** Effort level for `claude -p --effort`. Recheck is narrow verification
    *  and typically wants a lower effort than detection. */
@@ -598,11 +620,30 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
   const jsonl = issuesForModel.map((i) => JSON.stringify(i)).join("\n") + "\n";
   await fs.writeFile(issuesInputPath, jsonl, { encoding: "utf8", mode: 0o644 });
 
+  // Duplicate-target reference list — what the LLM consults when deciding
+  // whether a candidate is a relocated variant of a still-alive issue.
+  const duplicateTargetsPath = path.join(tmpDir, "recheck_duplicate_targets.jsonl");
+  const candidateIds = new Set(input.issues.map((i) => i.id));
+  const targetsForModel = input.duplicateTargets
+    // Don't list a candidate as its own duplicate target — the candidate is
+    // already being inspected and would otherwise look at itself.
+    .filter((t) => !candidateIds.has(t.id))
+    .map((t) => ({
+      ...t,
+      file: toScopeRelative(input.scopePath, t.file),
+    }));
+  const targetsJsonl = targetsForModel.length > 0
+    ? targetsForModel.map((t) => JSON.stringify(t)).join("\n") + "\n"
+    : "";
+  await fs.writeFile(duplicateTargetsPath, targetsJsonl, { encoding: "utf8", mode: 0o644 });
+
   const systemPrompt = loadPrompt("sast_system", {});
   const userPrompt = loadPrompt("sast_recheck", {
     SCOPE_PATH: input.scopeDir,
     TOKEN_BUDGET: String(input.tokenBudget),
     ISSUES_INPUT_PATH: issuesInputPath,
+    DUPLICATE_TARGETS_PATH: duplicateTargetsPath,
+    DUPLICATE_TARGETS_COUNT: String(targetsForModel.length),
   });
 
   logger.info(
@@ -692,9 +733,21 @@ export interface ApplyRecheckResult {
   stillPresent: number;
   fixed: number;
   fileDeleted: number;
+  duplicatesMerged: number;
   /** Issues we sent in but got no verdict for — left as-is (no false closure). */
   missingVerdict: number;
 }
+
+/** Triage states the recheck merger refuses to delete from. Operator-curated
+ *  rows stay even if the LLM flags them as a duplicate — the operator's
+ *  verdict is the source of truth, just like in the same-scope merger. */
+const RECHECK_NON_MERGEABLE_STATUSES = new Set([
+  "confirmed",
+  "planned",
+  "fixed",
+  "suppressed",
+  "false_positive",
+]);
 
 /**
  * Apply recheck verdicts to SastIssue rows.
@@ -716,6 +769,7 @@ export async function applyRecheckVerdicts(
     stillPresent: 0,
     fixed: 0,
     fileDeleted: 0,
+    duplicatesMerged: 0,
     missingVerdict: 0,
   };
 
@@ -729,7 +783,17 @@ export async function applyRecheckVerdicts(
     // Defensive scope check — refuse to mutate an issue from another scope.
     const row = await db.sastIssue.findFirst({
       where: { id: issue.id, scopeId: input.scopeId },
-      select: { id: true, latestFilePath: true, latestStartLine: true, latestEndLine: true },
+      select: {
+        id: true,
+        fingerprint: true,
+        latestFilePath: true,
+        latestStartLine: true,
+        latestEndLine: true,
+        latestCweIds: true,
+        latestSeverity: true,
+        triageStatus: true,
+        jiraTicketId: true,
+      },
     });
     if (!row) {
       logger.warn(
@@ -784,6 +848,107 @@ export async function applyRecheckVerdicts(
         },
       });
       result.fileDeleted++;
+    } else if (v.verdict === "duplicate_of") {
+      // Refuse to merge an operator-curated row away — the same-scope
+      // merger applies the same rule. Treat as still_present instead.
+      if (RECHECK_NON_MERGEABLE_STATUSES.has(row.triageStatus)) {
+        logger.info(
+          { issueId: row.id, triageStatus: row.triageStatus },
+          "[llmSastService] duplicate_of verdict ignored — row is operator-curated",
+        );
+        await db.sastIssue.update({
+          where: { id: row.id },
+          data: { lastSeenAt: new Date(), lastSeenScanRunId: input.scanRunId },
+        });
+        result.stillPresent++;
+        continue;
+      }
+      const targetId = v.duplicate_of;
+      if (!targetId) {
+        logger.warn(
+          { issueId: row.id },
+          "[llmSastService] duplicate_of verdict missing target id — treated as still_present",
+        );
+        await db.sastIssue.update({
+          where: { id: row.id },
+          data: { lastSeenAt: new Date(), lastSeenScanRunId: input.scanRunId },
+        });
+        result.stillPresent++;
+        continue;
+      }
+      if (targetId === row.id) {
+        logger.warn({ issueId: row.id }, "[llmSastService] duplicate_of points at self — ignored");
+        result.stillPresent++;
+        continue;
+      }
+      const target = await db.sastIssue.findFirst({
+        where: { id: targetId, scopeId: input.scopeId },
+        select: {
+          id: true,
+          fingerprint: true,
+          latestCweIds: true,
+          latestLlmSummary: true,
+          latestRuleMessage: true,
+          jiraTicketId: true,
+          triageStatus: true,
+          latestFilePath: true,
+          latestStartLine: true,
+          latestEndLine: true,
+        },
+      });
+      // Target may have been deleted earlier in this loop (cycles, or another
+      // candidate already merged into it then merged itself elsewhere).
+      // Conservative: leave the candidate alive.
+      if (!target) {
+        logger.info(
+          { issueId: row.id, targetId },
+          "[llmSastService] duplicate_of target no longer present — treated as still_present",
+        );
+        await db.sastIssue.update({
+          where: { id: row.id },
+          data: { lastSeenAt: new Date(), lastSeenScanRunId: input.scanRunId },
+        });
+        result.stillPresent++;
+        continue;
+      }
+
+      const cweUnion = new Set<string>(target.latestCweIds);
+      for (const c of row.latestCweIds) cweUnion.add(c);
+      const cwePart = row.latestCweIds.join(",") || "CWE-?";
+      const range = row.latestEndLine != null && row.latestEndLine !== row.latestStartLine
+        ? `L${row.latestStartLine}-${row.latestEndLine}`
+        : `L${row.latestStartLine}`;
+      const baseSummary = (target.latestLlmSummary ?? target.latestRuleMessage ?? "").trim();
+      const newSummary = `${baseSummary}\n\nSee also: ${cwePart} ${row.latestFilePath} ${range} (merged by recheck)`.trim();
+
+      await db.scaIssue.updateMany({
+        where: { scopeId: input.scopeId, reachableViaSastFingerprint: row.fingerprint },
+        data: { reachableViaSastFingerprint: target.fingerprint },
+      });
+      await db.sastIssue.update({
+        where: { id: target.id },
+        data: {
+          latestCweIds: Array.from(cweUnion),
+          latestLlmSummary: newSummary,
+          ...(target.jiraTicketId == null && row.jiraTicketId != null
+            ? { jiraTicketId: row.jiraTicketId }
+            : {}),
+          lastSeenAt: new Date(),
+          lastSeenScanRunId: input.scanRunId,
+        },
+      });
+      await db.sastIssue.delete({ where: { id: row.id } });
+
+      logger.info(
+        {
+          scopeId: input.scopeId,
+          mergedId: row.id,
+          targetId: target.id,
+          cweUnion: Array.from(cweUnion),
+        },
+        "[llmSastService] recheck merged duplicate",
+      );
+      result.duplicatesMerged++;
     }
   }
 

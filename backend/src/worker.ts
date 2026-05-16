@@ -32,6 +32,7 @@ import {
   runRecheck,
   type ScaHintInput,
 } from "./services/llmSastService.js";
+import { mergeDuplicateSastIssues } from "./services/sastDedup.js";
 import {
   applySbomAugmentation,
   cleanupSbomTmp,
@@ -319,6 +320,35 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         snippet: i.latestSnippet ?? "",
         cwe: i.latestCweIds[0] ?? "CWE-UNKNOWN",
       }));
+
+      // Duplicate-target reference for the LLM: active issues in this scope
+      // the candidate could be a relocated variant of. Includes issues the
+      // current detection just re-emitted (lastSeenScanRunId === scanRunId)
+      // and the recheck candidates themselves — the LLM can fold a
+      // candidate into another candidate when both describe the same bug
+      // at different files/lines. Terminal/operator-curated rows are
+      // excluded — we don't want the LLM merging things into them.
+      const targetRows = await prisma.sastIssue.findMany({
+        where: {
+          scopeId: run.scopeId,
+          triageStatus: { in: ["pending", "error"] },
+        },
+        select: {
+          id: true,
+          latestFilePath: true,
+          latestStartLine: true,
+          latestCweIds: true,
+          latestRuleMessage: true,
+          latestLlmSummary: true,
+        },
+      });
+      const duplicateTargets = targetRows.map((t) => ({
+        id: t.id,
+        file: t.latestFilePath,
+        line: t.latestStartLine,
+        cwe: t.latestCweIds[0] ?? "CWE-UNKNOWN",
+        summary: t.latestLlmSummary ?? t.latestRuleMessage ?? "",
+      }));
       log.info({ count: recheckIssues.length, budget: repo.llmRecheckTokenBudget, effort: repo.llmRecheckEffort }, "[worker] LLM recheck start");
       // Use tokens-against-budget for live progress: verdicts arrive batched
       // at the end of the claude-p run, so done=verdictCount only flips from
@@ -331,6 +361,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         scopeDir: scanDir,
         scopePath,
         issues: recheckIssues,
+        duplicateTargets,
         tokenBudget: repo.llmRecheckTokenBudget,
         effortLevel: repo.llmRecheckEffort,
         orgId: run.orgId,
@@ -396,6 +427,22 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         llmRequestCount: { increment: detection.usage.requestCount },
       },
     });
+
+    // 6b. Collapse same-scope SAST duplicates produced by LLM drift across
+    //     scans (different start_line / CWE for one weakness). Gated on
+    //     scan trustworthiness — same rule as the SCA auto-fix sweep —
+    //     so a degraded scan can't delete real findings.
+    if (!(await hasErrorWarnings(scanRunId))) {
+      const dedup = await mergeDuplicateSastIssues(prisma, run.scopeId, scanRunId);
+      if (dedup.mergedCount > 0) {
+        log.info(dedup, "[worker] SAST duplicate merge");
+        await appendWarning(scanRunId, {
+          code: "sast_duplicates_merged",
+          severity: "info",
+          message: `Merged ${dedup.mergedCount} duplicate SAST issue(s) into ${dedup.survivorCount} survivor(s).`,
+        });
+      }
+    }
 
     // 7. Update sastFindingCount denorm.
     const sastCount = await prisma.sastIssue.count({

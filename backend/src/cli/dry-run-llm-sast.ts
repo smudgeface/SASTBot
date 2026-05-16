@@ -140,6 +140,9 @@ async function main(): Promise<void> {
         scopeDir: cloneDir,
         scopePath: scope.path,
         issues,
+        // Dry-run is verdict-only; we don't exercise the duplicate_of merge
+        // path here (no DB writes happen anyway). Leave the target list empty.
+        duplicateTargets: [],
         tokenBudget: recheckBudget,
         effortLevel: scope.repo.llmRecheckEffort,
         orgId: scope.repo.orgId ?? null,
