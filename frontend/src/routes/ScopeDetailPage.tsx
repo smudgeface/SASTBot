@@ -63,6 +63,9 @@ import {
 import { formatDate, formatRelative } from "@/lib/format";
 import { prettyEcosystem, prettyLicense } from "@/lib/componentLabels";
 import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
+import { SortableTableHead } from "@/components/SortableTableHead";
+import type { SortState } from "@/components/SortableTableHead";
+import type { IssueSortKey } from "@/api/queries/scopes";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
 import { SeverityBadge, SEVERITY_COLORS } from "@/components/SeverityBadge";
@@ -666,6 +669,16 @@ function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplay
     setFilters((f) => ({ ...f, page: 1, [key]: next.size > 0 ? [...next] : undefined }));
   }
 
+  // Active sort state, derived from the filter object so it round-trips
+  // through React Query's queryKey along with everything else.
+  const sortState: SortState<IssueSortKey> = {
+    sort_by: filters.sort_by,
+    sort_dir: filters.sort_dir ?? "asc",
+  };
+  const onSort = (next: SortState<IssueSortKey>) => {
+    setFilters((f) => ({ ...f, page: 1, sort_by: next.sort_by, sort_dir: next.sort_dir }));
+  };
+
   // Count issues that need attention: planned + Jira ticket statusCategory = "done"
   const attentionCount = (data?.items ?? []).filter(
     (i) => i.triage_status === "planned" && ticketById.get(i.jira_ticket_id ?? "")?.status_category === "done",
@@ -735,11 +748,21 @@ function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplay
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-6" />
-                  <TableHead className="w-24">Severity</TableHead>
-                  <TableHead>Summary</TableHead>
-                  <TableHead className="w-64">Location</TableHead>
-                  <TableHead className="w-28">Status</TableHead>
-                  <TableHead className="w-24">Last seen</TableHead>
+                  <SortableTableHead columnKey="severity" state={sortState} onSort={onSort} className="w-24">
+                    Severity
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="summary" state={sortState} onSort={onSort}>
+                    Summary
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="location" state={sortState} onSort={onSort} className="w-64">
+                    Location
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="status" state={sortState} onSort={onSort} className="w-28">
+                    Status
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="last_seen" state={sortState} onSort={onSort} className="w-24">
+                    Last seen
+                  </SortableTableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1166,6 +1189,16 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplaye
 
   const statusSet = new Set(filters.dismissed_statuses ?? []) as ReadonlySet<typeof SCA_STATUSES[number]>;
 
+  // Sort state — round-trips through the filter object so it lands in the
+  // React Query queryKey alongside the rest of the filter inputs.
+  const sortState: SortState<IssueSortKey> = {
+    sort_by: filters.sort_by,
+    sort_dir: filters.sort_dir ?? "asc",
+  };
+  const onSort = (next: SortState<IssueSortKey>) => {
+    setFilters((f) => ({ ...f, page: 1, sort_by: next.sort_by, sort_dir: next.sort_dir }));
+  };
+
   const hasScaFilter = !!(
     filters.severities?.length || filters.finding_types?.length || filters.dismissed_statuses?.length ||
     filters.reachable || filters.has_fix || filters.include_resolved
@@ -1271,11 +1304,21 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplaye
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-6" />
-                  <TableHead className="w-24">Severity</TableHead>
-                  <TableHead>Summary</TableHead>
-                  <TableHead className="w-64">Location</TableHead>
-                  <TableHead className="w-28">Status</TableHead>
-                  <TableHead className="w-24">Last seen</TableHead>
+                  <SortableTableHead columnKey="severity" state={sortState} onSort={onSort} className="w-24">
+                    Severity
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="summary" state={sortState} onSort={onSort}>
+                    Summary
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="location" state={sortState} onSort={onSort} className="w-64">
+                    Location
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="status" state={sortState} onSort={onSort} className="w-28">
+                    Status
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="last_seen" state={sortState} onSort={onSort} className="w-24">
+                    Last seen
+                  </SortableTableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

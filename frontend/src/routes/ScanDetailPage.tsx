@@ -48,6 +48,10 @@ import { formatDate } from "@/lib/format";
 import { prettyEcosystem, prettyLicense } from "@/lib/componentLabels";
 import { useNow } from "@/lib/useNow";
 import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
+import { SortableTableHead } from "@/components/SortableTableHead";
+import type { SortState } from "@/components/SortableTableHead";
+import type { IssueSortKey } from "@/api/queries/scopes";
+import type { ScanFindingsFilters, SastFindingsFilters } from "@/api/queries/scans";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
 import { SeverityBadge, severityClass } from "@/components/SeverityBadge";
@@ -487,15 +491,22 @@ function ScanComponentRow({
 }
 
 function ComponentsTab({
-  components, findings, isLoading, onDisplayedTotalChange, expandedId, sourceUrlTemplate,
+  components, scanId, isLoading, onDisplayedTotalChange, expandedId, sourceUrlTemplate,
 }: {
   components: SbomComponent[];
-  findings: ScanFinding[];
+  scanId: string;
   isLoading: boolean;
   onDisplayedTotalChange?: (total: number) => void;
   expandedId?: string;
   sourceUrlTemplate?: string | null;
 }) {
+  // ComponentsTab needs every finding (not just one page) to build the
+  // component-id → findings[] cross-reference for the per-row chip strip
+  // and the "Only with findings" filter. Fetch up to the backend's
+  // max page_size in one shot — practical scans don't exceed this.
+  const { data: findingsPage } = useScanFindings(scanId, { page_size: 500 });
+  const findings = findingsPage?.items ?? [];
+
   const [onlyWithFindings, setOnlyWithFindings] = useState(false);
   const findingsByComp = new Map<string, ScanFinding[]>();
   for (const f of findings) {
@@ -559,6 +570,219 @@ function ComponentsTab({
   );
 }
 
+// Compact paginator shared by the scan-page SCA + SAST tabs.
+function Pager({
+  page, pageSize, total, onPage,
+}: { page: number; pageSize: number; total: number; onPage: (p: number) => void }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-between text-xs text-muted-foreground pt-2">
+      <span>{(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}</span>
+      <div className="flex gap-1">
+        <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>‹</Button>
+        <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>›</Button>
+      </div>
+    </div>
+  );
+}
+
+// Scan-page SCA findings tab — server-paged, server-sorted, server-filtered.
+// Audit view, so triage / Jira affordances stay on the scope page.
+function ScaFindingsTab({
+  scanId, sourceUrlTemplate, onTotalChange,
+}: {
+  scanId: string;
+  sourceUrlTemplate: string | null;
+  onTotalChange?: (total: number) => void;
+}) {
+  const [filters, setFilters] = useState<ScanFindingsFilters>({ page: 1, page_size: 50 });
+  const { data, isLoading } = useScanFindings(scanId, filters);
+  useEffect(() => {
+    if (data?.total != null) onTotalChange?.(data.total);
+  }, [data?.total, onTotalChange]);
+
+  const severitySet = new Set(filters.severities ?? []) as ReadonlySet<"critical" | "high" | "medium" | "low">;
+  const typeSet = new Set(filters.finding_types ?? []) as ReadonlySet<"cve" | "eol" | "deprecated">;
+
+  function toggleMulti<T extends string>(current: ReadonlySet<T>, key: keyof ScanFindingsFilters, value: T) {
+    const next = new Set(current);
+    next.has(value) ? next.delete(value) : next.add(value);
+    setFilters((f) => ({ ...f, page: 1, [key]: next.size > 0 ? [...next] : undefined }));
+  }
+
+  const sortState: SortState<IssueSortKey> = {
+    sort_by: filters.sort_by,
+    sort_dir: filters.sort_dir ?? "asc",
+  };
+  const onSort = (next: SortState<IssueSortKey>) => {
+    setFilters((f) => ({ ...f, page: 1, sort_by: next.sort_by, sort_dir: next.sort_dir }));
+  };
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-y-2 gap-x-0 mb-3">
+        <FilterGroup
+          items={["critical", "high", "medium", "low"] as const}
+          active={severitySet}
+          onToggle={(s) => toggleMulti(severitySet, "severities", s)}
+          label={(s) => s.charAt(0).toUpperCase() + s.slice(1)}
+          colorFn={(s) => severityClass(s)}
+        />
+        <Pipe />
+        <FilterGroup
+          items={["cve", "eol", "deprecated"] as const}
+          active={typeSet}
+          onToggle={(t) => toggleMulti(typeSet, "finding_types", t)}
+          label={(t) => (t === "deprecated" ? "Deprecated" : t.toUpperCase())}
+        />
+        {(severitySet.size > 0 || typeSet.size > 0) && (
+          <>
+            <Pipe />
+            <button
+              onClick={() => setFilters({ page: 1, page_size: 50 })}
+              className="text-xs text-muted-foreground underline underline-offset-2 px-1"
+            >
+              Clear
+            </button>
+          </>
+        )}
+      </div>
+      {isLoading ? (
+        <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading…</CardContent></Card>
+      ) : !data || data.total === 0 ? (
+        <Card><CardContent className="p-6 text-sm text-muted-foreground">No findings match.</CardContent></Card>
+      ) : (
+        <>
+          <Card>
+            <Table className="table-fixed">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-6" />
+                  <SortableTableHead columnKey="severity" state={sortState} onSort={onSort} className="w-24">
+                    Severity
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="summary" state={sortState} onSort={onSort}>
+                    Summary
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="location" state={sortState} onSort={onSort} className="w-64">
+                    Location
+                  </SortableTableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.items.map((f) => (
+                  <FindingRow key={f.id} finding={f} sourceUrlTemplate={sourceUrlTemplate} />
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
+          <Pager
+            page={filters.page ?? 1}
+            pageSize={filters.page_size ?? 50}
+            total={data.total}
+            onPage={(p) => setFilters((f) => ({ ...f, page: p }))}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+// Scan-page SAST detections tab — server-paged, sortable, severity- and
+// status-filterable. Audit view; triage UI stays on the scope page.
+function SastFindingsTab({
+  scanId, sourceUrlTemplate, onTotalChange,
+}: {
+  scanId: string;
+  sourceUrlTemplate: string | null;
+  onTotalChange?: (total: number) => void;
+}) {
+  const [filters, setFilters] = useState<SastFindingsFilters>({ page: 1, page_size: 50 });
+  const { data, isLoading } = useSastFindings(scanId, filters);
+  useEffect(() => {
+    if (data?.total != null) onTotalChange?.(data.total);
+  }, [data?.total, onTotalChange]);
+
+  const severitySet = new Set(filters.severities ?? []) as ReadonlySet<"critical" | "high" | "medium" | "low" | "info">;
+
+  function toggleMulti<T extends string>(current: ReadonlySet<T>, key: keyof SastFindingsFilters, value: T) {
+    const next = new Set(current);
+    next.has(value) ? next.delete(value) : next.add(value);
+    setFilters((f) => ({ ...f, page: 1, [key]: next.size > 0 ? [...next] : undefined }));
+  }
+
+  const sortState: SortState<IssueSortKey> = {
+    sort_by: filters.sort_by,
+    sort_dir: filters.sort_dir ?? "asc",
+  };
+  const onSort = (next: SortState<IssueSortKey>) => {
+    setFilters((f) => ({ ...f, page: 1, sort_by: next.sort_by, sort_dir: next.sort_dir }));
+  };
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-y-2 gap-x-0 mb-3">
+        <FilterGroup
+          items={["critical", "high", "medium", "low", "info"] as const}
+          active={severitySet}
+          onToggle={(s) => toggleMulti(severitySet, "severities", s)}
+          label={(s) => s.charAt(0).toUpperCase() + s.slice(1)}
+          colorFn={(s) => severityClass(s)}
+        />
+        {severitySet.size > 0 && (
+          <>
+            <Pipe />
+            <button
+              onClick={() => setFilters({ page: 1, page_size: 50 })}
+              className="text-xs text-muted-foreground underline underline-offset-2 px-1"
+            >
+              Clear
+            </button>
+          </>
+        )}
+      </div>
+      {isLoading ? (
+        <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading…</CardContent></Card>
+      ) : !data || data.total === 0 ? (
+        <Card><CardContent className="p-6 text-sm text-muted-foreground">No SAST detections match.</CardContent></Card>
+      ) : (
+        <>
+          <Card>
+            <Table className="table-fixed">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-6" />
+                  <SortableTableHead columnKey="severity" state={sortState} onSort={onSort} className="w-24">
+                    Severity
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="summary" state={sortState} onSort={onSort}>
+                    Summary
+                  </SortableTableHead>
+                  <SortableTableHead columnKey="location" state={sortState} onSort={onSort} className="w-64">
+                    Location
+                  </SortableTableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.items.map((i) => (
+                  <SastRow key={i.id} issue={i} sourceUrlTemplate={sourceUrlTemplate} />
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
+          <Pager
+            page={filters.page ?? 1}
+            pageSize={filters.page_size ?? 50}
+            total={data.total}
+            onPage={(p) => setFilters((f) => ({ ...f, page: p }))}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -574,47 +798,23 @@ function downloadBlob(text: string, filename: string) {
 export default function ScanDetailPage() {
   const { id } = useParams<{ id: string }>();
   const scan = useScanDetail(id);
-  const findings = useScanFindings(id);
   const components = useScanComponents(id);
   const repos = useRepos();
   const sbom = useSbomJson(id);
   const sarif = useSastSarif(id);
-  const sast = useSastFindings(id);
 
-  const [scaSeverities, setScaSeverities] = useState<Set<string>>(new Set());
-  const [scaTypes, setScaTypes]         = useState<Set<string>>(new Set());
-  const [sastSeverities, setSastSeverities] = useState<Set<string>>(new Set());
-  // Components inner-tab state lives down in <ComponentsTab>; it publishes
-  // its current displayed count via the callback so the tab pill updates
-  // when the user toggles "Only with findings".
+  // Each tab manages its own filter/sort/page state and publishes the
+  // server-side total back via `onTotalChange` so the tab pills can show
+  // a live filtered count. ComponentsTab is unchanged — it still fetches
+  // its own components + uses `useScanFindings` directly to cross-reference
+  // findings-per-component for the "Findings" column.
+  const [scaDisplayed, setScaDisplayed] = useState<number | null>(null);
+  const [sastDisplayed, setSastDisplayed] = useState<number | null>(null);
   const [componentsDisplayed, setComponentsDisplayed] = useState<number | null>(null);
-
-  function toggleSet(current: Set<string>, value: string, setter: (s: Set<string>) => void) {
-    const next = new Set(current);
-    next.has(value) ? next.delete(value) : next.add(value);
-    setter(next);
-  }
 
   const repo = repos.data?.find((r) => r.id === scan.data?.repo_id);
   const repoName = repo?.name;
   const sourceUrlTemplate = repo?.source_url_template ?? null;
-  const allFindings = findings.data ?? [];
-  const sortedFindings = [...allFindings].sort(
-    (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || (b.cvss_score ?? 0) - (a.cvss_score ?? 0),
-  );
-  const filteredFindings = sortedFindings.filter((f) => {
-    if (scaSeverities.size > 0 && !scaSeverities.has(f.severity)) return false;
-    if (scaTypes.size > 0 && !scaTypes.has(f.finding_type)) return false;
-    return true;
-  });
-
-  const allSast = sast.data ?? [];
-  const sortedSast = [...allSast].sort(
-    (a, b) => (SEVERITY_ORDER[a.latest_severity as FindingSeverity] ?? 9) - (SEVERITY_ORDER[b.latest_severity as FindingSeverity] ?? 9),
-  );
-  const filteredSast = sastSeverities.size > 0
-    ? sortedSast.filter((i) => sastSeverities.has(i.latest_severity))
-    : sortedSast;
 
   // Live wall-clock for the elapsed-timer display. The hook ticks every
   // second while the scan is pending/running and freezes once terminal.
@@ -652,14 +852,13 @@ export default function ScanDetailPage() {
 
   const s = scan.data;
   const isTerminal = s.status === "success" || s.status === "failed" || s.status === "cancelled";
-  // "Fully ready" = scan is terminal-success AND every per-scan data query
-  // has fresh post-terminal data. Without the !isFetching gate we'd render
-  // the results view as soon as the scan_run flips to success — but the
-  // SAST/SCA queries may still be holding cached data from a poll that
-  // happened mid-recheck (when only the new detections were visible).
-  // Showing the in-progress UI for the extra ~2s until the next poll lands
-  // is far less confusing than briefly showing wrong counts.
-  const dataIsFetching = sast.isFetching || findings.isFetching || components.isFetching;
+  // "Fully ready" = scan is terminal-success AND the components query has
+  // fresh post-terminal data. The SCA/SAST tabs live in sub-components
+  // with their own queries; their loading states are handled inline so
+  // they don't need to gate the outer view. Without this gate we'd render
+  // the results view the instant the scan_run flips to success, while the
+  // components cache may still be holding mid-recheck stale data.
+  const dataIsFetching = components.isFetching;
   const showResults = isTerminal && s.status === "success" && !dataIsFetching;
   // Render the "Scan in progress" card while the scan is still moving OR
   // while we're waiting for the post-terminal refetch to land. Failed and
@@ -763,8 +962,8 @@ export default function ScanDetailPage() {
             high={s.high_count}
             medium={s.medium_count}
             low={s.low_count}
-            sca={allFindings.length}
-            sast={allSast.length}
+            sca={scaDisplayed ?? 0}
+            sast={sastDisplayed ?? s.sast_finding_count}
             components={s.component_count}
           />
         )}
@@ -775,11 +974,15 @@ export default function ScanDetailPage() {
             <TabsList>
               <TabsTrigger value="findings" className="gap-1.5">
                 <ShieldAlert className="h-3.5 w-3.5" />Raw SCA Findings
-                {filteredFindings.length > 0 && <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{filteredFindings.length}</span>}
+                {scaDisplayed != null && scaDisplayed > 0 && (
+                  <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{scaDisplayed}</span>
+                )}
               </TabsTrigger>
               <TabsTrigger value="sast" className="gap-1.5">
                 <ScanSearch className="h-3.5 w-3.5" />Raw SAST Detections
-                {filteredSast.length > 0 && <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{filteredSast.length}</span>}
+                {sastDisplayed != null && sastDisplayed > 0 && (
+                  <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{sastDisplayed}</span>
+                )}
               </TabsTrigger>
               <TabsTrigger value="components" className="gap-1.5">
                 <Package className="h-3.5 w-3.5" />Components
@@ -794,111 +997,37 @@ export default function ScanDetailPage() {
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="findings" className="mt-4">
-              <div className="flex flex-wrap items-center gap-y-2 gap-x-0 mb-3">
-                <FilterGroup
-                  items={["critical", "high", "medium", "low"] as const}
-                  active={scaSeverities as ReadonlySet<"critical" | "high" | "medium" | "low">}
-                  onToggle={(s) => toggleSet(scaSeverities, s, setScaSeverities)}
-                  label={(s) => s.charAt(0).toUpperCase() + s.slice(1)}
-                  colorFn={(s) => severityClass(s)}
+            {/* forceMount on each tab so the sub-component queries fire on
+                initial page load, not first click — keeps the tab pills
+                populated before the user navigates into a tab. */}
+            <TabsContent forceMount value="findings" className="mt-4 data-[state=inactive]:hidden">
+              {id && (
+                <ScaFindingsTab
+                  scanId={id}
+                  sourceUrlTemplate={sourceUrlTemplate}
+                  onTotalChange={setScaDisplayed}
                 />
-                <Pipe />
-                <FilterGroup
-                  items={["cve", "eol", "deprecated"] as const}
-                  active={scaTypes as ReadonlySet<"cve" | "eol" | "deprecated">}
-                  onToggle={(t) => toggleSet(scaTypes, t, setScaTypes)}
-                  label={(t) => (t === "deprecated" ? "Deprecated" : t.toUpperCase())}
-                />
-                {(scaSeverities.size > 0 || scaTypes.size > 0) && (
-                  <>
-                    <Pipe />
-                    <button
-                      onClick={() => { setScaSeverities(new Set()); setScaTypes(new Set()); }}
-                      className="text-xs text-muted-foreground underline underline-offset-2 px-1"
-                    >
-                      Clear
-                    </button>
-                  </>
-                )}
-              </div>
-              {findings.isLoading ? (
-                <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading…</CardContent></Card>
-              ) : filteredFindings.length === 0 ? (
-                <Card><CardContent className="p-6 text-sm text-muted-foreground">No findings match.</CardContent></Card>
-              ) : (
-                <Card>
-                  <Table className="table-fixed">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-6" />
-                        <TableHead className="w-24">Severity</TableHead>
-                        <TableHead>Summary</TableHead>
-                        <TableHead className="w-64">Location</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredFindings.map((f) => (
-                        <FindingRow
-                          key={f.id}
-                          finding={f}
-                          sourceUrlTemplate={sourceUrlTemplate}
-                        />
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Card>
               )}
             </TabsContent>
 
-            <TabsContent value="sast" className="mt-4">
-              <div className="flex flex-wrap items-center gap-y-2 gap-x-0 mb-3">
-                <FilterGroup
-                  items={["critical", "high", "medium", "low", "info"] as const}
-                  active={sastSeverities as ReadonlySet<"critical" | "high" | "medium" | "low" | "info">}
-                  onToggle={(s) => toggleSet(sastSeverities, s, setSastSeverities)}
-                  label={(s) => s.charAt(0).toUpperCase() + s.slice(1)}
-                  colorFn={(s) => severityClass(s)}
+            <TabsContent forceMount value="sast" className="mt-4 data-[state=inactive]:hidden">
+              {id && (
+                <SastFindingsTab
+                  scanId={id}
+                  sourceUrlTemplate={sourceUrlTemplate}
+                  onTotalChange={setSastDisplayed}
                 />
-                {sastSeverities.size > 0 && (
-                  <>
-                    <Pipe />
-                    <button
-                      onClick={() => setSastSeverities(new Set())}
-                      className="text-xs text-muted-foreground underline underline-offset-2 px-1"
-                    >
-                      Clear
-                    </button>
-                  </>
-                )}
-              </div>
-              {sast.isLoading ? (
-                <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading…</CardContent></Card>
-              ) : filteredSast.length === 0 ? (
-                <Card><CardContent className="p-6 text-sm text-muted-foreground">No SAST detections match.</CardContent></Card>
-              ) : (
-                <Card>
-                  <Table className="table-fixed">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-6" />
-                        <TableHead className="w-24">Severity</TableHead>
-                        <TableHead>Summary</TableHead>
-                        <TableHead className="w-64">Location</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredSast.map((i) => (
-                        <SastRow key={i.id} issue={i} sourceUrlTemplate={sourceUrlTemplate} />
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Card>
               )}
             </TabsContent>
 
             <TabsContent value="components" className="mt-4">
-              <ComponentsTab components={components.data ?? []} findings={findings.data ?? []} isLoading={components.isLoading} onDisplayedTotalChange={setComponentsDisplayed} sourceUrlTemplate={sourceUrlTemplate} />
+              <ComponentsTab
+                components={components.data ?? []}
+                scanId={id ?? ""}
+                isLoading={components.isLoading}
+                onDisplayedTotalChange={setComponentsDisplayed}
+                sourceUrlTemplate={sourceUrlTemplate}
+              />
             </TabsContent>
           </Tabs>
         )}

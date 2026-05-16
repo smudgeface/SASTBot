@@ -7,14 +7,17 @@ import {
   ErrorSchema,
   FindingsQuerySchema,
   IdParamsSchema,
-  SastIssueListSchema,
-  ScanFindingListSchema,
+  PaginatedSchema,
+  SastScanQuerySchema,
+  ScanFindingOutSchema,
   ScanRunListSchema,
   ScanRunOutSchema,
+  SastIssueOutSchema,
   SbomComponentOutSchema,
 } from "../schemas.js";
 import { scanFindingToOut, scanRunToOut, sastIssueToOut, sbomComponentToOut } from "../services/mappers.js";
 import { cancelScanRun, ScanRunNotFoundError } from "../services/scanService.js";
+import { bySeverity, byStatus, cmpNum, cmpStr, dirSign } from "../services/issueSort.js";
 
 const scansRoutes: FastifyPluginAsync = async (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
@@ -111,11 +114,11 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       preHandler: [app.authenticate],
       schema: {
         tags: ["scans"],
-        summary: "List vulnerability findings for a scan run",
+        summary: "List vulnerability findings for a scan run (paginated)",
         params: IdParamsSchema,
         querystring: FindingsQuerySchema,
         response: {
-          200: ScanFindingListSchema,
+          200: PaginatedSchema(ScanFindingOutSchema),
           401: ErrorSchema,
           404: ErrorSchema,
         },
@@ -131,44 +134,88 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(404).send({ detail: "Scan run not found" });
       }
 
+      const { page, page_size, severity, finding_type, dismissed_statuses, package: pkg, sort_by, sort_dir } = req.query;
       const where: Record<string, unknown> = { scanRunId: req.params.id };
-      if (req.query.severity) where.severity = req.query.severity;
-      if (req.query.package) {
+      if (severity?.length) {
+        where.severity = severity.length === 1 ? severity[0] : { in: severity };
+      }
+      if (finding_type?.length) {
+        where.findingType = finding_type.length === 1 ? finding_type[0] : { in: finding_type };
+      }
+      if (pkg) {
         where.component = {
-          name: { contains: req.query.package, mode: "insensitive" },
+          name: { contains: pkg, mode: "insensitive" },
+        };
+      }
+      // dismissed_statuses filters against the joined SCA issue's triage
+      // state — the scan-page view shares triage with the scope page so
+      // the "Fixed" / "Won't fix" filters mean the same thing on both.
+      if (dismissed_statuses?.length) {
+        where.issue = {
+          dismissedStatus: dismissed_statuses.length === 1 ? dismissed_statuses[0] : { in: dismissed_statuses },
         };
       }
 
-      const findings = await prisma.scanFinding.findMany({
-        where,
-        include: {
-          component: { select: { name: true, version: true, scope: true, isDevOnly: true, ecosystem: true } },
-          // Pull the issue-level fields the audit view needs: LLM summary,
-          // manifest path/line/snippet, reachability verdict. The scan
-          // detail page renders the same expanded panel as the scope page
-          // (sans triage/Jira) and reads everything off the joined issue.
-          issue: {
-            select: {
-              latestLlmSummary: true,
-              latestManifestFile: true,
-              latestManifestLine: true,
-              latestManifestSnippet: true,
-              confirmedReachable: true,
-              reachableConfidence: true,
-              reachableReasoning: true,
-              reachableCallSites: true,
-              reachableModel: true,
-              reachableAssessedAt: true,
+      // Bounded per-scan dataset — fetch all matching rows then post-sort
+      // + slice. Mirrors the scope-page SCA route (issueSort.ts helpers
+      // give the same severity / status CASE ordering).
+      const [all, total] = await Promise.all([
+        prisma.scanFinding.findMany({
+          where,
+          include: {
+            component: { select: { name: true, version: true, scope: true, isDevOnly: true, ecosystem: true } },
+            issue: {
+              select: {
+                latestLlmSummary: true,
+                latestManifestFile: true,
+                latestManifestLine: true,
+                latestManifestSnippet: true,
+                dismissedStatus: true,
+                confirmedReachable: true,
+                reachableConfidence: true,
+                reachableReasoning: true,
+                reachableCallSites: true,
+                reachableModel: true,
+                reachableAssessedAt: true,
+              },
             },
           },
-        },
-        orderBy: [
-          { severity: "asc" }, // critical → high → low alphabetically; re-sort UI-side
-          { cvssScore: "desc" },
-        ],
+        }),
+        prisma.scanFinding.count({ where }),
+      ]);
+
+      const sign = dirSign(sort_dir);
+      all.sort((a, b) => {
+        let primary = 0;
+        switch (sort_by) {
+          case "severity":
+            primary = bySeverity(a.severity, b.severity) ||
+                      cmpNum(b.cvssScore, a.cvssScore);
+            break;
+          case "summary":
+            primary = cmpStr(a.issue?.latestLlmSummary ?? a.summary, b.issue?.latestLlmSummary ?? b.summary);
+            break;
+          case "location":
+            primary = cmpStr(a.issue?.latestManifestFile ?? null, b.issue?.latestManifestFile ?? null) ||
+                      cmpNum(a.issue?.latestManifestLine ?? null, b.issue?.latestManifestLine ?? null);
+            break;
+          case "status":
+            primary = byStatus(a.issue?.dismissedStatus ?? "pending", b.issue?.dismissedStatus ?? "pending");
+            break;
+          case "last_seen":
+            primary = a.createdAt.getTime() - b.createdAt.getTime();
+            break;
+          default:
+            primary = bySeverity(a.severity, b.severity) ||
+                      cmpNum(b.cvssScore, a.cvssScore);
+        }
+        if (primary !== 0) return sort_by ? primary * sign : primary;
+        return a.id.localeCompare(b.id);
       });
 
-      return findings.map(scanFindingToOut);
+      const skip = (page - 1) * page_size;
+      const items = all.slice(skip, skip + page_size);
+      return { items: items.map(scanFindingToOut), total, page, page_size };
     },
   );
 
@@ -287,10 +334,11 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       preHandler: [app.authenticate],
       schema: {
         tags: ["scans"],
-        summary: "List SAST issues observed in this scan run",
+        summary: "List SAST issues observed in this scan run (paginated)",
         params: IdParamsSchema,
+        querystring: SastScanQuerySchema,
         response: {
-          200: SastIssueListSchema,
+          200: PaginatedSchema(SastIssueOutSchema),
           401: ErrorSchema,
           404: ErrorSchema,
         },
@@ -304,12 +352,51 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       });
       if (!run) return reply.code(404).send({ detail: "Scan run not found" });
 
-      const issues = await prisma.sastIssue.findMany({
-        where: { lastSeenScanRunId: req.params.id },
-        orderBy: [{ latestSeverity: "asc" }, { latestStartLine: "asc" }],
+      const { page, page_size, severity, triage_status, sort_by, sort_dir } = req.query;
+      const where: Record<string, unknown> = { lastSeenScanRunId: req.params.id };
+      if (severity?.length) {
+        where.latestSeverity = severity.length === 1 ? severity[0] : { in: severity };
+      }
+      if (triage_status?.length) {
+        where.triageStatus = triage_status.length === 1 ? triage_status[0] : { in: triage_status };
+      }
+
+      const [all, total] = await Promise.all([
+        prisma.sastIssue.findMany({ where }),
+        prisma.sastIssue.count({ where }),
+      ]);
+
+      const sign = dirSign(sort_dir);
+      all.sort((a, b) => {
+        let primary = 0;
+        switch (sort_by) {
+          case "severity":
+            primary = bySeverity(a.latestSeverity, b.latestSeverity);
+            break;
+          case "summary":
+            primary = cmpStr(a.latestLlmSummary ?? a.latestRuleMessage, b.latestLlmSummary ?? b.latestRuleMessage);
+            break;
+          case "location":
+            primary = cmpStr(a.latestFilePath, b.latestFilePath) ||
+                      cmpNum(a.latestStartLine, b.latestStartLine);
+            break;
+          case "status":
+            primary = byStatus(a.triageStatus, b.triageStatus);
+            break;
+          case "last_seen":
+            primary = a.lastSeenAt.getTime() - b.lastSeenAt.getTime();
+            break;
+          default:
+            primary = bySeverity(a.latestSeverity, b.latestSeverity) ||
+                      cmpNum(a.latestStartLine, b.latestStartLine);
+        }
+        if (primary !== 0) return sort_by ? primary * sign : primary;
+        return a.id.localeCompare(b.id);
       });
 
-      return issues.map(sastIssueToOut);
+      const skip = (page - 1) * page_size;
+      const items = all.slice(skip, skip + page_size);
+      return { items: items.map(sastIssueToOut), total, page, page_size };
     },
   );
 };

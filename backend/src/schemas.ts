@@ -418,6 +418,48 @@ export const ScanScopeOutSchema = z.object({
 export type ScanScopeOut = z.infer<typeof ScanScopeOutSchema>;
 
 // ---------------------------------------------------------------------------
+// Pagination + sort (used by both scope-page and scan-page list endpoints)
+// ---------------------------------------------------------------------------
+
+export const PaginationQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  page_size: z.coerce.number().int().min(1).max(500).default(100),
+});
+export type PaginationQuery = z.infer<typeof PaginationQuerySchema>;
+
+export function PaginatedSchema<T extends z.ZodTypeAny>(itemSchema: T) {
+  return z.object({
+    items: z.array(itemSchema),
+    total: z.number().int().nonnegative(),
+    page: z.number().int().min(1),
+    page_size: z.number().int().min(1),
+  });
+}
+
+export const SortDirSchema = z.enum(["asc", "desc"]);
+export type SortDir = z.infer<typeof SortDirSchema>;
+
+// Visible-column sort keys, one enum per table so the route can fail fast
+// on unknown values and the post-process comparator can switch on a small set.
+export const ScaSortBySchema = z.enum([
+  "severity",
+  "summary",
+  "location",
+  "status",
+  "last_seen",
+]);
+export type ScaSortBy = z.infer<typeof ScaSortBySchema>;
+
+export const SastSortBySchema = z.enum([
+  "severity",
+  "summary",
+  "location",
+  "status",
+  "last_seen",
+]);
+export type SastSortBy = z.infer<typeof SastSortBySchema>;
+
+// ---------------------------------------------------------------------------
 // SCA — SBOM components and findings (M3)
 // ---------------------------------------------------------------------------
 
@@ -541,9 +583,27 @@ export type ScanFindingOut = z.infer<typeof ScanFindingOutSchema>;
 
 export const ScanFindingListSchema = z.array(ScanFindingOutSchema);
 
-export const FindingsQuerySchema = z.object({
-  severity: SeveritySchema.optional(),
+// Helper: coerce a query-string param that may be repeated (?k=a&k=b),
+// single-valued, or omitted, into a typed array | undefined. Used by
+// every multi-value filter schema in this file.
+function toArrayLocal<T extends string>(schema: z.ZodType<T>): z.ZodType<T[] | undefined> {
+  return z.preprocess(
+    (v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v]),
+    z.array(schema).optional(),
+  ) as z.ZodType<T[] | undefined>;
+}
+
+// `FindingsQuerySchema` extends pagination so the scan-page SCA tab can
+// page through large finding sets without loading every row into memory.
+// Filters and sort match the scope-page tab so the two surfaces share UI.
+// Note: `severity` is repeatable (severity=critical&severity=high).
+export const FindingsQuerySchema = PaginationQuerySchema.extend({
+  severity: toArrayLocal(SeveritySchema),
+  finding_type: toArrayLocal(z.enum(["cve", "eol", "deprecated"])),
+  dismissed_statuses: toArrayLocal(z.enum(["pending", "confirmed", "planned", "fixed", "suppressed", "false_positive"])),
   package: z.string().optional(),
+  sort_by: ScaSortBySchema.optional(),
+  sort_dir: SortDirSchema.default("asc"),
 });
 
 // ---------------------------------------------------------------------------
@@ -594,6 +654,16 @@ export type SastTriageBody = z.infer<typeof SastTriageBodySchema>;
 export const SastFindingsQuerySchema = z.object({
   severity: SastSeveritySchema.optional(),
   file_path: z.string().optional(),
+});
+
+// Scan-page SAST findings list (paginated, filterable, sortable). The route
+// returns SastIssueOut rows whose lastSeenScanRunId matches the scan run.
+// Filters mirror the scope-page SAST tab so the two surfaces share UI.
+export const SastScanQuerySchema = PaginationQuerySchema.extend({
+  severity: toArrayLocal(SastSeveritySchema),
+  triage_status: toArrayLocal(SastTriageStatusSchema),
+  sort_by: SastSortBySchema.optional(),
+  sort_dir: SortDirSchema.default("asc"),
 });
 
 // ---------------------------------------------------------------------------
@@ -716,22 +786,6 @@ export const ScaIssueDismissBodySchema = z.object({
   reason: z.string().optional(),
 });
 export type ScaIssueDismissBody = z.infer<typeof ScaIssueDismissBodySchema>;
-
-// Paginated wrapper
-export const PaginationQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  page_size: z.coerce.number().int().min(1).max(500).default(100),
-});
-export type PaginationQuery = z.infer<typeof PaginationQuerySchema>;
-
-export function PaginatedSchema<T extends z.ZodTypeAny>(itemSchema: T) {
-  return z.object({
-    items: z.array(itemSchema),
-    total: z.number().int().nonnegative(),
-    page: z.number().int().min(1),
-    page_size: z.number().int().min(1),
-  });
-}
 
 // ---------------------------------------------------------------------------
 // JiraTicket (M5c)

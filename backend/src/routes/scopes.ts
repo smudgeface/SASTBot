@@ -14,18 +14,22 @@ import {
   SastIssueOutSchema,
   SastIssueTriageBodySchema,
   SastSeveritySchema,
+  SastSortBySchema,
   SastTriageStatusSchema,
   ScaDismissedStatusSchema,
   ScaIssueDismissBodySchema,
   ScaIssueListSchema,
   ScaIssueOutSchema,
+  ScaSortBySchema,
   SbomComponentOutSchema,
   SeveritySchema,
+  SortDirSchema,
   FindingTypeSchema,
   UuidSchema,
 } from "../schemas.js";
 import { jiraTicketToOut, sastIssueToOut, scaIssueToOut, scanRunToOut, sbomComponentToOut, scopeComponentToOut } from "../services/mappers.js";
 import { linkSastIssueToTicket, linkScaIssueToTicket, refreshTicket, unlinkSastIssue, unlinkScaIssue } from "../services/jiraTicketService.js";
+import { bySeverity, byStatus, cmpNum, cmpStr, dirSign } from "../services/issueSort.js";
 
 // Query-string boolean parser. `z.coerce.boolean()` is a footgun in query-
 // string contexts because Zod's coerce uses `Boolean(value)`, and
@@ -105,6 +109,8 @@ const SastIssuesQuerySchema = PaginationQuerySchema.extend({
   has_jira_ticket: z.enum(["yes", "no"]).optional(),
   seen_since_last_scan: z.enum(["new", "unchanged", "resolved"]).optional(),
   include_resolved: z.coerce.boolean().default(false),
+  sort_by: SastSortBySchema.optional(),
+  sort_dir: SortDirSchema.default("asc"),
 });
 
 const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
@@ -122,15 +128,13 @@ const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
   hide_dev: z.coerce.boolean().optional(),
   seen_since_last_scan: z.enum(["new", "unchanged", "resolved"]).optional(),
   include_resolved: z.coerce.boolean().default(false),
+  sort_by: ScaSortBySchema.optional(),
+  sort_dir: SortDirSchema.default("asc"),
 });
 
-// Prisma sorts severity strings alphabetically (low < medium), so we post-sort.
-const SEVERITY_ORDER: Record<string, number> = {
-  critical: 0, high: 1, medium: 2, low: 3, unknown: 4, info: 5,
-};
-function bySeverity(a: string, b: string): number {
-  return (SEVERITY_ORDER[a] ?? 9) - (SEVERITY_ORDER[b] ?? 9);
-}
+// Sort helpers (bySeverity / byStatus / cmpStr / cmpNum / dirSign) moved
+// to backend/src/services/issueSort.ts so the scan-page routes can share
+// the same null-aware, severity-CASE ordering.
 
 const scopesRoutes: FastifyPluginAsync = async (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
@@ -443,7 +447,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       });
       if (!scope) return reply.code(404).send({ detail: "Scope not found" });
 
-      const { page, page_size, severity, triage_status, has_jira_ticket, seen_since_last_scan, include_resolved } = req.query;
+      const { page, page_size, severity, triage_status, has_jira_ticket, seen_since_last_scan, include_resolved, sort_by, sort_dir } = req.query;
       const lastScanRunId = scope.lastScanRunId;
 
       const where: Record<string, unknown> = { scopeId: req.params.id };
@@ -494,11 +498,40 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         prisma.sastIssue.findMany({ where }),
         prisma.sastIssue.count({ where }),
       ]);
-      all.sort((a, b) =>
-        bySeverity(a.latestSeverity, b.latestSeverity) ||
-        b.lastSeenAt.getTime() - a.lastSeenAt.getTime() ||
-        a.id.localeCompare(b.id),
-      );
+
+      // Post-process sort. Per-scope SAST datasets are bounded (hundreds at
+      // most), so fetching + sorting + slicing in JS is cheap and avoids
+      // raw SQL for the severity / status CASE ordering. Each branch ends
+      // with an id tie-break so paginated boundaries are stable.
+      const sign = dirSign(sort_dir);
+      all.sort((a, b) => {
+        let primary = 0;
+        switch (sort_by) {
+          case "severity":
+            primary = bySeverity(a.latestSeverity, b.latestSeverity);
+            break;
+          case "summary":
+            primary = cmpStr(a.latestLlmSummary ?? a.latestRuleMessage, b.latestLlmSummary ?? b.latestRuleMessage);
+            break;
+          case "location":
+            primary = cmpStr(a.latestFilePath, b.latestFilePath) ||
+                      cmpNum(a.latestStartLine, b.latestStartLine);
+            break;
+          case "status":
+            primary = byStatus(a.triageStatus, b.triageStatus);
+            break;
+          case "last_seen":
+            primary = a.lastSeenAt.getTime() - b.lastSeenAt.getTime();
+            break;
+          default:
+            // No explicit sort: preserve the historical severity → last-seen
+            // ordering so existing clients behave unchanged.
+            primary = bySeverity(a.latestSeverity, b.latestSeverity) ||
+                      (b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
+        }
+        if (primary !== 0) return sort_by ? primary * sign : primary;
+        return a.id.localeCompare(b.id);
+      });
       const items = all.slice(skip, skip + page_size);
 
       return { items: items.map(sastIssueToOut), total, page, page_size };
@@ -539,7 +572,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       const {
         page, page_size, severity, finding_type, dismissed_status, dismissed_statuses,
         has_jira_ticket, reachable, has_fix, exclude_dev_only,
-        seen_since_last_scan, include_resolved,
+        seen_since_last_scan, include_resolved, sort_by, sort_dir,
       } = req.query;
       const lastScanRunId = scope.lastScanRunId;
 
@@ -603,11 +636,40 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         prisma.scaIssue.findMany({ where }),
         prisma.scaIssue.count({ where }),
       ]);
-      all.sort((a, b) =>
-        bySeverity(a.latestSeverity, b.latestSeverity) ||
-        (b.latestCvssScore ?? 0) - (a.latestCvssScore ?? 0) ||
-        a.id.localeCompare(b.id),
-      );
+
+      // Post-process sort. Per-scope SCA datasets are bounded (low
+      // hundreds), so fetching + sorting + slicing in JS is cheap and
+      // avoids raw SQL for the severity / status CASE ordering. Each
+      // branch ends with an id tie-break so paginated boundaries are
+      // stable.
+      const sign = dirSign(sort_dir);
+      all.sort((a, b) => {
+        let primary = 0;
+        switch (sort_by) {
+          case "severity":
+            primary = bySeverity(a.latestSeverity, b.latestSeverity) ||
+                      cmpNum(b.latestCvssScore, a.latestCvssScore); // cvss desc as tiebreak
+            break;
+          case "summary":
+            primary = cmpStr(a.latestLlmSummary ?? a.latestSummary, b.latestLlmSummary ?? b.latestSummary);
+            break;
+          case "location":
+            primary = cmpStr(a.latestManifestFile, b.latestManifestFile) ||
+                      cmpNum(a.latestManifestLine, b.latestManifestLine);
+            break;
+          case "status":
+            primary = byStatus(a.dismissedStatus, b.dismissedStatus);
+            break;
+          case "last_seen":
+            primary = a.lastSeenAt.getTime() - b.lastSeenAt.getTime();
+            break;
+          default:
+            primary = bySeverity(a.latestSeverity, b.latestSeverity) ||
+                      cmpNum(b.latestCvssScore, a.latestCvssScore);
+        }
+        if (primary !== 0) return sort_by ? primary * sign : primary;
+        return a.id.localeCompare(b.id);
+      });
       const items = all.slice(skip, skip + page_size);
 
       return { items: items.map(scaIssueToOut), total, page, page_size, total_dev, total_runtime };

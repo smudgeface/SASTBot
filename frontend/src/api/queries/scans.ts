@@ -2,7 +2,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 // useQueryClient kept for useTriggerScan
 
 import { apiFetch } from "@/api/client";
-import type { Scan, SastIssue, SbomComponent, ScanFinding } from "@/api/types";
+import type { Paginated, Scan, SastIssue, SbomComponent, ScanFinding } from "@/api/types";
+import type { IssueSortKey, IssueSortDir } from "./scopes";
 
 export const scansKey = ["scans"] as const;
 
@@ -93,19 +94,38 @@ export function useScanDetail(scanId: string | undefined) {
   });
 }
 
+export interface ScanFindingsFilters {
+  page?: number;
+  page_size?: number;
+  severities?: string[];      // multi-select
+  finding_types?: string[];   // multi-select
+  dismissed_statuses?: string[]; // multi-select (mirrors scope-page Status filter)
+  package?: string;
+  sort_by?: IssueSortKey;
+  sort_dir?: IssueSortDir;
+}
+
 export function useScanFindings(
   scanId: string | undefined,
-  options?: { severity?: string; package?: string },
+  filters: ScanFindingsFilters = {},
 ) {
   const qc = useQueryClient();
-  return useQuery<ScanFinding[]>({
-    queryKey: [...scansKey, scanId, "findings", options],
+  return useQuery<Paginated<ScanFinding>>({
+    queryKey: [...scansKey, scanId, "findings", filters],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (options?.severity) params.set("severity", options.severity);
-      if (options?.package) params.set("package", options.package);
+      if (filters.page) params.set("page", String(filters.page));
+      if (filters.page_size) params.set("page_size", String(filters.page_size));
+      filters.severities?.forEach((s) => params.append("severity", s));
+      filters.finding_types?.forEach((t) => params.append("finding_type", t));
+      filters.dismissed_statuses?.forEach((s) => params.append("dismissed_statuses", s));
+      if (filters.package) params.set("package", filters.package);
+      if (filters.sort_by) {
+        params.set("sort_by", filters.sort_by);
+        params.set("sort_dir", filters.sort_dir ?? "asc");
+      }
       const qs = params.toString();
-      return apiFetch<ScanFinding[]>(`/scans/${scanId}/findings${qs ? `?${qs}` : ""}`);
+      return apiFetch<Paginated<ScanFinding>>(`/scans/${scanId}/findings${qs ? `?${qs}` : ""}`);
     },
     enabled: !!scanId,
     refetchInterval: liveRefetchInterval(qc, scanId),
@@ -168,15 +188,40 @@ export function useTriggerScan() {
   });
 }
 
+export interface SastFindingsFilters {
+  page?: number;
+  page_size?: number;
+  severities?: string[];
+  triage_statuses?: string[];
+  sort_by?: IssueSortKey;
+  sort_dir?: IssueSortDir;
+}
+
 // Returns the SAST issues observed in this scan run. Backed by the
-// `/scans/:id/sast-findings` endpoint, which now reads `sast_issues` filtered
-// by `lastSeenScanRunId` (post-M6g; the legacy per-scan `sast_findings`
-// table is no longer populated).
-export function useSastFindings(scanId: string | undefined) {
+// `/scans/:id/sast-findings` endpoint, which now reads `sast_issues`
+// filtered by `lastSeenScanRunId` (post-M6g; the legacy per-scan
+// `sast_findings` table is no longer populated). Paginated + sortable so
+// large scans don't dump every row into the browser.
+export function useSastFindings(
+  scanId: string | undefined,
+  filters: SastFindingsFilters = {},
+) {
   const qc = useQueryClient();
-  return useQuery<SastIssue[]>({
-    queryKey: [...scansKey, scanId, "sast-findings"],
-    queryFn: () => apiFetch<SastIssue[]>(`/scans/${scanId}/sast-findings`),
+  return useQuery<Paginated<SastIssue>>({
+    queryKey: [...scansKey, scanId, "sast-findings", filters],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (filters.page) params.set("page", String(filters.page));
+      if (filters.page_size) params.set("page_size", String(filters.page_size));
+      filters.severities?.forEach((s) => params.append("severity", s));
+      filters.triage_statuses?.forEach((s) => params.append("triage_status", s));
+      if (filters.sort_by) {
+        params.set("sort_by", filters.sort_by);
+        params.set("sort_dir", filters.sort_dir ?? "asc");
+      }
+      const qs = params.toString();
+      return apiFetch<Paginated<SastIssue>>(`/scans/${scanId}/sast-findings${qs ? `?${qs}` : ""}`);
+    },
     enabled: !!scanId,
     refetchInterval: liveRefetchInterval(qc, scanId),
   });

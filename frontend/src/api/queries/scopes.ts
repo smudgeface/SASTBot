@@ -40,6 +40,11 @@ export function useScopeDetail(scopeId: string | undefined) {
   });
 }
 
+// Sort keys exposed by the SCA / SAST list endpoints. Keep these in sync
+// with backend/src/schemas.ts (ScaSortBySchema / SastSortBySchema).
+export type IssueSortKey = "severity" | "summary" | "location" | "status" | "last_seen";
+export type IssueSortDir = "asc" | "desc";
+
 export interface SastIssueFilters {
   page?: number;
   page_size?: number;
@@ -48,6 +53,8 @@ export interface SastIssueFilters {
   has_jira_ticket?: "yes" | "no";
   seen_since_last_scan?: "new" | "unchanged" | "resolved";
   include_resolved?: boolean;
+  sort_by?: IssueSortKey;
+  sort_dir?: IssueSortDir;
 }
 
 export function useScopeSastIssues(scopeId: string | undefined, filters: SastIssueFilters = {}) {
@@ -62,6 +69,10 @@ export function useScopeSastIssues(scopeId: string | undefined, filters: SastIss
       if (filters.has_jira_ticket) params.set("has_jira_ticket", filters.has_jira_ticket);
       if (filters.seen_since_last_scan) params.set("seen_since_last_scan", filters.seen_since_last_scan);
       if (filters.include_resolved) params.set("include_resolved", "true");
+      if (filters.sort_by) {
+        params.set("sort_by", filters.sort_by);
+        params.set("sort_dir", filters.sort_dir ?? "asc");
+      }
       const qs = params.toString();
       return apiFetch<Paginated<SastIssue>>(`/api/scopes/${scopeId}/sast-issues${qs ? `?${qs}` : ""}`);
     },
@@ -83,6 +94,8 @@ export interface ScaIssueFilters {
   include_resolved?: boolean;
   /** When true (default), hides issues where latestIsDevOnly = true. */
   exclude_dev_only?: boolean;
+  sort_by?: IssueSortKey;
+  sort_dir?: IssueSortDir;
 }
 
 export function useScopeScaIssues(scopeId: string | undefined, filters: ScaIssueFilters = {}) {
@@ -103,6 +116,10 @@ export function useScopeScaIssues(scopeId: string | undefined, filters: ScaIssue
       if (filters.include_resolved) params.set("include_resolved", "true");
       // Default: exclude dev-only (matches backend default of true). Pass false explicitly only when showing build-tool CVEs.
       if (filters.exclude_dev_only === false) params.set("exclude_dev_only", "false");
+      if (filters.sort_by) {
+        params.set("sort_by", filters.sort_by);
+        params.set("sort_dir", filters.sort_dir ?? "asc");
+      }
       const qs = params.toString();
       return apiFetch<Paginated<ScaIssue>>(`/api/scopes/${scopeId}/sca-issues${qs ? `?${qs}` : ""}`);
     },
