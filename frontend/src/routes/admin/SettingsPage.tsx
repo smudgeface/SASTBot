@@ -468,6 +468,43 @@ export default function SettingsPage() {
           </Button>
         </div>
       </form>
+
+      {/* Database backup — outside the settings form so it can't be accidentally
+          triggered by pressing Enter on a form field */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Database backup</CardTitle>
+          <CardDescription>
+            Download a complete backup of the application database. The dump is
+            in PostgreSQL custom format (compressed) and can be restored with{" "}
+            <code className="font-mono text-xs">pg_restore</code>.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              // Trigger a browser download using the admin session cookie that
+              // is already attached to same-origin requests automatically.
+              const a = document.createElement("a");
+              a.href = "/admin/db/backup";
+              a.download = "";
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            }}
+          >
+            Download backup
+          </Button>
+          <p className="mt-2 text-xs text-muted-foreground">
+            The dump includes schema and data. Restore with:{" "}
+            <code className="font-mono">
+              pg_restore --clean --if-exists -d &lt;dbname&gt; backup.dump
+            </code>
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }

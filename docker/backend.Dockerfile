@@ -24,9 +24,20 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 #   git, openssh-client — the scan worker shells out to `git clone` and
 #     drives SSH authentication via GIT_SSH_COMMAND
 #   ripgrep — used by the LLM agent for fast scope-confined grep
+#   postgresql-client-16 — pg_dump for the /admin/db/backup route.
+#     We use the PostgreSQL APT repo to pin the client at the same major
+#     version (16) as the Postgres server in compose, avoiding dump-format
+#     version mismatches that the default Debian package would cause.
 RUN apt-get update \
+ && apt-get install -y --no-install-recommends gnupg curl ca-certificates \
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] \
+      https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
  && apt-get install -y --no-install-recommends \
-        openssl ca-certificates git openssh-client ripgrep \
+        openssl git openssh-client ripgrep postgresql-client-16 \
  && rm -rf /var/lib/apt/lists/*
 
 # Claude Code CLI — drives the SAST + reachability + vendored-lib pass.
@@ -89,7 +100,14 @@ ENV NODE_ENV=production \
 
 RUN corepack enable && corepack prepare pnpm@latest --activate \
  && apt-get update \
- && apt-get install -y --no-install-recommends openssl ca-certificates ripgrep \
+ && apt-get install -y --no-install-recommends gnupg curl ca-certificates \
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] \
+      https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends openssl ripgrep postgresql-client-16 \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g @anthropic-ai/claude-code \
  || echo "WARN: prod-stage tool install partial failure"
