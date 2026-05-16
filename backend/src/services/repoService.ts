@@ -101,6 +101,10 @@ export async function createRepo(
           vendoredDirs: input.vendored_dirs ?? ["extern/", "third-party/", "vendor/"],
           llmSbomEffort: input.llm_sbom_effort ?? "medium",
           llmSbomRecheckEffort: input.llm_sbom_recheck_effort ?? "medium",
+          llmSbomTokenBudget: input.llm_sbom_token_budget ?? null,
+          llmSbomRecheckTokenBudget: input.llm_sbom_recheck_token_budget ?? null,
+          llmSastTokenBudget: input.llm_sast_token_budget ?? null,
+          llmRecheckTokenBudget: input.llm_recheck_token_budget ?? null,
         },
       });
 
@@ -172,6 +176,19 @@ export async function updateRepo(
       if (input.vendored_dirs !== undefined) data.vendoredDirs = input.vendored_dirs;
       if (input.llm_sbom_effort !== undefined) data.llmSbomEffort = input.llm_sbom_effort;
       if (input.llm_sbom_recheck_effort !== undefined) data.llmSbomRecheckEffort = input.llm_sbom_recheck_effort;
+      // Nullable token budgets: `undefined` = don't touch; `null` = clear to default; number = set override.
+      if (Object.prototype.hasOwnProperty.call(input, "llm_sbom_token_budget")) {
+        data.llmSbomTokenBudget = input.llm_sbom_token_budget ?? null;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "llm_sbom_recheck_token_budget")) {
+        data.llmSbomRecheckTokenBudget = input.llm_sbom_recheck_token_budget ?? null;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "llm_sast_token_budget")) {
+        data.llmSastTokenBudget = input.llm_sast_token_budget ?? null;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "llm_recheck_token_budget")) {
+        data.llmRecheckTokenBudget = input.llm_recheck_token_budget ?? null;
+      }
 
       const updated = await tx.repo.update({ where: { id }, data });
 

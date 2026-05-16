@@ -158,6 +158,47 @@ connection details are derived automatically from `DATABASE_URL`.
 There are currently no environment variables for the backup endpoint.
 The binary path (`pg_dump`) is hardcoded and resolved from `PATH`.
 
+### Worker concurrency
+
+| Key (env form) | YAML form | CLI form | Default | Max | Description |
+|----------------|-----------|----------|---------|-----|-------------|
+| `SCAN_WORKER_CONCURRENCY` | `scan_worker_concurrency` | `--scan-worker-concurrency` | `2` | `4` | Number of BullMQ scan jobs the worker processes in parallel. Each concurrent scan consumes a process slot on the worker host and forks a `claude -p` subprocess. Increase cautiously — the bottleneck is typically LLM throughput and host memory, not CPU. Hard-capped at 4. |
+
+### API pagination
+
+The following endpoints support server-side pagination via query parameters.
+When `page` or `page_size` is omitted, the default applies.
+
+| Endpoint | Default `page_size` | Max `page_size` | Notes |
+|----------|---------------------|-----------------|-------|
+| `GET /scans` | 50 | 200 | Sorted newest-first (`created_at DESC`). |
+| `GET /admin/repos` | 100 | 500 | Sorted by repo creation order. |
+| `GET /admin/credentials` | 100 | 500 | |
+
+All three return a paginated envelope:
+
+```json
+{
+  "items": [ … ],
+  "total": 42,
+  "page": 1,
+  "page_size": 50
+}
+```
+
+**Query parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `page` | integer ≥ 1 | `1` | Page number (1-based). Requesting a page beyond the last page returns an empty `items` array (not an error). |
+| `page_size` | integer ≥ 1 | endpoint default | Number of items per page. Capped at the endpoint maximum. |
+
+Example:
+```
+GET /scans?page=2&page_size=20
+```
+Returns items 21–40, sorted newest-first.
+
 ## Coming soon
 
 The following configuration keys are planned but not yet implemented. They will
@@ -165,7 +206,6 @@ be filled in by later production-readiness streams:
 
 | Key (env form) | Stream | Description |
 |----------------|--------|-------------|
-| `SCAN_WORKER_CONCURRENCY` | Stream B | Number of scans the BullMQ worker processes in parallel. Default 2, max 4. |
 | `CLAUDE_DETECTION_TIMEOUT_MS` | Stream C | Wall-clock cap on the `claude -p` SAST detection subprocess. Default 3 600 000 (60 min). |
 | `CLAUDE_RECHECK_TIMEOUT_MS` | Stream C | Wall-clock cap on the `claude -p` recheck subprocess. Default 1 800 000 (30 min). |
 | `CLAUDE_STDOUT_STALENESS_MS` | Stream C | Kill the subprocess if no stdout for this many milliseconds. Default 300 000 (5 min). |
@@ -185,3 +225,36 @@ Sources checked: env vars, YAML file, CLI args.
 The error message names the failing key and the constraint that was violated.
 Check all three sources (env, YAML file, CLI) before concluding the key is truly
 absent.
+
+## Per-repo LLM token budgets
+
+Each repository can override the default token budget for the four LLM phases
+that consume Claude Code CLI tokens. These are DB-level settings configured via
+the **Edit repository** dialog in the admin UI (the "Token budgets" collapsible
+section, just below "LLM effort").
+
+| Field | Phase | System default |
+|-------|-------|---------------|
+| SBOM augmentation | `llm_sbom` — LLM SBOM curation: adds vendored libs cdxgen missed, drops first-party noise | 200 000 |
+| SBOM recheck | `llm_sbom_recheck` — confirms previously-known components still present after a new scan | 50 000 |
+| SAST detection | `llm_detection` — open-ended agentic SAST pass | 300 000 |
+| SAST recheck | `llm_recheck` — narrow per-issue recheck for findings not re-emitted in the latest scan | 50 000 |
+
+**When to override:**
+
+- **Raise** the SAST detection budget for large monorepos where Claude Code
+  needs more exploration budget (e.g. large C++ repos with many translation units).
+- **Lower** the SAST detection budget on trivially small repos to cap cost — the
+  default 300k is rarely consumed on such repos.
+- **Raise** the SBOM augmentation budget on repos with unusually large vendored
+  directories (deep `extern/` trees with dozens of third-party libs).
+- The recheck budgets rarely need adjustment.
+
+**Behaviour:** the live-progress bar in the Scopes list and Scope detail page
+shows tokens consumed vs. the budget (`done / total tokens (max)`). The budget
+is a cap, not a target — the LLM stops when it reaches it. If a scan
+consistently hits the cap, raise it.
+
+**NULL = system default.** Clearing a budget field (empty input in the dialog)
+resets it to NULL, which causes the worker to use the compiled-in default on the
+next scan. Budgets are per-repo only — there is no per-org override.

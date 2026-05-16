@@ -250,8 +250,9 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
     }
 
     // 2. Detection pass.
-    log.info({ scaHintCount: scaHints.length, budget: repo.llmSastTokenBudget, effort: repo.llmSastEffort }, "[worker] LLM detection start");
-    await setPhase(scanRunId, "llm_detection", { done: 0, total: repo.llmSastTokenBudget, label: "LLM SAST detection" });
+    const sastTokenBudget = repo.llmSastTokenBudget ?? DEFAULT_LLM_SAST_TOKEN_BUDGET;
+    log.info({ scaHintCount: scaHints.length, budget: sastTokenBudget, effort: repo.llmSastEffort }, "[worker] LLM detection start");
+    await setPhase(scanRunId, "llm_detection", { done: 0, total: sastTokenBudget });
     // Throttle live progress writes to once every 2s — matches the
     // useScanDetail / useScopes refetch cadence so the UI sees an update on
     // every poll without burying the DB in updates during a long claude-p run.
@@ -264,7 +265,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       repoBranch: repo.defaultBranch,
       ignorePaths: Array.isArray(repo.ignorePaths) ? (repo.ignorePaths as string[]) : [],
       scaHints,
-      tokenBudget: repo.llmSastTokenBudget,
+      tokenBudget: sastTokenBudget,
       effortLevel: repo.llmSastEffort,
       orgId: run.orgId,
       onProgress: (usage) => {
@@ -273,8 +274,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         lastProgressAt = now;
         void setPhase(scanRunId, "llm_detection", {
           done: usage.inputTokens + usage.outputTokens,
-          total: repo.llmSastTokenBudget,
-          label: "LLM SAST detection",
+          total: sastTokenBudget,
         });
       },
     });
@@ -394,12 +394,13 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         cwe: t.latestCweIds[0] ?? "CWE-UNKNOWN",
         summary: t.latestLlmSummary ?? t.latestRuleMessage ?? "",
       }));
-      log.info({ count: recheckIssues.length, budget: repo.llmRecheckTokenBudget, effort: repo.llmRecheckEffort }, "[worker] LLM recheck start");
+      const recheckBudget = repo.llmRecheckTokenBudget ?? DEFAULT_LLM_RECHECK_TOKEN_BUDGET;
+      log.info({ count: recheckIssues.length, budget: recheckBudget, effort: repo.llmRecheckEffort }, "[worker] LLM recheck start");
       // Use tokens-against-budget for live progress: verdicts arrive batched
       // at the end of the claude-p run, so done=verdictCount only flips from
       // 0 to N right before the phase ends and the user sees no movement.
       // Token usage advances per LLM round-trip (~20 over a recheck run).
-      await setPhase(scanRunId, "llm_recheck", { done: 0, total: repo.llmRecheckTokenBudget, label: "LLM SAST recheck" });
+      await setPhase(scanRunId, "llm_recheck", { done: 0, total: recheckBudget });
       let lastRecheckProgressAt = 0;
       const recheck = await runRecheck({
         scanRunId,
@@ -407,7 +408,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         scopePath,
         issues: recheckIssues,
         duplicateTargets,
-        tokenBudget: repo.llmRecheckTokenBudget,
+        tokenBudget: recheckBudget,
         effortLevel: repo.llmRecheckEffort,
         orgId: run.orgId,
         onProgress: (usage) => {
@@ -416,8 +417,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
           lastRecheckProgressAt = now;
           void setPhase(scanRunId, "llm_recheck", {
             done: usage.inputTokens + usage.outputTokens,
-            total: repo.llmRecheckTokenBudget,
-            label: "LLM SAST recheck",
+            total: recheckBudget,
           });
         },
       });
@@ -1245,13 +1245,12 @@ const worker = new Worker<ScanJobData>(
       let sbomCpeMap = new Map<string, string>();
       let sbomIdentityMap = new Map<string, { componentRoot: string | null; evidence: Array<{ path: string; line: number | null }> }>();
       let augmentationFailed = false;
-      const sbomTokenBudget = 200_000;
+      const sbomTokenBudget = repo.llmSbomTokenBudget ?? DEFAULT_LLM_SBOM_TOKEN_BUDGET;
 
       try {
         await setPhase(scanRunId, "llm_sbom", {
           done: 0,
           total: sbomTokenBudget,
-          label: "LLM SBOM augmentation",
         });
         const augResult = await runSbomAugmentation({
           scanRunId,
@@ -1270,7 +1269,6 @@ const worker = new Worker<ScanJobData>(
             void setPhase(scanRunId, "llm_sbom", {
               done: usage.inputTokens + usage.outputTokens,
               total: sbomTokenBudget,
-              label: "LLM SBOM augmentation",
             });
           },
         });
@@ -1388,22 +1386,21 @@ const worker = new Worker<ScanJobData>(
       // recovered into this run's scan_run_components join table so downstream
       // OSV / NVD / detection passes can pick them up.
       try {
-        const recheckTokenBudget = 50_000;
+        const sbomRecheckTokenBudget = repo.llmSbomRecheckTokenBudget ?? DEFAULT_LLM_SBOM_RECHECK_TOKEN_BUDGET;
         const recheckEffort = repo.llmSbomRecheckEffort ?? "medium";
-        await setPhase(scanRunId, "llm_sbom_recheck", { done: 0, total: recheckTokenBudget, label: "SBOM recheck" });
+        await setPhase(scanRunId, "llm_sbom_recheck", { done: 0, total: sbomRecheckTokenBudget });
 
         const recheckResult = await runSbomRecheck({
           scanRunId,
           scopeId: run.scopeId,
           scopeDir: scanDir,
           effortLevel: recheckEffort,
-          tokenBudget: recheckTokenBudget,
+          tokenBudget: sbomRecheckTokenBudget,
           orgId: run.orgId,
           onProgress: (usage) => {
             void setPhase(scanRunId, "llm_sbom_recheck", {
               done: usage.inputTokens + usage.outputTokens,
-              total: recheckTokenBudget,
-              label: "SBOM recheck",
+              total: sbomRecheckTokenBudget,
             });
           },
         });

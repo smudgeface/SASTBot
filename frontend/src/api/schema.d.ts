@@ -239,10 +239,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List repos for the current org */
+        /** List repos for the current org (paginated) */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    page?: number;
+                    page_size?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -256,37 +259,48 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            org_id: string | null;
-                            name: string;
-                            url: string;
-                            /** @enum {string} */
-                            protocol: "ssh" | "https";
-                            /** Format: uuid */
-                            credential_id: string | null;
-                            default_branch: string;
-                            scan_paths: string[];
-                            ignore_paths: string[];
-                            analysis_types: ("sca" | "sast")[];
-                            schedule_cron: string | null;
-                            source_url_template: string | null;
-                            is_active: boolean;
-                            retain_clone: boolean;
-                            reachability_enabled: boolean;
-                            reachability_include_dev_deps: boolean;
-                            /** @enum {string} */
-                            llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
-                            /** @enum {string} */
-                            llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
-                            first_party_namespaces: string[];
-                            vendored_dirs: string[];
-                            /** @enum {string} */
-                            llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
-                            last_cloned_at: string | null;
-                            created_at: string;
-                        }[];
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                org_id: string | null;
+                                name: string;
+                                url: string;
+                                /** @enum {string} */
+                                protocol: "ssh" | "https";
+                                /** Format: uuid */
+                                credential_id: string | null;
+                                default_branch: string;
+                                scan_paths: string[];
+                                ignore_paths: string[];
+                                analysis_types: ("sca" | "sast")[];
+                                schedule_cron: string | null;
+                                source_url_template: string | null;
+                                is_active: boolean;
+                                retain_clone: boolean;
+                                reachability_enabled: boolean;
+                                reachability_include_dev_deps: boolean;
+                                /** @enum {string} */
+                                llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                                /** @enum {string} */
+                                llm_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                                first_party_namespaces: string[];
+                                vendored_dirs: string[];
+                                /** @enum {string} */
+                                llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                                /** @enum {string} */
+                                llm_sbom_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                                llm_sbom_token_budget: number | null;
+                                llm_sbom_recheck_token_budget: number | null;
+                                llm_sast_token_budget: number | null;
+                                llm_recheck_token_budget: number | null;
+                                last_cloned_at: string | null;
+                                created_at: string;
+                            }[];
+                            total: number;
+                            page: number;
+                            page_size: number;
+                        };
                     };
                 };
                 /** @description Default Response */
@@ -380,6 +394,15 @@ export interface paths {
                          * @enum {string}
                          */
                         llm_sbom_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        /**
+                         * @default medium
+                         * @enum {string}
+                         */
+                        llm_sbom_recheck_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        llm_sbom_token_budget?: number | null;
+                        llm_sbom_recheck_token_budget?: number | null;
+                        llm_sast_token_budget?: number | null;
+                        llm_recheck_token_budget?: number | null;
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -416,6 +439,13 @@ export interface paths {
                         } | {
                             /** @enum {string} */
                             kind: "llm_api_key";
+                            name: string;
+                            value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "nvd_api_key";
                             name: string;
                             value: string;
                             /** Format: date-time */
@@ -460,6 +490,12 @@ export interface paths {
                             vendored_dirs: string[];
                             /** @enum {string} */
                             llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            /** @enum {string} */
+                            llm_sbom_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            llm_sbom_token_budget: number | null;
+                            llm_sbom_recheck_token_budget: number | null;
+                            llm_sast_token_budget: number | null;
+                            llm_recheck_token_budget: number | null;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -560,6 +596,12 @@ export interface paths {
                             vendored_dirs: string[];
                             /** @enum {string} */
                             llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            /** @enum {string} */
+                            llm_sbom_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            llm_sbom_token_budget: number | null;
+                            llm_sbom_recheck_token_budget: number | null;
+                            llm_sast_token_budget: number | null;
+                            llm_recheck_token_budget: number | null;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -635,6 +677,12 @@ export interface paths {
                         vendored_dirs?: string[];
                         /** @enum {string} */
                         llm_sbom_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        /** @enum {string} */
+                        llm_sbom_recheck_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        llm_sbom_token_budget?: number | null;
+                        llm_sbom_recheck_token_budget?: number | null;
+                        llm_sast_token_budget?: number | null;
+                        llm_recheck_token_budget?: number | null;
                         /** Format: uuid */
                         credential_id?: string | null;
                         credential?: ({
@@ -671,6 +719,13 @@ export interface paths {
                         } | {
                             /** @enum {string} */
                             kind: "llm_api_key";
+                            name: string;
+                            value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "nvd_api_key";
                             name: string;
                             value: string;
                             /** Format: date-time */
@@ -715,6 +770,12 @@ export interface paths {
                             vendored_dirs: string[];
                             /** @enum {string} */
                             llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            /** @enum {string} */
+                            llm_sbom_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            llm_sbom_token_budget: number | null;
+                            llm_sbom_recheck_token_budget: number | null;
+                            llm_sast_token_budget: number | null;
+                            llm_recheck_token_budget: number | null;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -887,6 +948,12 @@ export interface paths {
                             vendored_dirs: string[];
                             /** @enum {string} */
                             llm_sbom_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            /** @enum {string} */
+                            llm_sbom_recheck_effort: "low" | "medium" | "high" | "xhigh" | "max";
+                            llm_sbom_token_budget: number | null;
+                            llm_sbom_recheck_token_budget: number | null;
+                            llm_sast_token_budget: number | null;
+                            llm_recheck_token_budget: number | null;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -1157,6 +1224,7 @@ export interface paths {
                                 context?: {
                                     [key: string]: unknown;
                                 };
+                                details?: unknown;
                             }[];
                             llm_input_tokens: number;
                             llm_output_tokens: number;
@@ -1164,7 +1232,7 @@ export interface paths {
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
                             /** @enum {string|null} */
-                            current_phase: "cloning" | "cdxgen" | "osv" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
                             phase_progress: {
                                 done: number;
                                 total: number;
@@ -1254,6 +1322,8 @@ export interface paths {
                             llm_credential_id: string | null;
                             /** @enum {string} */
                             reachability_min_severity: "critical" | "high" | "medium" | "low";
+                            /** Format: uuid */
+                            nvd_credential_id: string | null;
                             updated_at: string;
                         };
                     };
@@ -1336,6 +1406,13 @@ export interface paths {
                             value: string;
                             /** Format: date-time */
                             expires_at?: string | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "nvd_api_key";
+                            name: string;
+                            value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         }) | null;
                         llm_base_url?: string | null;
                         llm_api_format?: string | null;
@@ -1380,9 +1457,26 @@ export interface paths {
                             value: string;
                             /** Format: date-time */
                             expires_at?: string | null;
+                        } | {
+                            /** @enum {string} */
+                            kind: "nvd_api_key";
+                            name: string;
+                            value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
                         }) | null;
                         /** @enum {string} */
                         reachability_min_severity?: "critical" | "high" | "medium" | "low";
+                        /** Format: uuid */
+                        nvd_credential_id?: string | null;
+                        nvd_credential?: {
+                            /** @enum {string} */
+                            kind: "nvd_api_key";
+                            name: string;
+                            value: string;
+                            /** Format: date-time */
+                            expires_at?: string | null;
+                        } | null;
                     };
                 };
             };
@@ -1409,6 +1503,8 @@ export interface paths {
                             llm_credential_id: string | null;
                             /** @enum {string} */
                             reachability_min_severity: "critical" | "high" | "medium" | "low";
+                            /** Format: uuid */
+                            nvd_credential_id: string | null;
                             updated_at: string;
                         };
                     };
@@ -1656,10 +1752,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List credential metadata (NEVER plaintext) */
+        /** List credential metadata — NEVER plaintext (paginated) */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    page?: number;
+                    page_size?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -1673,28 +1772,34 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            kind: string;
-                            name: string;
-                            metadata: {
-                                username?: string | null;
-                                has_passphrase?: boolean;
-                                has_known_hosts?: boolean;
-                            } | null;
-                            references: {
-                                repos: {
-                                    /** Format: uuid */
-                                    id: string;
-                                    name: string;
-                                }[];
-                                jira_settings: boolean;
-                                llm_settings: boolean;
-                            };
-                            reference_count: number;
-                            expires_at: string | null;
-                            created_at: string;
-                        }[];
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                kind: string;
+                                name: string;
+                                metadata: {
+                                    username?: string | null;
+                                    has_passphrase?: boolean;
+                                    has_known_hosts?: boolean;
+                                } | null;
+                                references: {
+                                    repos: {
+                                        /** Format: uuid */
+                                        id: string;
+                                        name: string;
+                                    }[];
+                                    jira_settings: boolean;
+                                    llm_settings: boolean;
+                                    nvd_settings: boolean;
+                                };
+                                reference_count: number;
+                                expires_at: string | null;
+                                created_at: string;
+                            }[];
+                            total: number;
+                            page: number;
+                            page_size: number;
+                        };
                     };
                 };
                 /** @description Default Response */
@@ -1773,6 +1878,13 @@ export interface paths {
                         value: string;
                         /** Format: date-time */
                         expires_at?: string | null;
+                    } | {
+                        /** @enum {string} */
+                        kind: "nvd_api_key";
+                        name: string;
+                        value: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     };
                 };
             };
@@ -1801,6 +1913,7 @@ export interface paths {
                                 }[];
                                 jira_settings: boolean;
                                 llm_settings: boolean;
+                                nvd_settings: boolean;
                             };
                             reference_count: number;
                             expires_at: string | null;
@@ -1972,6 +2085,7 @@ export interface paths {
                                 }[];
                                 jira_settings: boolean;
                                 llm_settings: boolean;
+                                nvd_settings: boolean;
                             };
                             reference_count: number;
                             expires_at: string | null;
@@ -2073,6 +2187,12 @@ export interface paths {
                         value: string;
                         /** Format: date-time */
                         expires_at?: string | null;
+                    } | {
+                        /** @enum {string} */
+                        kind: "nvd_api_key";
+                        value: string;
+                        /** Format: date-time */
+                        expires_at?: string | null;
                     };
                 };
             };
@@ -2101,6 +2221,7 @@ export interface paths {
                                 }[];
                                 jira_settings: boolean;
                                 llm_settings: boolean;
+                                nvd_settings: boolean;
                             };
                             reference_count: number;
                             expires_at: string | null;
@@ -2160,6 +2281,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/db/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream a pg_dump of the application database (custom format, compress=9) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/scans": {
         parameters: {
             query?: never;
@@ -2167,10 +2348,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List scan runs visible to the current org */
+        /** List scan runs visible to the current org (paginated) */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    page?: number;
+                    page_size?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -2184,55 +2368,61 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            org_id: string | null;
-                            /** Format: uuid */
-                            repo_id: string;
-                            /** Format: uuid */
-                            scope_id: string;
-                            scope_path: string;
-                            /** @enum {string} */
-                            status: "pending" | "running" | "success" | "failed" | "cancelled";
-                            /** @enum {string} */
-                            triggered_by: "user" | "api" | "schedule";
-                            /** Format: uuid */
-                            triggered_by_user_id: string | null;
-                            started_at: string | null;
-                            finished_at: string | null;
-                            error: string | null;
-                            component_count: number;
-                            critical_count: number;
-                            high_count: number;
-                            medium_count: number;
-                            low_count: number;
-                            warnings: {
-                                code: string;
-                                message: string;
-                                /**
-                                 * @default info
-                                 * @enum {string}
-                                 */
-                                severity: "info" | "error";
-                                context?: {
-                                    [key: string]: unknown;
-                                };
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                org_id: string | null;
+                                /** Format: uuid */
+                                repo_id: string;
+                                /** Format: uuid */
+                                scope_id: string;
+                                scope_path: string;
+                                /** @enum {string} */
+                                status: "pending" | "running" | "success" | "failed" | "cancelled";
+                                /** @enum {string} */
+                                triggered_by: "user" | "api" | "schedule";
+                                /** Format: uuid */
+                                triggered_by_user_id: string | null;
+                                started_at: string | null;
+                                finished_at: string | null;
+                                error: string | null;
+                                component_count: number;
+                                critical_count: number;
+                                high_count: number;
+                                medium_count: number;
+                                low_count: number;
+                                warnings: {
+                                    code: string;
+                                    message: string;
+                                    /**
+                                     * @default info
+                                     * @enum {string}
+                                     */
+                                    severity: "info" | "error";
+                                    context?: {
+                                        [key: string]: unknown;
+                                    };
+                                    details?: unknown;
+                                }[];
+                                llm_input_tokens: number;
+                                llm_output_tokens: number;
+                                llm_request_count: number;
+                                sast_finding_count: number;
+                                confirmed_reachable_count: number;
+                                /** @enum {string|null} */
+                                current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                                phase_progress: {
+                                    done: number;
+                                    total: number;
+                                    label?: string;
+                                } | null;
+                                created_at: string;
                             }[];
-                            llm_input_tokens: number;
-                            llm_output_tokens: number;
-                            llm_request_count: number;
-                            sast_finding_count: number;
-                            confirmed_reachable_count: number;
-                            /** @enum {string|null} */
-                            current_phase: "cloning" | "cdxgen" | "osv" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
-                            phase_progress: {
-                                done: number;
-                                total: number;
-                                label?: string;
-                            } | null;
-                            created_at: string;
-                        }[];
+                            total: number;
+                            page: number;
+                            page_size: number;
+                        };
                     };
                 };
                 /** @description Default Response */
@@ -2316,6 +2506,7 @@ export interface paths {
                                 context?: {
                                     [key: string]: unknown;
                                 };
+                                details?: unknown;
                             }[];
                             llm_input_tokens: number;
                             llm_output_tokens: number;
@@ -2323,7 +2514,7 @@ export interface paths {
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
                             /** @enum {string|null} */
-                            current_phase: "cloning" | "cdxgen" | "osv" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
                             phase_progress: {
                                 done: number;
                                 total: number;
@@ -2427,6 +2618,7 @@ export interface paths {
                                 context?: {
                                     [key: string]: unknown;
                                 };
+                                details?: unknown;
                             }[];
                             llm_input_tokens: number;
                             llm_output_tokens: number;
@@ -2434,7 +2626,7 @@ export interface paths {
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
                             /** @enum {string|null} */
-                            current_phase: "cloning" | "cdxgen" | "osv" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
                             phase_progress: {
                                 done: number;
                                 total: number;
@@ -2492,12 +2684,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List vulnerability findings for a scan run */
+        /** List vulnerability findings for a scan run (paginated) */
         get: {
             parameters: {
                 query?: {
-                    severity?: "critical" | "high" | "medium" | "low" | "unknown";
+                    page?: number;
+                    page_size?: number;
+                    severity?: ("critical" | "high" | "medium" | "low" | "unknown")[];
+                    finding_type?: ("cve" | "eol" | "deprecated")[];
+                    dismissed_statuses?: ("pending" | "confirmed" | "planned" | "fixed" | "suppressed" | "false_positive")[];
                     package?: string;
+                    sort_by?: "severity" | "summary" | "location" | "status" | "last_seen";
+                    sort_dir?: "asc" | "desc";
                 };
                 header?: never;
                 path: {
@@ -2514,48 +2712,53 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            scan_run_id: string;
-                            /** Format: uuid */
-                            component_id: string;
-                            /** Format: uuid */
-                            issue_id: string;
-                            component_name: string;
-                            component_version: string | null;
-                            component_scope: string | null;
-                            is_dev_only: boolean;
-                            /** @enum {string} */
-                            finding_type: "cve" | "eol" | "deprecated";
-                            osv_id: string;
-                            cve_id: string | null;
-                            /** @enum {string} */
-                            severity: "critical" | "high" | "medium" | "low" | "unknown";
-                            cvss_score: number | null;
-                            cvss_vector: string | null;
-                            summary: string | null;
-                            aliases: string[];
-                            actively_exploited: boolean;
-                            eol_date: string | null;
-                            has_fix: boolean;
-                            ecosystem: string | null;
-                            manifest_file: string | null;
-                            manifest_line: number | null;
-                            manifest_snippet: string | null;
-                            llm_summary: string | null;
-                            confirmed_reachable: boolean;
-                            reachable_confidence: number | null;
-                            reachable_reasoning: string | null;
-                            reachable_call_sites: {
-                                file: string;
-                                line: number;
-                                snippet: string;
-                            }[] | null;
-                            reachable_model: string | null;
-                            reachable_assessed_at: string | null;
-                            created_at: string;
-                        }[];
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                scan_run_id: string;
+                                /** Format: uuid */
+                                component_id: string;
+                                /** Format: uuid */
+                                issue_id: string;
+                                component_name: string;
+                                component_version: string | null;
+                                component_scope: string | null;
+                                is_dev_only: boolean;
+                                /** @enum {string} */
+                                finding_type: "cve" | "eol" | "deprecated";
+                                osv_id: string;
+                                cve_id: string | null;
+                                /** @enum {string} */
+                                severity: "critical" | "high" | "medium" | "low" | "unknown";
+                                cvss_score: number | null;
+                                cvss_vector: string | null;
+                                summary: string | null;
+                                aliases: string[];
+                                actively_exploited: boolean;
+                                eol_date: string | null;
+                                has_fix: boolean;
+                                ecosystem: string | null;
+                                manifest_file: string | null;
+                                manifest_line: number | null;
+                                manifest_snippet: string | null;
+                                llm_summary: string | null;
+                                confirmed_reachable: boolean;
+                                reachable_confidence: number | null;
+                                reachable_reasoning: string | null;
+                                reachable_call_sites: {
+                                    file: string;
+                                    line: number;
+                                    snippet: string;
+                                }[] | null;
+                                reachable_model: string | null;
+                                reachable_assessed_at: string | null;
+                                created_at: string;
+                            }[];
+                            total: number;
+                            page: number;
+                            page_size: number;
+                        };
                     };
                 };
                 /** @description Default Response */
@@ -2686,7 +2889,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** Format: uuid */
                             id: string;
+                            /** Format: uuid */
+                            scan_run_id: string | null;
                             name: string;
                             version: string | null;
                             purl: string;
@@ -2695,7 +2901,27 @@ export interface paths {
                             component_type: string;
                             scope: string | null;
                             is_dev_only: boolean;
-                            manifest_file: string | null;
+                            manifest_file?: string | null;
+                            discovery_method?: string | null;
+                            occurrences?: {
+                                path: string;
+                                line: number | null;
+                            }[];
+                            llm_evidence?: {
+                                path: string;
+                                excerpt: string | null;
+                                llmReason: string;
+                            } | null;
+                            component_root?: string | null;
+                            evidence?: {
+                                path: string;
+                                line?: number | null;
+                                snippet?: string | null;
+                            }[];
+                            usage?: {
+                                path: string;
+                                line: number | null;
+                            }[];
                         }[];
                     };
                 };
@@ -2738,10 +2964,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List SAST issues observed in this scan run */
+        /** List SAST issues observed in this scan run (paginated) */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    page?: number;
+                    page_size?: number;
+                    severity?: ("critical" | "high" | "medium" | "low" | "info")[];
+                    triage_status?: ("pending" | "confirmed" | "planned" | "fixed" | "false_positive" | "suppressed" | "error")[];
+                    sort_by?: "severity" | "summary" | "location" | "status" | "last_seen";
+                    sort_dir?: "asc" | "desc";
+                };
                 header?: never;
                 path: {
                     id: string;
@@ -2757,43 +2990,48 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            org_id: string | null;
-                            /** Format: uuid */
-                            scope_id: string;
-                            fingerprint: string;
-                            /** @enum {string} */
-                            triage_status: "pending" | "confirmed" | "planned" | "fixed" | "false_positive" | "suppressed" | "error";
-                            triage_confidence: number | null;
-                            triage_reasoning: string | null;
-                            triage_model: string | null;
-                            triage_input_tokens: number | null;
-                            triage_output_tokens: number | null;
-                            suppressed_at: string | null;
-                            /** Format: uuid */
-                            suppressed_by_user_id: string | null;
-                            suppressed_reason: string | null;
-                            notes: string | null;
-                            /** Format: uuid */
-                            jira_ticket_id: string | null;
-                            latest_rule_id: string;
-                            latest_rule_name: string | null;
-                            latest_rule_message: string | null;
-                            latest_llm_summary: string | null;
-                            /** @enum {string} */
-                            latest_severity: "critical" | "high" | "medium" | "low" | "info";
-                            latest_cwe_ids: string[];
-                            latest_file_path: string;
-                            latest_start_line: number;
-                            latest_end_line: number | null;
-                            latest_snippet: string | null;
-                            first_seen_at: string;
-                            last_seen_at: string;
-                            created_at: string;
-                            updated_at: string;
-                        }[];
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                org_id: string | null;
+                                /** Format: uuid */
+                                scope_id: string;
+                                fingerprint: string;
+                                /** @enum {string} */
+                                triage_status: "pending" | "confirmed" | "planned" | "fixed" | "false_positive" | "suppressed" | "error";
+                                triage_confidence: number | null;
+                                triage_reasoning: string | null;
+                                triage_model: string | null;
+                                triage_input_tokens: number | null;
+                                triage_output_tokens: number | null;
+                                suppressed_at: string | null;
+                                /** Format: uuid */
+                                suppressed_by_user_id: string | null;
+                                suppressed_reason: string | null;
+                                notes: string | null;
+                                /** Format: uuid */
+                                jira_ticket_id: string | null;
+                                latest_rule_id: string;
+                                latest_rule_name: string | null;
+                                latest_rule_message: string | null;
+                                latest_llm_summary: string | null;
+                                /** @enum {string} */
+                                latest_severity: "critical" | "high" | "medium" | "low" | "info";
+                                latest_cwe_ids: string[];
+                                latest_file_path: string;
+                                latest_start_line: number;
+                                latest_end_line: number | null;
+                                latest_snippet: string | null;
+                                first_seen_at: string;
+                                last_seen_at: string;
+                                created_at: string;
+                                updated_at: string;
+                            }[];
+                            total: number;
+                            page: number;
+                            page_size: number;
+                        };
                     };
                 };
                 /** @description Default Response */
@@ -3031,6 +3269,8 @@ export interface paths {
                     has_jira_ticket?: "yes" | "no";
                     seen_since_last_scan?: "new" | "unchanged" | "resolved";
                     include_resolved?: boolean;
+                    sort_by?: "severity" | "summary" | "location" | "status" | "last_seen";
+                    sort_dir?: "asc" | "desc";
                 };
                 header?: never;
                 path: {
@@ -3147,6 +3387,8 @@ export interface paths {
                     hide_dev?: boolean;
                     seen_since_last_scan?: "new" | "unchanged" | "resolved";
                     include_resolved?: boolean;
+                    sort_by?: "severity" | "summary" | "location" | "status" | "last_seen";
+                    sort_dir?: "asc" | "desc";
                 };
                 header?: never;
                 path: {
@@ -3212,6 +3454,8 @@ export interface paths {
                                 }[] | null;
                                 reachable_assessed_at: string | null;
                                 reachable_model: string | null;
+                                /** @default osv */
+                                source: string;
                                 first_seen_at: string;
                                 last_seen_at: string;
                                 created_at: string;
@@ -3289,8 +3533,10 @@ export interface paths {
                     content: {
                         "application/json": {
                             items: {
+                                /** Format: uuid */
                                 id: string;
-                                scan_run_id: string;
+                                /** Format: uuid */
+                                scan_run_id: string | null;
                                 name: string;
                                 version: string | null;
                                 purl: string;
@@ -3299,6 +3545,31 @@ export interface paths {
                                 component_type: string;
                                 scope: string | null;
                                 is_dev_only: boolean;
+                                manifest_file?: string | null;
+                                discovery_method?: string | null;
+                                occurrences?: {
+                                    path: string;
+                                    line: number | null;
+                                }[];
+                                llm_evidence?: {
+                                    path: string;
+                                    excerpt: string | null;
+                                    llmReason: string;
+                                } | null;
+                                component_root?: string | null;
+                                evidence?: {
+                                    path: string;
+                                    line?: number | null;
+                                    snippet?: string | null;
+                                }[];
+                                usage?: {
+                                    path: string;
+                                    line: number | null;
+                                }[];
+                                linked_issue_ids?: {
+                                    sca: string[];
+                                    sast: string[];
+                                };
                             }[];
                             total: number;
                             page: number;
@@ -3329,6 +3600,183 @@ export interface paths {
                             detail: string;
                         };
                     };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scopes/{id}/components/{componentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a scope component (manual cleanup of dup rows) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    componentId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": "null" | null;
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Edit a scope component's identity fields (component_root, evidence_paths) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    componentId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        name?: string;
+                        component_root?: string | null;
+                        evidence?: {
+                            path: string;
+                            line?: number | null;
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/scopes/{id}/sbom-json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };
@@ -3621,6 +4069,8 @@ export interface paths {
                             }[] | null;
                             reachable_assessed_at: string | null;
                             reachable_model: string | null;
+                            /** @default osv */
+                            source: string;
                             first_seen_at: string;
                             last_seen_at: string;
                             created_at: string;
@@ -3853,6 +4303,8 @@ export interface paths {
                             }[] | null;
                             reachable_assessed_at: string | null;
                             reachable_model: string | null;
+                            /** @default osv */
+                            source: string;
                             first_seen_at: string;
                             last_seen_at: string;
                             created_at: string;
