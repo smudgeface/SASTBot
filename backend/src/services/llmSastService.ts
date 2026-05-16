@@ -130,6 +130,13 @@ export interface RunDetectionInput {
   orgId: string | null;
   /** Live token-usage callback for setPhase progress. See SpawnClaudeInput. */
   onProgress?: (usage: TokenUsage) => void;
+  /**
+   * Wall-clock cap in ms before the subprocess is killed (SIGTERM → 5 s grace
+   * → SIGKILL). 0 = no cap. Defaults to CLAUDE_DETECTION_TIMEOUT_MS from config.
+   */
+  wallClockTimeoutMs?: number;
+  /** Kill the subprocess if no stdout chunk arrives for this many ms. 0 = disabled. */
+  stdoutStalenessMs?: number;
 }
 
 export interface RunDetectionResult {
@@ -138,6 +145,18 @@ export interface RunDetectionResult {
   exitCode: number | null;
   durationMs: number;
   usage: TokenUsage;
+  /**
+   * Set when the subprocess was killed by SASTBot's own watchdog timers rather
+   * than by natural token-budget termination.  Callers use this to skip the
+   * retry loop (no point retrying a hung endpoint) and to surface a typed
+   * warning describing the cause.
+   * - "timeout"   — wall-clock cap exceeded
+   * - "staleness" — no stdout for CLAUDE_STDOUT_STALENESS_MS
+   * - null        — normal exit (including exit-code != 0 without a watchdog kill)
+   */
+  killedReason: "timeout" | "staleness" | null;
+  /** True iff this result is from a retry attempt (second spawn). */
+  wasRetry: boolean;
 }
 
 export interface ParseError {
@@ -240,11 +259,48 @@ interface SpawnClaudeInput {
    * during the run and exact at the end.
    */
   onProgress?: (usage: TokenUsage) => void;
+  /**
+   * Wall-clock cap in milliseconds. When elapsed time exceeds this value the
+   * subprocess is sent SIGTERM; if it hasn't exited after 5 seconds it receives
+   * SIGKILL. 0 or undefined = no wall-clock cap.
+   */
+  wallClockTimeoutMs?: number;
+  /**
+   * Kill the subprocess after this many milliseconds without any stdout chunk.
+   * Protects against a hung LLM endpoint that has accepted the connection but
+   * stopped producing output. 0 or undefined = disabled.
+   */
+  stdoutStalenessMs?: number;
 }
 
 interface SpawnClaudeResult {
   exitCode: number | null;
   usage: TokenUsage;
+  /**
+   * Set by SASTBot's watchdog timers when WE killed the process.
+   * "timeout"   — wall-clock cap exceeded.
+   * "staleness" — no stdout for stdoutStalenessMs.
+   * null        — subprocess exited on its own (natural completion or LLM error).
+   */
+  killedReason: "timeout" | "staleness" | null;
+}
+
+/** Grace period between SIGTERM and SIGKILL when killing a subprocess. */
+const SIGTERM_GRACE_MS = 5_000;
+
+/**
+ * Send SIGTERM to a child process and, if it hasn't exited after
+ * SIGTERM_GRACE_MS, escalate to SIGKILL.  The returned promise resolves once
+ * the process has actually exited.  Safe to call multiple times (kill() on an
+ * already-dead process is a no-op on POSIX).
+ */
+function killWithGrace(proc: ReturnType<typeof spawn>, onExited: Promise<void>): void {
+  try { proc.kill("SIGTERM"); } catch { /* already dead */ }
+  const timer = setTimeout(() => {
+    try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+  }, SIGTERM_GRACE_MS);
+  // Clear the SIGKILL timer once the process has already exited.
+  void onExited.then(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
 }
 
 async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaudeResult> {
@@ -283,6 +339,8 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
     requestCount: 0,
   };
 
+  let killedReason: "timeout" | "staleness" | null = null;
+
   const exitCode: number | null = await new Promise((resolve, reject) => {
     const proc = spawn("claude", args, {
       cwd: input.scopeDir,
@@ -292,9 +350,55 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
       gid: CLAUDE_GID,
     });
 
+    // Track when the process exits so killWithGrace can cancel the SIGKILL timer.
+    let procExitedResolve!: () => void;
+    const procExited = new Promise<void>((res) => { procExitedResolve = res; });
+
     let stdoutBuf = "";
     let stderrBuf = "";
     let assistantTextBuf = "";
+
+    // ── Watchdog: wall-clock cap ────────────────────────────────────────────
+    // The cap is a safety net for runaway scans — natural token-budget
+    // exhaustion is the primary stop signal.
+    const wallClockMs = input.wallClockTimeoutMs ?? 0;
+    let wallClockTimer: ReturnType<typeof setTimeout> | null = null;
+    if (wallClockMs > 0) {
+      wallClockTimer = setTimeout(() => {
+        killedReason = "timeout";
+        logger.warn(
+          { scanRunId: input.scanRunId, limitMs: wallClockMs },
+          "[llmSastService] wall-clock cap exceeded — killing claude subprocess",
+        );
+        killWithGrace(proc, procExited);
+      }, wallClockMs);
+    }
+
+    // ── Watchdog: stdout staleness ──────────────────────────────────────────
+    // Guards against a hung LLM endpoint that accepted the TCP connection but
+    // stopped sending data.
+    const stalenessMs = input.stdoutStalenessMs ?? 0;
+    let stalenessTimer: ReturnType<typeof setTimeout> | null = null;
+    const resetStalenessTimer = (): void => {
+      if (stalenessMs <= 0) return;
+      if (stalenessTimer !== null) clearTimeout(stalenessTimer);
+      stalenessTimer = setTimeout(() => {
+        if (killedReason !== null) return; // already killed by wall-clock
+        killedReason = "staleness";
+        logger.warn(
+          { scanRunId: input.scanRunId, limitMs: stalenessMs },
+          "[llmSastService] stdout staleness threshold exceeded — killing claude subprocess",
+        );
+        killWithGrace(proc, procExited);
+      }, stalenessMs);
+    };
+    // Start the first staleness countdown immediately after spawn.
+    resetStalenessTimer();
+
+    const clearWatchdogs = (): void => {
+      if (wallClockTimer !== null) { clearTimeout(wallClockTimer); wallClockTimer = null; }
+      if (stalenessTimer !== null) { clearTimeout(stalenessTimer); stalenessTimer = null; }
+    };
 
     const flushAssistantLines = (final: boolean): void => {
       const lines = assistantTextBuf.split("\n");
@@ -362,6 +466,8 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
 
     proc.stdout.setEncoding("utf8");
     proc.stdout.on("data", (chunk: string) => {
+      // Any stdout activity resets the staleness countdown.
+      resetStalenessTimer();
       stdoutBuf += chunk;
       const lines = stdoutBuf.split("\n");
       stdoutBuf = lines.pop() ?? "";
@@ -382,11 +488,15 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
     });
 
     proc.on("error", (err) => {
+      clearWatchdogs();
+      procExitedResolve();
       logger.error({ err: err.message }, "[llmSastService] claude spawn error");
       reject(err);
     });
 
     proc.on("close", (code) => {
+      clearWatchdogs();
+      procExitedResolve();
       flushAssistantLines(true);
       if (stderrBuf.trim().length > 0) {
         logger.info({ stderr: stderrBuf.slice(0, 2000) }, "[llmSastService] claude stderr");
@@ -395,7 +505,7 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
     });
   });
 
-  return { exitCode, usage };
+  return { exitCode, usage, killedReason };
 }
 
 /**
@@ -440,55 +550,115 @@ export async function runDetection(input: RunDetectionInput): Promise<RunDetecti
     "[llmSastService] starting detection",
   );
 
-  const records: DetectionRecord[] = [];
-  const parseErrors: ParseError[] = [];
+  /** Single spawn attempt with its own fresh record/error arrays. */
+  const spawnOnce = async (
+    home: string,
+  ): Promise<{ records: DetectionRecord[]; parseErrors: ParseError[] } & SpawnClaudeResult> => {
+    const records: DetectionRecord[] = [];
+    const parseErrors: ParseError[] = [];
 
-  const { exitCode, usage } = await spawnClaudeAndStream({
-    scanRunId: input.scanRunId,
-    scopeDir: input.scopeDir,
-    systemPrompt,
-    userPrompt,
-    modelName,
-    apiKey,
-    baseUrl,
-    claudeHome,
-    effortLevel: input.effortLevel,
-    onProgress: input.onProgress,
-    onLine: (line) => {
-      if (!line.startsWith("{")) return;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch (err) {
-        parseErrors.push({ raw: line, reason: `JSON parse: ${(err as Error).message}` });
-        return;
-      }
-      const result = DetectionRecord.safeParse(parsed);
-      if (!result.success) {
-        parseErrors.push({
-          raw: line,
-          reason: `schema: ${result.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")}`,
-        });
-        return;
-      }
-      records.push(result.data);
-    },
-  });
+    const spawnResult = await spawnClaudeAndStream({
+      scanRunId: input.scanRunId,
+      scopeDir: input.scopeDir,
+      systemPrompt,
+      userPrompt,
+      modelName,
+      apiKey,
+      baseUrl,
+      claudeHome: home,
+      effortLevel: input.effortLevel,
+      onProgress: input.onProgress,
+      wallClockTimeoutMs: input.wallClockTimeoutMs,
+      stdoutStalenessMs: input.stdoutStalenessMs,
+      onLine: (line) => {
+        if (!line.startsWith("{")) return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch (err) {
+          parseErrors.push({ raw: line, reason: `JSON parse: ${(err as Error).message}` });
+          return;
+        }
+        const result = DetectionRecord.safeParse(parsed);
+        if (!result.success) {
+          parseErrors.push({
+            raw: line,
+            reason: `schema: ${result.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")}`,
+          });
+          return;
+        }
+        records.push(result.data);
+      },
+    });
+
+    return { records, parseErrors, ...spawnResult };
+  };
+
+  // ── First attempt ──────────────────────────────────────────────────────────
+  const first = await spawnOnce(claudeHome);
+
+  // ── Retry logic ───────────────────────────────────────────────────────────
+  //
+  // Retry condition: exitCode !== 0 AND no records at all (not even a
+  // `complete` record — that would indicate a partial run).  We do NOT retry:
+  //   - on watchdog kills (timeout or staleness) — the endpoint is likely
+  //     still hung; a retry would just spend double tokens and time out again.
+  //   - when exitCode === 0 — normal completion (zero findings is legitimate).
+  //
+  // The retry uses a fresh HOME tmpdir so any state left by the first attempt
+  // (claude-p configuration, cache files) cannot poison the second run.  The
+  // same prompts and full token budget are used — halving the budget risks the
+  // retry running out of room on exactly the runs that most need it.
+  //
+  // Operator note: if the retry also fails, both attempts have consumed tokens.
+  // The doubled-spend risk is documented in the `llm_sast_detection_retry`
+  // warning so operators can audit cost.
+  let final = first;
+  let wasRetry = false;
+  if (first.exitCode !== 0 && first.records.length === 0 && first.killedReason === null) {
+    logger.warn(
+      {
+        scanRunId: input.scanRunId,
+        exitCode: first.exitCode,
+        parseErrorCount: first.parseErrors.length,
+      },
+      "[llmSastService] detection attempt 1 failed with no records — retrying once",
+    );
+
+    // Fresh HOME for the retry so no state leaks from attempt 1.
+    const retryHome = path.join(tmpDir, "home-retry");
+    await fs.mkdir(retryHome, { recursive: true, mode: 0o755 });
+    await fs.chown(retryHome, CLAUDE_UID, CLAUDE_GID).catch(() => { /* non-fatal */ });
+
+    const retry = await spawnOnce(retryHome);
+    final = retry;
+    wasRetry = true;
+  }
 
   const durationMs = Date.now() - startedAt;
   logger.info(
     {
       scanRunId: input.scanRunId,
-      exitCode,
+      exitCode: final.exitCode,
+      killedReason: final.killedReason,
+      wasRetry,
       durationMs,
-      recordCount: records.length,
-      parseErrorCount: parseErrors.length,
-      usage,
+      recordCount: final.records.length,
+      parseErrorCount: final.parseErrors.length,
+      usage: final.usage,
     },
     "[llmSastService] detection finished",
   );
 
-  return { records, parseErrors, exitCode, durationMs, usage };
+  return {
+    records: final.records,
+    parseErrors: final.parseErrors,
+    exitCode: final.exitCode,
+    durationMs,
+    usage: final.usage,
+    killedReason: final.killedReason,
+    wasRetry,
+  };
 }
 
 /**
@@ -571,6 +741,13 @@ export interface RunRecheckInput {
    *  progress (verdicts arrive batched at the end of the run, so they're a
    *  poor unit of progress; tokens advance per LLM round-trip). */
   onProgress?: (usage: TokenUsage) => void;
+  /**
+   * Wall-clock cap in ms before the subprocess is killed. 0 = no cap.
+   * Defaults to CLAUDE_RECHECK_TIMEOUT_MS from config.
+   */
+  wallClockTimeoutMs?: number;
+  /** Kill the subprocess if no stdout chunk arrives for this many ms. 0 = disabled. */
+  stdoutStalenessMs?: number;
 }
 
 export interface RunRecheckResult {
@@ -579,6 +756,10 @@ export interface RunRecheckResult {
   exitCode: number | null;
   durationMs: number;
   usage: TokenUsage;
+  /** Set when the subprocess was killed by SASTBot's own watchdog timers. */
+  killedReason: "timeout" | "staleness" | null;
+  /** True iff this result is from a retry attempt. */
+  wasRetry: boolean;
 }
 
 /**
@@ -603,6 +784,8 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
         estimatedUsdCost: null,
         requestCount: 0,
       },
+      killedReason: null,
+      wasRetry: false,
     };
   }
 
@@ -656,58 +839,105 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
     "[llmSastService] starting recheck",
   );
 
-  const verdicts: RecheckVerdictRecord[] = [];
-  const parseErrors: ParseError[] = [];
+  /** Single spawn attempt with its own fresh verdict/error arrays. */
+  const spawnOnce = async (
+    home: string,
+  ): Promise<{ verdicts: RecheckVerdictRecord[]; parseErrors: ParseError[] } & SpawnClaudeResult> => {
+    const verdicts: RecheckVerdictRecord[] = [];
+    const parseErrors: ParseError[] = [];
 
-  const { exitCode, usage } = await spawnClaudeAndStream({
-    scanRunId: input.scanRunId,
-    scopeDir: input.scopeDir,
-    systemPrompt,
-    userPrompt,
-    modelName,
-    apiKey,
-    baseUrl,
-    claudeHome,
-    effortLevel: input.effortLevel,
-    onProgress: input.onProgress,
-    onLine: (line) => {
-      if (!line.startsWith("{")) return;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch (err) {
-        parseErrors.push({ raw: line, reason: `JSON parse: ${(err as Error).message}` });
-        return;
-      }
-      // Try verdict first (lacks `kind`). Fall back to complete record.
-      const verdict = RecheckVerdictRecord.safeParse(parsed);
-      if (verdict.success) {
-        verdicts.push(verdict.data);
-        return;
-      }
-      const complete = RecheckCompleteRecord.safeParse(parsed);
-      if (complete.success) return; // info-only; not persisted
-      parseErrors.push({
-        raw: line,
-        reason: `schema: ${verdict.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")}`,
-      });
-    },
-  });
+    const spawnResult = await spawnClaudeAndStream({
+      scanRunId: input.scanRunId,
+      scopeDir: input.scopeDir,
+      systemPrompt,
+      userPrompt,
+      modelName,
+      apiKey,
+      baseUrl,
+      claudeHome: home,
+      effortLevel: input.effortLevel,
+      onProgress: input.onProgress,
+      wallClockTimeoutMs: input.wallClockTimeoutMs,
+      stdoutStalenessMs: input.stdoutStalenessMs,
+      onLine: (line) => {
+        if (!line.startsWith("{")) return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch (err) {
+          parseErrors.push({ raw: line, reason: `JSON parse: ${(err as Error).message}` });
+          return;
+        }
+        // Try verdict first (lacks `kind`). Fall back to complete record.
+        const verdict = RecheckVerdictRecord.safeParse(parsed);
+        if (verdict.success) {
+          verdicts.push(verdict.data);
+          return;
+        }
+        const complete = RecheckCompleteRecord.safeParse(parsed);
+        if (complete.success) return; // info-only; not persisted
+        parseErrors.push({
+          raw: line,
+          reason: `schema: ${verdict.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")}`,
+        });
+      },
+    });
+
+    return { verdicts, parseErrors, ...spawnResult };
+  };
+
+  // ── First attempt ──────────────────────────────────────────────────────────
+  const first = await spawnOnce(claudeHome);
+
+  // ── Retry logic ───────────────────────────────────────────────────────────
+  // Same criteria as detection: exitCode !== 0 AND no records at all, and we
+  // didn't kill it ourselves (watchdog kills are not retried — the endpoint is
+  // likely still problematic).
+  let final = first;
+  let wasRetry = false;
+  if (first.exitCode !== 0 && first.verdicts.length === 0 && first.killedReason === null) {
+    logger.warn(
+      {
+        scanRunId: input.scanRunId,
+        exitCode: first.exitCode,
+        parseErrorCount: first.parseErrors.length,
+      },
+      "[llmSastService] recheck attempt 1 failed with no verdicts — retrying once",
+    );
+
+    const retryHome = path.join(tmpDir, "home-retry");
+    await fs.mkdir(retryHome, { recursive: true, mode: 0o755 });
+    await fs.chown(retryHome, CLAUDE_UID, CLAUDE_GID).catch(() => { /* non-fatal */ });
+
+    const retry = await spawnOnce(retryHome);
+    final = retry;
+    wasRetry = true;
+  }
 
   const durationMs = Date.now() - startedAt;
   logger.info(
     {
       scanRunId: input.scanRunId,
-      exitCode,
+      exitCode: final.exitCode,
+      killedReason: final.killedReason,
+      wasRetry,
       durationMs,
-      verdictCount: verdicts.length,
-      parseErrorCount: parseErrors.length,
-      usage,
+      verdictCount: final.verdicts.length,
+      parseErrorCount: final.parseErrors.length,
+      usage: final.usage,
     },
     "[llmSastService] recheck finished",
   );
 
-  return { verdicts, parseErrors, exitCode, durationMs, usage };
+  return {
+    verdicts: final.verdicts,
+    parseErrors: final.parseErrors,
+    exitCode: final.exitCode,
+    durationMs,
+    usage: final.usage,
+    killedReason: final.killedReason,
+    wasRetry,
+  };
 }
 
 // ---------------------------------------------------------------------------

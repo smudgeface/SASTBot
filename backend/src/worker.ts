@@ -268,6 +268,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       tokenBudget: sastTokenBudget,
       effortLevel: repo.llmSastEffort,
       orgId: run.orgId,
+      wallClockTimeoutMs: config.claudeDetectionTimeoutMs,
+      stdoutStalenessMs: config.claudeStdoutStalenessMs,
       onProgress: (usage) => {
         const now = Date.now();
         if (now - lastProgressAt < 2000) return;
@@ -289,11 +291,37 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         durationMs: detection.durationMs,
         usage: detection.usage,
         exitCode: detection.exitCode,
+        killedReason: detection.killedReason,
+        wasRetry: detection.wasRetry,
       },
       "[worker] LLM detection finished",
     );
 
-    if (detection.parseErrors.length > 0) {
+    // Emit a warning when a retry was performed so the operator can audit the
+    // doubled token spend.  This is info-only (the scan is not untrustworthy
+    // just because the first attempt crashed); the exit-code guard below will
+    // escalate to error-severity if the retry also failed.
+    if (detection.wasRetry) {
+      await appendWarning(scanRunId, {
+        code: "llm_sast_detection_retry",
+        severity: "info",
+        message: "LLM SAST detection attempt 1 exited non-zero with no records. A retry was performed automatically using the same prompts and full token budget. Note: both attempts consumed tokens — the operator may have been billed for both runs.",
+      });
+    }
+
+    // Watchdog kills (timeout / staleness) are a stronger untrust signal than
+    // a plain non-zero exit — the endpoint may still be hung.  Emit a
+    // specific warning so the operator knows what happened.
+    if (detection.killedReason !== null) {
+      const reason = detection.killedReason === "timeout"
+        ? `wall-clock cap (${config.claudeDetectionTimeoutMs / 1000}s)`
+        : `stdout staleness threshold (${config.claudeStdoutStalenessMs / 1000}s without output)`;
+      await appendWarning(scanRunId, {
+        code: "llm_sast_detection_failed",
+        severity: "error",
+        message: `LLM SAST detection subprocess was killed by SASTBot after exceeding the ${reason}. Existing SAST/SCA findings were preserved — check the LLM endpoint health and re-run.`,
+      });
+    } else if (detection.parseErrors.length > 0) {
       await appendWarning(scanRunId, {
         code: "llm_sast_parse_errors",
         severity: "info",
@@ -304,13 +332,14 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
 
     // Untrust signal: detection subprocess didn't exit cleanly. exitCode === 0
     // with zero records is a legitimate "no findings" outcome (clean
-    // codebase). exitCode !== 0 means claude-p crashed mid-run, so any
-    // SAST/SCA remediation logic that gates on this scan should be skipped.
-    if (detection.exitCode !== 0) {
+    // codebase). exitCode !== 0 means claude-p crashed mid-run (or the retry
+    // also failed), so any SAST/SCA remediation logic that gates on this scan
+    // should be skipped.
+    if (detection.exitCode !== 0 && detection.killedReason === null) {
       await appendWarning(scanRunId, {
         code: "llm_sast_detection_failed",
         severity: "error",
-        message: `LLM SAST detection exited with code ${detection.exitCode} after ${(detection.durationMs / 1000).toFixed(0)}s. Existing SAST/SCA findings were preserved — re-run the scan once the LLM endpoint is healthy.`,
+        message: `LLM SAST detection exited with code ${detection.exitCode} after ${(detection.durationMs / 1000).toFixed(0)}s${detection.wasRetry ? " (including retry)" : ""}. Existing SAST/SCA findings were preserved — re-run the scan once the LLM endpoint is healthy.`,
       });
     }
 
@@ -411,6 +440,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         tokenBudget: recheckBudget,
         effortLevel: repo.llmRecheckEffort,
         orgId: run.orgId,
+        wallClockTimeoutMs: config.claudeRecheckTimeoutMs,
+        stdoutStalenessMs: config.claudeStdoutStalenessMs,
         onProgress: (usage) => {
           const now = Date.now();
           if (now - lastRecheckProgressAt < 2000) return;
@@ -431,6 +462,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
           })),
           durationMs: recheck.durationMs,
           usage: recheck.usage,
+          killedReason: recheck.killedReason,
+          wasRetry: recheck.wasRetry,
         },
         "[worker] LLM recheck finished",
       );
@@ -444,7 +477,24 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       });
       log.info(apply, "[worker] LLM recheck applied");
 
-      if (recheck.parseErrors.length > 0) {
+      if (recheck.wasRetry) {
+        await appendWarning(scanRunId, {
+          code: "llm_recheck_retry",
+          severity: "info",
+          message: "LLM SAST recheck attempt 1 exited non-zero with no verdicts. A retry was performed automatically using the same prompts and full token budget. Note: both attempts consumed tokens — the operator may have been billed for both runs.",
+        });
+      }
+
+      if (recheck.killedReason !== null) {
+        const reason = recheck.killedReason === "timeout"
+          ? `wall-clock cap (${config.claudeRecheckTimeoutMs / 1000}s)`
+          : `stdout staleness threshold (${config.claudeStdoutStalenessMs / 1000}s without output)`;
+        await appendWarning(scanRunId, {
+          code: "llm_recheck_failed",
+          severity: "error",
+          message: `LLM SAST recheck subprocess was killed by SASTBot after exceeding the ${reason}. Existing recheck results are incomplete — re-run the scan once the LLM endpoint is healthy.`,
+        });
+      } else if (recheck.parseErrors.length > 0) {
         await appendWarning(scanRunId, {
           code: "llm_recheck_parse_errors",
           severity: "info",

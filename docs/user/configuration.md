@@ -199,16 +199,46 @@ GET /scans?page=2&page_size=20
 ```
 Returns items 21–40, sorted newest-first.
 
-## Coming soon
+### LLM subprocess watchdog timers (scan resilience)
 
-The following configuration keys are planned but not yet implemented. They will
-be filled in by later production-readiness streams:
+SASTBot enforces two independent watchdogs on every `claude -p` subprocess to
+protect against runaway or hung scans.
 
-| Key (env form) | Stream | Description |
-|----------------|--------|-------------|
-| `CLAUDE_DETECTION_TIMEOUT_MS` | Stream C | Wall-clock cap on the `claude -p` SAST detection subprocess. Default 3 600 000 (60 min). |
-| `CLAUDE_RECHECK_TIMEOUT_MS` | Stream C | Wall-clock cap on the `claude -p` recheck subprocess. Default 1 800 000 (30 min). |
-| `CLAUDE_STDOUT_STALENESS_MS` | Stream C | Kill the subprocess if no stdout for this many milliseconds. Default 300 000 (5 min). |
+**Wall-clock cap**: if the subprocess runs longer than the configured limit, it
+receives SIGTERM; if it has not exited after 5 seconds it receives SIGKILL.
+
+**Stdout staleness**: if no stdout chunk arrives from the subprocess within the
+configured window, the subprocess is killed in the same way.
+
+Both watchdogs emit an `error`-severity scan warning (`llm_sast_detection_failed`
+or `llm_recheck_failed`) so the scan is visible as degraded in the UI and
+remediation logic is gated off. The existing SAST/SCA findings from prior scans
+are preserved.
+
+| Key (env form) | YAML form | CLI form | Default | Description |
+|----------------|-----------|----------|---------|-------------|
+| `CLAUDE_DETECTION_TIMEOUT_MS` | `claude_detection_timeout_ms` | `--claude-detection-timeout-ms` | `3600000` (60 min) | Wall-clock cap on the `claude -p` SAST detection subprocess. On timeout: SIGTERM, 5 s grace, then SIGKILL. Raise this for very large monorepos that legitimately need more than an hour. The original GoWeb scan ran 6 h 37 m before failing — this cap is a safety net, not the primary stop signal (the token-budget `--effort` flag stops the model first on healthy runs). |
+| `CLAUDE_RECHECK_TIMEOUT_MS` | `claude_recheck_timeout_ms` | `--claude-recheck-timeout-ms` | `1800000` (30 min) | Wall-clock cap on the `claude -p` recheck subprocess. Recheck is a narrower pass than detection and rarely needs more than 30 minutes. |
+| `CLAUDE_STDOUT_STALENESS_MS` | `claude_stdout_staleness_ms` | `--claude-stdout-staleness-ms` | `300000` (5 min) | Kill the subprocess if no stdout chunk arrives for this many milliseconds. Guards against a hung LLM endpoint that has accepted the TCP connection but stopped producing data. 5 minutes is generous for a healthy endpoint; lower it (e.g. to 60 000) in environments where endpoint hangs are frequent and fast recovery is preferred over waiting. |
+
+### Retry on subprocess failure
+
+When a `claude -p` subprocess exits with a non-zero code **and** produced no
+records at all (not even a `complete` record), SASTBot automatically retries
+**once** using the same prompts and the same full token budget:
+
+- A fresh `$HOME` tmpdir is created for the retry so no state from the first
+  attempt can interfere.
+- An `info`-severity warning (`llm_sast_detection_retry` or
+  `llm_recheck_retry`) is emitted documenting that the retry occurred and that
+  both attempts consumed tokens.
+
+**Doubled-spend risk**: if the first attempt consumed tokens before crashing
+(e.g. mid-run OOM), the operator may be billed for both runs. The retry warning
+includes an explicit note about this. The retry is not performed if the
+subprocess was killed by SASTBot's own watchdog timers (timeout or staleness) —
+those indicate the endpoint is likely still problematic and a retry would just
+repeat the hang.
 
 ## Validation errors
 

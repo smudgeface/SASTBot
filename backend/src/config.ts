@@ -190,6 +190,16 @@ const EnvSchema = z.object({
   // Number of BullMQ scan jobs the worker processes in parallel.
   // Default 2; hard-capped at 4 to avoid overloading the host.
   SCAN_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(2),
+  // Wall-clock cap on the `claude -p` SAST detection subprocess.
+  // Default 60 min (3 600 000 ms). On timeout: SIGTERM, 5 s grace, then SIGKILL.
+  CLAUDE_DETECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(3_600_000),
+  // Wall-clock cap on the `claude -p` SAST recheck subprocess.
+  // Default 30 min (1 800 000 ms). On timeout: SIGTERM, 5 s grace, then SIGKILL.
+  CLAUDE_RECHECK_TIMEOUT_MS: z.coerce.number().int().positive().default(1_800_000),
+  // Kill the subprocess if no stdout chunk arrives for this many milliseconds.
+  // Default 5 min (300 000 ms). Guards against a hung LLM endpoint that has
+  // accepted the connection but stopped producing output.
+  CLAUDE_STDOUT_STALENESS_MS: z.coerce.number().int().positive().default(300_000),
 });
 
 // ---------------------------------------------------------------------------
@@ -210,6 +220,9 @@ export type AppConfig = {
   authRateLimitMax: number;
   authRateLimitWindowMs: number;
   scanWorkerConcurrency: number;
+  claudeDetectionTimeoutMs: number;
+  claudeRecheckTimeoutMs: number;
+  claudeStdoutStalenessMs: number;
 };
 
 let cached: AppConfig | null = null;
@@ -304,6 +317,9 @@ export function loadConfig(): AppConfig {
     authRateLimitMax: parsed.data.AUTH_RATE_LIMIT_MAX,
     authRateLimitWindowMs: parsed.data.AUTH_RATE_LIMIT_WINDOW_MS,
     scanWorkerConcurrency: parsed.data.SCAN_WORKER_CONCURRENCY,
+    claudeDetectionTimeoutMs: parsed.data.CLAUDE_DETECTION_TIMEOUT_MS,
+    claudeRecheckTimeoutMs: parsed.data.CLAUDE_RECHECK_TIMEOUT_MS,
+    claudeStdoutStalenessMs: parsed.data.CLAUDE_STDOUT_STALENESS_MS,
   };
   return cached;
 }
