@@ -56,6 +56,10 @@ logs/
 # Personal / homelab-specific docs that shouldn't leak to work repo
 docs/DEPLOY_HOMELAB.md
 
+# Layered config files — contain secrets; YAML file must never be committed
+backend/config.local.yaml
+/etc/sastbot/
+
 # Personal screenshots + original brief — local reference only, not part of the public repo
 Screencaps/
 SASTBot Initial Prompt.txt

@@ -73,9 +73,17 @@ SASTBot/
 └── README.md
 ```
 
+## User documentation
+
+Operator-facing guides live in [`docs/user/`](docs/user/README.md):
+
+- [Configuration](docs/user/configuration.md) — all config keys, three-source precedence (env / YAML / CLI), worked examples
+
+More pages (installation, scanning, triage workflow, Jira, SARIF export) are in progress.
+
 ## Configuration
 
-All configuration flows through environment variables (see `.env.example`). The admin UI persists runtime settings (Jira, LLM gateway, etc.) in the Postgres `app_settings` table; credentials are AES-256-GCM encrypted at rest using `MASTER_KEY`.
+All configuration flows through environment variables, an optional YAML file, or CLI arguments (see [docs/user/configuration.md](docs/user/configuration.md) for the full reference and precedence rules). The admin UI persists runtime settings (Jira, LLM gateway, etc.) in the Postgres `app_settings` table; credentials are AES-256-GCM encrypted at rest using `MASTER_KEY`.
 
 ## Development
 
