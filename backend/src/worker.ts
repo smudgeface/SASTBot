@@ -47,6 +47,40 @@ const config = loadConfig();
 const logger = pino({ level: config.logLevel, name: "sastbot-worker" });
 
 // ---------------------------------------------------------------------------
+// Parse-error truncation helper
+// ---------------------------------------------------------------------------
+
+/** Maximum byte length for a single `raw` string stored in warning details. */
+export const PARSE_ERROR_RAW_MAX_BYTES = 2048;
+
+/** Truncation suffix appended when a raw string exceeds the byte cap. */
+const TRUNCATION_SUFFIX = "…[truncated]";
+
+/**
+ * Slice `parseErrors` to at most `limit` entries and cap each `raw` value to
+ * `PARSE_ERROR_RAW_MAX_BYTES` bytes (UTF-8).  Returns a plain array of
+ * `{raw, reason}` objects suitable for storage in a warning's `details` field.
+ *
+ * Exported so unit tests can exercise it without touching the DB.
+ */
+export function truncateParseErrors(
+  parseErrors: ReadonlyArray<{ raw: string; reason: string }>,
+  limit = 5,
+): Array<{ raw: string; reason: string }> {
+  return parseErrors.slice(0, limit).map((e) => {
+    const enc = new TextEncoder().encode(e.raw);
+    if (enc.byteLength <= PARSE_ERROR_RAW_MAX_BYTES) {
+      return { raw: e.raw, reason: e.reason };
+    }
+    // Decode only the first PARSE_ERROR_RAW_MAX_BYTES bytes, then trim any
+    // incomplete multi-byte sequence that TextDecoder might replace with U+FFFD.
+    const truncBytes = enc.slice(0, PARSE_ERROR_RAW_MAX_BYTES);
+    const truncText = new TextDecoder("utf-8", { fatal: false }).decode(truncBytes).replace(/�$/, "");
+    return { raw: truncText + TRUNCATION_SUFFIX, reason: e.reason };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Warning helper
 // ---------------------------------------------------------------------------
 
@@ -123,6 +157,16 @@ async function setPhase(
 }
 
 // ---------------------------------------------------------------------------
+// LLM token-budget defaults. Per-repo overrides are stored as nullable Int?
+// columns; NULL means "use this default".
+// ---------------------------------------------------------------------------
+
+const DEFAULT_LLM_SBOM_TOKEN_BUDGET = 200_000;
+const DEFAULT_LLM_SBOM_RECHECK_TOKEN_BUDGET = 50_000;
+const DEFAULT_LLM_SAST_TOKEN_BUDGET = 300_000;
+const DEFAULT_LLM_RECHECK_TOKEN_BUDGET = 50_000;
+
+// ---------------------------------------------------------------------------
 // LLM-mode SAST pipeline (M6 — runs when repo.sastEngine === "llm")
 // ---------------------------------------------------------------------------
 
@@ -132,8 +176,8 @@ interface LlmSastPipelineInput {
     name: string;
     defaultBranch: string;
     ignorePaths: unknown;
-    llmSastTokenBudget: number;
-    llmRecheckTokenBudget: number;
+    llmSastTokenBudget: number | null;
+    llmRecheckTokenBudget: number | null;
     llmSastEffort: string;
     llmRecheckEffort: string;
     reachabilityEnabled: boolean;
@@ -254,6 +298,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         code: "llm_sast_parse_errors",
         severity: "info",
         message: `LLM SAST detection emitted ${detection.parseErrors.length} unparseable record(s); some findings may be missing.`,
+        details: truncateParseErrors(detection.parseErrors),
       });
     }
 
@@ -404,6 +449,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
           code: "llm_recheck_parse_errors",
           severity: "info",
           message: `LLM recheck emitted ${recheck.parseErrors.length} unparseable record(s).`,
+          details: truncateParseErrors(recheck.parseErrors),
         });
       }
 
@@ -1238,6 +1284,7 @@ const worker = new Worker<ScanJobData>(
             code: "llm_sbom_parse_errors",
             severity: "info",
             message: `LLM SBOM augmentation emitted ${augResult.parseErrors.length} unparseable records. Partial results applied.`,
+            details: truncateParseErrors(augResult.parseErrors),
           });
         }
 
@@ -1436,6 +1483,7 @@ const worker = new Worker<ScanJobData>(
             code: "llm_sbom_recheck_partial",
             severity: "info",
             message: `SBOM recheck emitted ${recheckResult.parseErrors.length} unparseable verdict(s). Ambiguous components remain active.`,
+            details: truncateParseErrors(recheckResult.parseErrors),
           });
         }
 
@@ -1712,7 +1760,7 @@ const worker = new Worker<ScanJobData>(
       }
     }
   },
-  { connection: getRedis() },
+  { connection: getRedis(), concurrency: config.scanWorkerConcurrency },
 );
 
 worker.on("failed", (job, err) => {

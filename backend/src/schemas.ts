@@ -189,6 +189,12 @@ export type CredentialOut = z.infer<typeof CredentialOutSchema>;
 
 export const CredentialListSchema = z.array(CredentialOutSchema);
 
+/** Pagination query params for GET /admin/credentials. Default page_size 100, max 500. */
+export const CredentialListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  page_size: z.coerce.number().int().min(1).max(500).default(100),
+});
+
 // ---------------------------------------------------------------------------
 // Repos
 // ---------------------------------------------------------------------------
@@ -233,6 +239,18 @@ export const RepoCreateSchema = z.object({
   llm_sbom_effort: LlmEffortSchema.default("medium"),
   /** SBOM Component Recheck Stage 2: effort level for the recheck pass. */
   llm_sbom_recheck_effort: LlmEffortSchema.default("medium"),
+  /** Per-repo token budget for the LLM SBOM augmentation pass. NULL = use
+   *  the worker's compiled-in default (200 000). Must be > 0 when set. */
+  llm_sbom_token_budget: z.number().int().min(1).nullable().optional(),
+  /** Per-repo token budget for the SBOM component recheck pass. NULL = use
+   *  the worker's compiled-in default (50 000). Must be > 0 when set. */
+  llm_sbom_recheck_token_budget: z.number().int().min(1).nullable().optional(),
+  /** Per-repo token budget for the LLM SAST detection pass. NULL = use
+   *  the worker's compiled-in default (300 000). Must be > 0 when set. */
+  llm_sast_token_budget: z.number().int().min(1).nullable().optional(),
+  /** Per-repo token budget for the SAST recheck pass. NULL = use
+   *  the worker's compiled-in default (50 000). Must be > 0 when set. */
+  llm_recheck_token_budget: z.number().int().min(1).nullable().optional(),
   credential_id: UuidSchema.nullable().optional(),
   // NOTE: the contract names the inline field `credential`, NOT `new_credential`.
   credential: CredentialCreateSchema.nullable().optional(),
@@ -259,6 +277,10 @@ export const RepoUpdateSchema = z.object({
   vendored_dirs: z.array(z.string()).optional(),
   llm_sbom_effort: LlmEffortSchema.optional(),
   llm_sbom_recheck_effort: LlmEffortSchema.optional(),
+  llm_sbom_token_budget: z.number().int().min(1).nullable().optional(),
+  llm_sbom_recheck_token_budget: z.number().int().min(1).nullable().optional(),
+  llm_sast_token_budget: z.number().int().min(1).nullable().optional(),
+  llm_recheck_token_budget: z.number().int().min(1).nullable().optional(),
   credential_id: UuidSchema.nullable().optional(),
   credential: CredentialCreateSchema.nullable().optional(),
 });
@@ -291,6 +313,11 @@ export const RepoOutSchema = z.object({
   llm_sbom_effort: LlmEffortSchema,
   /** SBOM Component Recheck Stage 2: effort for the recheck pass. */
   llm_sbom_recheck_effort: LlmEffortSchema,
+  /** Per-repo token budgets. NULL means the worker uses its compiled-in default. */
+  llm_sbom_token_budget: z.number().int().nullable(),
+  llm_sbom_recheck_token_budget: z.number().int().nullable(),
+  llm_sast_token_budget: z.number().int().nullable(),
+  llm_recheck_token_budget: z.number().int().nullable(),
   /** Set whenever the worker finishes a clone/fetch for this repo. Null
    *  means no local cache exists — "Purge cache" should be disabled. */
   last_cloned_at: IsoDateTimeSchema.nullable(),
@@ -299,6 +326,12 @@ export const RepoOutSchema = z.object({
 export type RepoOut = z.infer<typeof RepoOutSchema>;
 
 export const RepoListSchema = z.array(RepoOutSchema);
+
+/** Pagination query params for GET /admin/repos. Default page_size 100, max 500. */
+export const RepoListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  page_size: z.coerce.number().int().min(1).max(500).default(100),
+});
 
 export const RepoIdParamsSchema = z.object({ id: UuidSchema });
 
@@ -359,6 +392,12 @@ export const ScanWarningSchema = z.object({
    *  without blocking remediation logic. */
   severity: z.enum(["info", "error"]).default("info"),
   context: z.record(z.unknown()).optional(),
+  /** Raw parse-error payloads from the LLM JSONL parser, capped to 5 entries
+   *  with each `raw` string truncated to 2 KB. Present only on
+   *  `*_parse_errors` warnings. The shape is intentionally `unknown` because
+   *  we don't control the LLM's output — the consumer must guard against
+   *  unexpected shapes. */
+  details: z.unknown().optional(),
 });
 export type ScanWarning = z.infer<typeof ScanWarningSchema>;
 
@@ -402,6 +441,12 @@ export const ScanRunOutSchema = z.object({
 export type ScanRunOut = z.infer<typeof ScanRunOutSchema>;
 
 export const ScanRunListSchema = z.array(ScanRunOutSchema);
+
+/** Pagination query params for GET /scans. Default page_size 50, max 200. */
+export const ScanRunListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  page_size: z.coerce.number().int().min(1).max(200).default(50),
+});
 
 // ---------------------------------------------------------------------------
 // ScanScope

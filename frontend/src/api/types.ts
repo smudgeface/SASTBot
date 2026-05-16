@@ -244,6 +244,10 @@ export interface ScanWarning {
    *  blocking remediation logic. */
   severity: "info" | "error";
   context?: Record<string, unknown>;
+  /** Raw parse-error payloads from the LLM JSONL parser (up to 5 entries,
+   *  each `raw` capped to 2 KB). Present only on `*_parse_errors` warnings.
+   *  Shape is `unknown` — guard before rendering. */
+  details?: unknown;
 }
 
 export interface Scan {

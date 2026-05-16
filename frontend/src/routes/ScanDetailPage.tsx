@@ -936,20 +936,47 @@ export default function ScanDetailPage() {
           const hasError = s.warnings.some((w) => w.severity === "error");
           return (
             <Card className={hasError ? "border-destructive/50" : "border-amber-200 dark:border-amber-900"}>
-              <CardContent className="p-4 space-y-1">
-                {s.warnings.map((w, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "flex gap-2 text-sm",
-                      w.severity === "error"
-                        ? "text-destructive"
-                        : "text-amber-700 dark:text-amber-300",
-                    )}
-                  >
-                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" /><span>{w.message}</span>
-                  </div>
-                ))}
+              <CardContent className="p-4 space-y-2">
+                {s.warnings.map((w, i) => {
+                  const colorClass = w.severity === "error"
+                    ? "text-destructive"
+                    : "text-amber-700 dark:text-amber-300";
+                  // Normalise details: accept an array of {raw, reason} objects.
+                  const parseErrorDetails = (() => {
+                    if (!Array.isArray(w.details) || w.details.length === 0) return null;
+                    const entries = (w.details as unknown[]).filter(
+                      (d): d is { raw: string; reason: string } =>
+                        typeof d === "object" && d !== null &&
+                        "raw" in d && typeof (d as Record<string, unknown>).raw === "string" &&
+                        "reason" in d && typeof (d as Record<string, unknown>).reason === "string",
+                    );
+                    return entries.length > 0 ? entries : null;
+                  })();
+
+                  return (
+                    <div key={i} className={cn("text-sm", colorClass)}>
+                      <div className="flex gap-2">
+                        <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                        <span>{w.message}</span>
+                      </div>
+                      {parseErrorDetails && (
+                        <details className="mt-1 ml-6">
+                          <summary className="cursor-pointer text-xs opacity-70 select-none hover:opacity-100">
+                            {parseErrorDetails.length} raw payload{parseErrorDetails.length !== 1 ? "s" : ""}
+                          </summary>
+                          <div className="mt-1 space-y-1">
+                            {parseErrorDetails.map((entry, j) => (
+                              <div key={j} className="rounded border border-current/20 bg-muted/50 p-2 text-xs font-mono">
+                                <div className="mb-0.5 font-sans font-medium opacity-70">reason: {entry.reason}</div>
+                                <div className="whitespace-pre-wrap break-all">{entry.raw}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  );
+                })}
               </CardContent>
             </Card>
           );
