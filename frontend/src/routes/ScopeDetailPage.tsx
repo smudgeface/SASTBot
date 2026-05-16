@@ -66,6 +66,8 @@ import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
 import { SortableTableHead } from "@/components/SortableTableHead";
 import type { SortState } from "@/components/SortableTableHead";
 import type { IssueSortKey } from "@/api/queries/scopes";
+import { useToast } from "@/components/ui/use-toast";
+import { copyToClipboard } from "@/lib/clipboard";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
 import { SeverityBadge, SEVERITY_COLORS } from "@/components/SeverityBadge";
@@ -385,10 +387,17 @@ function SastIssueRow({
     }
   }, [autoExpand]);
 
-  const copyLink = (e: React.MouseEvent) => {
+  const { toast } = useToast();
+  const copyLink = async (e: React.MouseEvent) => {
     e.stopPropagation();
     // M6q: copy the path-based deep link, not the legacy ?issue= search param.
-    navigator.clipboard.writeText(`${window.location.origin}/scopes/${scopeId}/sast/${issue.id}`);
+    // Wrapped via copyToClipboard so the homelab (plain-HTTP LAN host) still
+    // works — navigator.clipboard requires a secure context.
+    const url = `${window.location.origin}/scopes/${scopeId}/sast/${issue.id}`;
+    const ok = await copyToClipboard(url);
+    toast(ok
+      ? { title: "Link copied", description: "Issue URL is on your clipboard." }
+      : { variant: "destructive", title: "Copy failed", description: "Could not access the clipboard." });
   };
   const triage = useTriageSastIssue();
   const linkJira = useLinkSastIssueToJira();
@@ -814,10 +823,16 @@ function ScaIssueRow({
     }
   }, [autoExpand]);
 
-  const copyLink = (e: React.MouseEvent) => {
+  const { toast } = useToast();
+  const copyLink = async (e: React.MouseEvent) => {
     e.stopPropagation();
     // M6q: copy the path-based deep link, not the legacy ?issue= search param.
-    navigator.clipboard.writeText(`${window.location.origin}/scopes/${scopeId}/sca/${issue.id}`);
+    // copyToClipboard handles the non-secure-context fallback (LAN HTTP).
+    const url = `${window.location.origin}/scopes/${scopeId}/sca/${issue.id}`;
+    const ok = await copyToClipboard(url);
+    toast(ok
+      ? { title: "Link copied", description: "Issue URL is on your clipboard." }
+      : { variant: "destructive", title: "Copy failed", description: "Could not access the clipboard." });
   };
 
   const handleLink = (key: string) => {
