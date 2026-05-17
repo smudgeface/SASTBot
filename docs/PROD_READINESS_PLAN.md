@@ -398,6 +398,43 @@ Report back: commit hash, files changed, tests added/passing, anything
 that surprised you that the next stream should know.
 ```
 
+---
+
+## Follow-up: DB restore (post-plan addition, 2026-05-17)
+
+A `POST /admin/db/restore` counterpart to Stream F's backup endpoint was added
+after the six-stream plan shipped.
+
+**What shipped:**
+
+- `backend/src/routes/adminRestore.ts` — admin-only multipart upload route.
+  Disk-space pre-flight (507), upload to `/tmp/sastbot-restore-<uuid>.dump`,
+  migration mismatch warning (non-blocking), `pg_restore --clean --if-exists
+  --no-owner --no-privileges`, temp-file cleanup on success, `process.exit(0)`
+  for clean Docker restart.
+- `@fastify/multipart@^8.3.1` added as a dependency. Registered at route scope
+  only — global body-size limit is not affected. `DB_RESTORE_MAX_BYTES` env
+  knob (default 2 GiB) enforced via `limits.fileSize`.
+- `backend/src/config.ts` — `DB_RESTORE_MAX_BYTES` Zod field + `AppConfig` field.
+- `backend/src/server.ts` — registered `adminRestoreRoutes`.
+- `backend/tests/adminRestore.test.ts` — unit tests for `pgEnvFromUrl`, disk-space
+  pre-flight math, and migration mismatch detection.
+- `frontend/src/routes/admin/SettingsPage.tsx` — backup card expanded to
+  "Database backup & restore". Added `RestoreSection` component: file picker,
+  two-step confirmation modal (typed `RESTORE` confirmation, red warning banner),
+  uploading state, "Backend is restarting…" state with `/healthz` poll + auto
+  reload, error state with dismiss.
+- `docs/user/configuration.md` — "Database restore" section added adjacent to
+  "Database backup".
+
+**Worker restart**: worker is NOT signalled. Operator must run
+`docker compose restart worker` after a restore. Documented in the user docs.
+
+**`pg_restore` binary**: same `postgresql-client-16` package installed by Stream F.
+No image change needed.
+
+---
+
 ## Out of scope for this plan
 
 These are intentionally NOT in the six streams above. They live in

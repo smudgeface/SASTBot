@@ -200,6 +200,10 @@ const EnvSchema = z.object({
   // Default 5 min (300 000 ms). Guards against a hung LLM endpoint that has
   // accepted the connection but stopped producing output.
   CLAUDE_STDOUT_STALENESS_MS: z.coerce.number().int().positive().default(300_000),
+  // Maximum allowed size (in bytes) for a database restore upload.
+  // Default 2 GiB (2 147 483 648 bytes). Enforced at the multipart level so
+  // oversized uploads are rejected before they land on disk.
+  DB_RESTORE_MAX_BYTES: z.coerce.number().int().positive().default(2_147_483_648),
 });
 
 // ---------------------------------------------------------------------------
@@ -223,6 +227,7 @@ export type AppConfig = {
   claudeDetectionTimeoutMs: number;
   claudeRecheckTimeoutMs: number;
   claudeStdoutStalenessMs: number;
+  dbRestoreMaxBytes: number;
 };
 
 let cached: AppConfig | null = null;
@@ -320,6 +325,7 @@ export function loadConfig(): AppConfig {
     claudeDetectionTimeoutMs: parsed.data.CLAUDE_DETECTION_TIMEOUT_MS,
     claudeRecheckTimeoutMs: parsed.data.CLAUDE_RECHECK_TIMEOUT_MS,
     claudeStdoutStalenessMs: parsed.data.CLAUDE_STDOUT_STALENESS_MS,
+    dbRestoreMaxBytes: parsed.data.DB_RESTORE_MAX_BYTES,
   };
   return cached;
 }

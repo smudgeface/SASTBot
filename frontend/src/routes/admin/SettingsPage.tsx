@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useCredentials } from "@/api/queries/credentials";
 import { useSettings, useUpdateSettings, useCheckLlm } from "@/api/queries/settings";
@@ -6,6 +6,14 @@ import { useCheckJiraConnection } from "@/api/queries/jira";
 import type { AdminSettingsUpdate, LlmApiFormat, ReachabilityMinSeverity } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -469,42 +477,264 @@ export default function SettingsPage() {
         </div>
       </form>
 
-      {/* Database backup — outside the settings form so it can't be accidentally
-          triggered by pressing Enter on a form field */}
+      {/* Database backup & restore — outside the settings form so it can't be
+          accidentally triggered by pressing Enter on a form field */}
       <Card>
         <CardHeader>
-          <CardTitle>Database backup</CardTitle>
+          <CardTitle>Database backup &amp; restore</CardTitle>
           <CardDescription>
-            Download a complete backup of the application database. The dump is
-            in PostgreSQL custom format (compressed) and can be restored with{" "}
+            Download or restore a complete backup of the application database.
+            The dump format is PostgreSQL custom (compressed), compatible with{" "}
             <code className="font-mono text-xs">pg_restore</code>.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              // Trigger a browser download using the admin session cookie that
-              // is already attached to same-origin requests automatically.
-              const a = document.createElement("a");
-              a.href = "/admin/db/backup";
-              a.download = "";
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-            }}
-          >
-            Download backup
-          </Button>
-          <p className="mt-2 text-xs text-muted-foreground">
-            The dump includes schema and data. Restore with:{" "}
-            <code className="font-mono">
-              pg_restore --clean --if-exists -d &lt;dbname&gt; backup.dump
-            </code>
-          </p>
+        <CardContent className="space-y-4">
+          {/* Backup */}
+          <div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                const a = document.createElement("a");
+                a.href = "/admin/db/backup";
+                a.download = "";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+              }}
+            >
+              Download backup
+            </Button>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Includes schema and data. Command-line restore:{" "}
+              <code className="font-mono">
+                pg_restore --clean --if-exists -d &lt;dbname&gt; backup.dump
+              </code>
+            </p>
+          </div>
+
+          <Separator />
+
+          {/* Restore */}
+          <RestoreSection />
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// DB Restore subcomponent
+// --------------------------------------------------------------------------
+
+type RestorePhase =
+  | "idle"
+  | "confirming"   // modal open, waiting for confirmation
+  | "uploading"    // file is being uploaded to the backend
+  | "restarting"   // upload succeeded; polling /healthz
+  | "error";       // restore failed
+
+function RestoreSection() {
+  const { toast } = useToast();
+  const [phase, setPhase] = useState<RestorePhase>("idle");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [confirmText, setConfirmText] = useState("");
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
+  const [migrationWarning, setMigrationWarning] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const resetState = useCallback(() => {
+    setPhase("idle");
+    setSelectedFile(null);
+    setConfirmText("");
+    setErrorDetail(null);
+    setMigrationWarning(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
+
+  // Poll /healthz after a successful restore until the backend comes back up.
+  const startPolling = useCallback(() => {
+    pollRef.current = setInterval(() => {
+      fetch("/healthz", { cache: "no-store" })
+        .then((r) => {
+          if (r.ok) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            // Reload the page so stale TanStack Query caches are cleared and
+            // the user gets a fresh session check.
+            window.location.reload();
+          }
+        })
+        .catch(() => {
+          // backend not yet up — keep polling
+        });
+    }, 2000);
+  }, []);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setSelectedFile(file);
+  };
+
+  const openModal = () => {
+    if (!selectedFile) {
+      toast({ variant: "destructive", title: "No file selected", description: "Choose a .dump file first." });
+      return;
+    }
+    setConfirmText("");
+    setErrorDetail(null);
+    setMigrationWarning(null);
+    setPhase("confirming");
+  };
+
+  const onConfirmRestore = async () => {
+    if (!selectedFile || confirmText !== "RESTORE") return;
+    setPhase("uploading");
+
+    const formData = new FormData();
+    formData.append("file", selectedFile, selectedFile.name);
+
+    try {
+      const resp = await fetch("/admin/db/restore", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+
+      if (resp.ok) {
+        const body = await resp.json() as { ok: boolean; restarting: boolean; migration_warning?: string };
+        if (body.migration_warning) setMigrationWarning(body.migration_warning);
+        setPhase("restarting");
+        startPolling();
+      } else {
+        const body = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` })) as { detail?: string };
+        setErrorDetail(body.detail ?? `HTTP ${resp.status}`);
+        setPhase("error");
+      }
+    } catch (err) {
+      setErrorDetail(err instanceof Error ? err.message : "Network error");
+      setPhase("error");
+    }
+  };
+
+  const isConfirmed = confirmText === "RESTORE";
+
+  // Uploading / restarting states replace the modal body
+  if (phase === "restarting") {
+    return (
+      <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950 px-4 py-3 space-y-2">
+        <p className="text-sm font-medium text-amber-800 dark:text-amber-300">Backend is restarting…</p>
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          The restore completed successfully. The backend process is restarting to establish fresh database connections.
+          This page will reload automatically once it is reachable again.
+        </p>
+        {migrationWarning && (
+          <p className="text-xs text-amber-700 dark:text-amber-400 border-t border-amber-200 dark:border-amber-800 pt-2">
+            ⚠ {migrationWarning}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="text-sm font-medium">Restore from backup</p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Upload a <code className="font-mono">.dump</code> file produced by this tool or by{" "}
+          <code className="font-mono">pg_dump --format=custom</code>. This will{" "}
+          <strong>replace all data</strong> in the database and restart the backend.
+        </p>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".dump,application/octet-stream"
+          onChange={onFileChange}
+          className="text-sm file:mr-2 file:rounded file:border file:border-input file:bg-transparent file:px-2 file:py-1 file:text-xs file:font-medium"
+        />
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          disabled={!selectedFile || phase === "uploading"}
+          onClick={openModal}
+        >
+          Restore…
+        </Button>
+      </div>
+
+      {phase === "error" && errorDetail && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          <p className="font-medium">Restore failed</p>
+          <p className="mt-1 whitespace-pre-wrap break-all">{errorDetail}</p>
+          <Button type="button" variant="ghost" size="sm" className="mt-2" onClick={resetState}>
+            Dismiss
+          </Button>
+        </div>
+      )}
+
+      {/* Two-step confirmation modal */}
+      <Dialog open={phase === "confirming" || phase === "uploading"} onOpenChange={(open) => { if (!open && phase === "confirming") resetState(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Restore database?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-3 pt-1">
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive font-medium">
+                  This will replace ALL data in the database. This action cannot be undone.
+                </div>
+                <p className="text-sm">
+                  File to restore:{" "}
+                  <span className="font-mono text-xs break-all">{selectedFile?.name ?? ""}</span>
+                  {selectedFile ? ` (${(selectedFile.size / 1024 / 1024).toFixed(1)} MB)` : ""}
+                </p>
+                <div className="space-y-1.5">
+                  <Label htmlFor="restore-confirm">
+                    Type <span className="font-mono font-bold">RESTORE</span> to confirm
+                  </Label>
+                  <Input
+                    id="restore-confirm"
+                    value={confirmText}
+                    onChange={(e) => setConfirmText(e.target.value)}
+                    placeholder="RESTORE"
+                    autoComplete="off"
+                    disabled={phase === "uploading"}
+                  />
+                </div>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={resetState}
+              disabled={phase === "uploading"}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void onConfirmRestore()}
+              disabled={!isConfirmed || phase === "uploading"}
+            >
+              {phase === "uploading" ? "Uploading…" : "Restore database"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

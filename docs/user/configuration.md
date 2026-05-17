@@ -133,19 +133,6 @@ full database backup as an HTTP download. The backup is triggered from the
 - Format: `--format=custom --compress=9`. The resulting `.dump` file is
   smaller than a plain SQL dump and supports parallel restore.
 
-### Restoring a backup
-
-```bash
-pg_restore --clean --if-exists -d <dbname> sastbot-backup-<timestamp>.dump
-```
-
-Or to a fresh database:
-
-```bash
-createdb <newdb>
-pg_restore -d <newdb> sastbot-backup-<timestamp>.dump
-```
-
 ### Requirements
 
 The backend image includes `postgresql-client-16` (installed from the
@@ -157,6 +144,87 @@ connection details are derived automatically from `DATABASE_URL`.
 
 There are currently no environment variables for the backup endpoint.
 The binary path (`pg_dump`) is hardcoded and resolved from `PATH`.
+
+---
+
+## Database restore
+
+SASTBot provides an admin-only endpoint (`POST /admin/db/restore`) that accepts
+a `.dump` file upload and restores it into the application database. The restore
+operation is available from the **Settings** page in the admin UI, below the
+"Download backup" button.
+
+### How it works
+
+1. The upload is streamed to a temporary file at `/tmp/sastbot-restore-<uuid>.dump`
+   inside the backend container.
+2. A migration-version check is performed (`pg_restore --list`) to warn about
+   differences between the dump's migrations and the running backend's migrations.
+   This is **a warning only** — the restore is never refused on the basis of a
+   migration mismatch. If you are restoring a dump from a different schema
+   version, verify the migration state after the restore completes.
+3. `pg_restore --clean --if-exists --no-owner --no-privileges` runs against the
+   same `DATABASE_URL` the backend uses.
+4. On success: the temp file is deleted and the backend calls `process.exit(0)`
+   so Docker's restart policy brings it back up with fresh database connections.
+   The response `{ ok: true, restarting: true }` is sent before the exit.
+5. On failure: the temp file is **retained** at `/tmp/sastbot-restore-*.dump`
+   for operator inspection. The database may be in a partially-restored state —
+   do not serve traffic until you have verified integrity.
+
+### Confirmation UI
+
+The Settings page enforces a two-step confirmation:
+
+1. Select a `.dump` file from disk.
+2. Click **Restore…** to open a confirmation dialog.
+3. In the dialog, type `RESTORE` exactly in the confirmation field to enable the
+   destructive button.
+4. Click **Restore database** to begin the upload.
+
+After the upload completes, the page enters a "Backend is restarting…" state and
+polls `/healthz` every 2 seconds. When the backend responds with HTTP 200, the
+page reloads automatically.
+
+### Worker container restart
+
+The worker container shares the same database but runs as a separate process.
+It is **not** signalled by the restore — its existing database connections will
+become stale. After a restore completes, restart the worker manually:
+
+```bash
+docker compose -f docker/compose/docker-compose.yml restart worker
+```
+
+This is a known limitation. Adding a Redis pub/sub signal to the worker was
+considered but deferred because the worker has in-flight scan jobs during
+restores, and killing it mid-scan creates more problems than requiring a manual
+restart.
+
+### Command-line restore (outside the UI)
+
+If you prefer to restore outside the UI — for example, when the backend is down:
+
+```bash
+# From outside the containers, using psql-compatible tooling:
+pg_restore --clean --if-exists --no-owner --no-privileges \
+  -d "postgresql://sastbot:sastbot@localhost:5432/sastbot" \
+  sastbot-backup-<timestamp>.dump
+
+# Then restart the backend and worker:
+docker compose -f docker/compose/docker-compose.yml restart backend worker
+```
+
+### Configurable knobs
+
+| Key (env form) | YAML form | CLI form | Default | Description |
+|----------------|-----------|----------|---------|-------------|
+| `DB_RESTORE_MAX_BYTES` | `db_restore_max_bytes` | `--db-restore-max-bytes` | `2147483648` (2 GiB) | Maximum allowed size for a restore upload. Uploads exceeding this limit are rejected with HTTP 413 before they land on disk. Raise this if you have a database larger than 2 GiB. |
+
+### Requirements
+
+Same as the backup endpoint — `postgresql-client-16` must be installed in the
+backend image (it is, by default). No additional configuration is needed.
 
 ### Worker concurrency
 
