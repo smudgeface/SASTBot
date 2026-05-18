@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { useLogout, useMe } from "@/api/queries/auth";
+import { useVersion } from "@/api/queries/version";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const logout = useLogout();
   const { theme, toggleTheme } = useThemeStore();
+  const { data: version } = useVersion();
 
   // Ensure the persisted theme class is applied on mount.
   useEffect(() => {
@@ -111,6 +113,24 @@ export function AppShell() {
               <LogOut className="h-4 w-4" />
             </Button>
           </div>
+          {version ? (
+            <div
+              className={cn(
+                "mt-2 space-y-0.5 text-[10px] leading-tight",
+                version.schema === version.expected_schema
+                  ? "text-muted-foreground"
+                  : "text-amber-600 dark:text-amber-400",
+              )}
+              title={
+                version.schema === version.expected_schema
+                  ? `schema ${version.schema}`
+                  : `applied: ${version.schema}\nexpected: ${version.expected_schema}`
+              }
+            >
+              <div>SASTBot v{version.app}</div>
+              <div className="truncate">schema {version.schema.slice(0, 14)}</div>
+            </div>
+          ) : null}
         </div>
       </aside>
 
