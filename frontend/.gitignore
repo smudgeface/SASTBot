@@ -7,3 +7,9 @@ coverage
 .env
 .env.local
 .DS_Store
+
+# Compiled Vite config artifacts. Vite reads vite.config.ts directly via
+# its own loader; if a stale .js/.d.ts exists next to it, Vite will load
+# the .js INSTEAD of the .ts and silently ignore source edits.
+vite.config.js
+vite.config.d.ts
