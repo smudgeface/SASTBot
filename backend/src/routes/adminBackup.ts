@@ -2,8 +2,12 @@
  * Admin DB backup route.
  *
  * GET /admin/db/backup
- *   Streams a pg_dump (custom format, compress=9) of the configured
- *   DATABASE_URL as an HTTP download. Admin-only.
+ *   Streams a tar.gz archive containing:
+ *     - dump.pgcustom  — pg_dump (custom format, compress=9) of the database
+ *     - metadata.json  — { app_version, schema_version, expected_schema_version,
+ *                           exported_at, sastbot_dump_format_version }
+ *
+ *   Admin-only.
  *
  * Security notes:
  *   - The DATABASE_URL password is never passed via argv. Instead, we
@@ -11,10 +15,21 @@
  *     PG* environment variables that pg_dump reads natively.
  *   - The spawned command is never logged (argv could contain the password
  *     if we used the connection-string flag form).
- *   - pg_dump's stdout is piped directly into the HTTP response — no
- *     in-memory buffering, so this is safe for large databases.
+ *   - The tar output is piped directly into the HTTP response — only the
+ *     pg_dump output is buffered on disk (in a temp dir).
+ *
+ * Implementation notes:
+ *   - A temp dir is created under /tmp for each backup request.
+ *   - pg_dump writes dump.pgcustom to the temp dir.
+ *   - metadata.json is written to the temp dir.
+ *   - `tar -czf - -C <tmpdir> dump.pgcustom metadata.json` pipes the tarball
+ *     to stdout, which we pipe directly into the HTTP response.
+ *   - The temp dir is removed on success or error.
  */
 
+import * as crypto from "node:crypto";
+import * as fsPromises from "node:fs/promises";
+import * as path from "node:path";
 import { spawn } from "node:child_process";
 
 import type { FastifyPluginAsync } from "fastify";
@@ -22,12 +37,13 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
 import { loadConfig } from "../config.js";
 import { ErrorSchema } from "../schemas.js";
+import { APP_VERSION, SASTBOT_DUMP_FORMAT_VERSION, getAppliedSchemaVersion, getExpectedSchemaVersion } from "./version.js";
 
 /**
  * Decompose a postgres:// URL into the env vars pg_dump understands.
  * Returns null if the URL can't be parsed.
  */
-function pgEnvFromUrl(databaseUrl: string): Record<string, string> | null {
+export function pgEnvFromUrl(databaseUrl: string): Record<string, string> | null {
   let url: URL;
   try {
     url = new URL(databaseUrl);
@@ -57,10 +73,10 @@ const adminBackupRoutes: FastifyPluginAsync = async (app) => {
       preHandler: [app.requireAdmin],
       schema: {
         tags: ["admin", "backup"],
-        summary: "Stream a pg_dump of the application database (custom format, compress=9)",
+        summary: "Stream a tar.gz backup archive (dump.pgcustom + metadata.json)",
         response: {
           // 200 is a binary stream — not described in the OpenAPI schema
-          // because fastify-type-provider-zod can't express octet-stream bodies.
+          // because fastify-type-provider-zod can't express application/gzip bodies.
           401: ErrorSchema,
           403: ErrorSchema,
           500: ErrorSchema,
@@ -75,16 +91,40 @@ const adminBackupRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(500).send({ detail: "Could not parse DATABASE_URL to build pg_dump connection parameters" });
       }
 
+      // Gather version metadata before spawning anything (fast async reads).
+      const [schemaVersion, expectedSchemaVersion] = await Promise.all([
+        getAppliedSchemaVersion(),
+        getExpectedSchemaVersion(),
+      ]);
+
       // ISO timestamp trimmed to seconds, safe for filenames (colons replaced).
       const timestamp = new Date().toISOString().replace(/:/g, "-").replace(/\..+/, "");
-      const filename = `sastbot-backup-${timestamp}.dump`;
+      // First 14 chars of the schema version is the YYYYMMDDHHMMSS prefix.
+      const schemaShort = schemaVersion.slice(0, 14);
+      const filename = `sastbot-backup-${timestamp}-${schemaShort}.tar.gz`;
 
-      // Spawn pg_dump. Connection params come from env only — never from argv —
-      // so the password is not visible in process listings or logs.
-      //
-      // We wrap the entire streaming operation in a try/catch so that a missing
-      // pg_dump binary (ENOENT) is caught before we've committed to writing
-      // the 200 header — allowing us to return a clean 500 error response.
+      // Create a temp dir for the pg_dump output and metadata.
+      const tmpDir = path.join("/tmp", `sastbot-backup-${crypto.randomUUID()}`);
+      try {
+        await fsPromises.mkdir(tmpDir, { recursive: true });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return reply.code(500).send({ detail: `Failed to create temp dir: ${msg}` });
+      }
+
+      const dumpPath = path.join(tmpDir, "dump.pgcustom");
+      const metaPath = path.join(tmpDir, "metadata.json");
+
+      // Cleanup helper — always called on success and error paths.
+      const cleanup = async (): Promise<void> => {
+        await fsPromises.rm(tmpDir, { recursive: true, force: true }).catch((e) => {
+          app.log.warn({ err: e, tmpDir }, "Could not remove backup temp dir");
+        });
+      };
+
+      // -------------------------------------------------------------------
+      // Step 1: Run pg_dump into <tmpdir>/dump.pgcustom
+      // -------------------------------------------------------------------
       let pgDump: ReturnType<typeof spawn>;
       try {
         pgDump = spawn(
@@ -92,86 +132,130 @@ const adminBackupRoutes: FastifyPluginAsync = async (app) => {
           [
             "--format=custom",
             "--compress=9",
+            "--file",
+            dumpPath,
             // No connection-string positional arg; pg_dump reads PG* env vars.
           ],
           {
-            env: {
-              ...process.env,
-              ...pgEnv,
-            },
-            // Do NOT inherit stdio — we pipe stdout ourselves.
+            env: { ...process.env, ...pgEnv },
+            stdio: ["ignore", "ignore", "pipe"],
+          },
+        );
+      } catch (spawnErr) {
+        app.log.error({ err: spawnErr }, "Failed to spawn pg_dump");
+        await cleanup();
+        return reply.code(500).send({ detail: "pg_dump not available — is postgresql-client-16 installed in the backend image?" });
+      }
+
+      const pgDumpStderrChunks: Buffer[] = [];
+      pgDump.stderr?.on("data", (chunk: Buffer) => pgDumpStderrChunks.push(chunk));
+
+      // Wait for pg_dump to finish (writing to a file, not piped to us).
+      const pgDumpExitCode = await new Promise<number | null>((resolve) => {
+        pgDump.on("close", resolve);
+        pgDump.on("error", () => resolve(-1));
+      });
+
+      if (pgDumpExitCode !== 0) {
+        const stderr = Buffer.concat(pgDumpStderrChunks).toString("utf8").trim();
+        app.log.error({ code: pgDumpExitCode, stderr }, "pg_dump exited with non-zero code");
+        await cleanup();
+        return reply.code(500).send({
+          detail: `pg_dump failed (exit code ${pgDumpExitCode}). ${stderr ? `Stderr: ${stderr}` : "No stderr output."}`,
+        });
+      }
+
+      // -------------------------------------------------------------------
+      // Step 2: Write metadata.json
+      // -------------------------------------------------------------------
+      const metadata = {
+        app_version: APP_VERSION,
+        schema_version: schemaVersion,
+        expected_schema_version: expectedSchemaVersion,
+        exported_at: new Date().toISOString(),
+        sastbot_dump_format_version: SASTBOT_DUMP_FORMAT_VERSION,
+      };
+      try {
+        await fsPromises.writeFile(metaPath, JSON.stringify(metadata, null, 2), "utf8");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await cleanup();
+        return reply.code(500).send({ detail: `Failed to write metadata.json: ${msg}` });
+      }
+
+      // -------------------------------------------------------------------
+      // Step 3: Spawn tar and pipe stdout directly into the HTTP response
+      // -------------------------------------------------------------------
+      let tarProc: ReturnType<typeof spawn>;
+      try {
+        tarProc = spawn(
+          "tar",
+          [
+            "-czf", "-",
+            "-C", tmpDir,
+            "dump.pgcustom",
+            "metadata.json",
+          ],
+          {
             stdio: ["ignore", "pipe", "pipe"],
           },
         );
       } catch (spawnErr) {
-        // spawn() itself can throw synchronously if the binary path is clearly
-        // invalid; the async ENOENT comes via the 'error' event instead.
-        app.log.error({ err: spawnErr }, "Failed to spawn pg_dump");
-        return reply.code(500).send({ detail: "pg_dump not available — is postgresql-client-16 installed in the backend image?" });
+        app.log.error({ err: spawnErr }, "Failed to spawn tar");
+        await cleanup();
+        return reply.code(500).send({ detail: "tar not available — is it installed in the backend image?" });
       }
 
-      // Pipe pg_dump stderr to the server logger for diagnostics.
-      const stderrChunks: Buffer[] = [];
-      pgDump.stderr?.on("data", (chunk: Buffer) => {
-        stderrChunks.push(chunk);
-      });
+      // We've already successfully run pg_dump and written metadata.json to disk —
+      // all fallible pre-work is complete. Commit to the 200 response and pipe tar
+      // stdout directly into the raw HTTP connection.
+      //
+      // We do NOT probe tar with a "first data" event before writing headers,
+      // because attaching a "data" listener switches the stream to flowing mode
+      // and would cause the first chunk to be silently dropped before the pipe
+      // is attached. Since we already confirmed that both files exist on disk
+      // (pg_dump and metadata write succeeded), tar failure at this point is
+      // extremely unlikely. If tar is truly missing, the spawn() call itself would
+      // throw synchronously (ENOENT) and we'd handle it in the catch block above.
 
-      // Wait for the first data event or the 'error' / 'close' event to confirm
-      // the process started successfully before committing to the HTTP response.
-      // This lets us return a clean 500 if pg_dump isn't on PATH (ENOENT error).
-      await new Promise<void>((resolve, reject) => {
-        pgDump.once("error", reject);
-        pgDump.stdout?.once("data", () => resolve());
-        // If stdout closes without data (empty DB produces a header immediately,
-        // but a missing binary will close with an error first), resolve anyway
-        // so we don't hang. The 'error' event fires before 'close' on ENOENT.
-        pgDump.stdout?.once("close", () => resolve());
-      }).catch((spawnErr: unknown) => {
-        const msg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
-        app.log.error({ err: spawnErr }, "pg_dump failed to start");
-        return reply.code(500).send({ detail: `pg_dump failed to start: ${msg}. Is postgresql-client-16 installed in the backend image?` });
-      });
-
-      // If reply was already sent (error path above), stop here.
-      if (reply.sent) return;
-
-      // Stream stdout directly into the raw HTTP response, bypassing Fastify's
-      // serializer (which can't represent octet-stream in the Zod schema). We
-      // manually write headers and pipe; reply.hijack() prevents Fastify from
-      // sending a second response after the handler returns.
+      // Stream tar stdout directly into the raw HTTP response, bypassing Fastify's
+      // serializer. reply.hijack() prevents Fastify from sending a second response
+      // after the handler returns.
       reply.hijack();
       const raw = reply.raw;
       raw.writeHead(200, {
-        "Content-Type": "application/octet-stream",
+        "Content-Type": "application/gzip",
         "Content-Disposition": `attachment; filename="${filename}"`,
       });
+
+      const tarStderrChunks: Buffer[] = [];
+      tarProc.stderr?.on("data", (c: Buffer) => tarStderrChunks.push(c));
 
       await new Promise<void>((resolve) => {
         // Suppress further errors on the raw socket — client disconnect is not fatal.
         raw.on("error", (err) => {
-          app.log.warn({ err }, "pg_dump stream: client disconnected");
-          pgDump.kill();
+          app.log.warn({ err }, "backup tar stream: client disconnected");
+          tarProc.kill();
           resolve();
         });
-        pgDump.stdout?.pipe(raw);
-        pgDump.stdout?.on("end", resolve);
-        // Any remaining stdout error after we've already started streaming
-        // can only mean the process died — log and end the response.
-        pgDump.stdout?.on("error", (err) => {
-          app.log.error({ err }, "pg_dump stdout error");
+        tarProc.stdout?.pipe(raw);
+        tarProc.stdout?.on("end", resolve);
+        tarProc.stdout?.on("error", (err) => {
+          app.log.error({ err }, "tar stdout error");
           raw.end();
           resolve();
         });
       });
 
-      // After the response stream ends, check the exit code for logging.
-      pgDump.on("close", (code) => {
+      // After streaming, check tar exit code and clean up.
+      tarProc.on("close", async (code) => {
         if (code !== 0) {
-          const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
-          app.log.error({ code, stderr }, "pg_dump exited with non-zero code");
+          const stderr = Buffer.concat(tarStderrChunks).toString("utf8").trim();
+          app.log.error({ code, stderr }, "tar exited with non-zero code");
         } else {
-          app.log.info({ filename }, "DB backup streamed successfully");
+          app.log.info({ filename }, "DB backup tarball streamed successfully");
         }
+        await cleanup();
       });
     },
   );

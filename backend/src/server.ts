@@ -25,6 +25,7 @@ import authRoutes from "./routes/auth.js";
 import healthRoutes from "./routes/health.js";
 import scansRoutes from "./routes/scans.js";
 import scopesRoutes from "./routes/scopes.js";
+import versionRoutes from "./routes/version.js";
 import { ensureCanary } from "./security/crypto.js";
 import { bootstrapIfEmpty } from "./services/bootstrap.js";
 
@@ -99,6 +100,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(authPlugin);
 
   await app.register(healthRoutes);
+  await app.register(versionRoutes);
   await app.register(authRoutes);
   await app.register(adminReposRoutes);
   await app.register(adminSettingsRoutes);

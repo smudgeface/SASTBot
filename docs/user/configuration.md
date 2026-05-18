@@ -122,69 +122,109 @@ SASTBot provides an admin-only endpoint (`GET /admin/db/backup`) that streams a
 full database backup as an HTTP download. The backup is triggered from the
 **Settings** page in the admin UI via the "Download backup" button.
 
+### Backup format
+
+The download is a `tar.gz` archive (`.tar.gz`) containing exactly two files:
+
+| File | Description |
+|------|-------------|
+| `dump.pgcustom` | A `pg_dump --format=custom --compress=9` snapshot of the database. |
+| `metadata.json` | Version metadata: `app_version`, `schema_version`, `expected_schema_version`, `exported_at`, `sastbot_dump_format_version`. |
+
+The filename is `sastbot-backup-<UTC-timestamp>-<schema-short>.tar.gz` where
+`<schema-short>` is the first 14 characters of the schema version (the
+`YYYYMMDDHHMMSS` timestamp prefix of the latest Prisma migration).
+
+Inspecting a backup from the command line:
+
+```bash
+tar -tzf backup.tar.gz                       # list contents
+tar -xzOf backup.tar.gz metadata.json | jq   # inspect metadata
+```
+
 ### How it works
 
-- `pg_dump` runs **inside the backend container** and connects to the same
-  `DATABASE_URL` that the application itself uses.
-- The connection password is passed via the `PGPASSWORD` environment variable
-  (never via command-line arguments, which would be visible in process listings).
-- The dump is streamed directly into the HTTP response — it is never buffered
-  in memory — so it is safe for databases of any size.
-- Format: `--format=custom --compress=9`. The resulting `.dump` file is
-  smaller than a plain SQL dump and supports parallel restore.
+1. `pg_dump --format=custom --compress=9 --file dump.pgcustom` writes the dump
+   to a temp dir inside the backend container.
+2. `metadata.json` is written to the same temp dir.
+3. `tar -czf - -C <tmpdir> dump.pgcustom metadata.json` streams the archive into
+   the HTTP response. The response header is `Content-Type: application/gzip`.
+4. The temp dir is removed on completion (or error).
+
+The connection password is passed via the `PGPASSWORD` environment variable
+(never via command-line arguments, which would be visible in process listings).
 
 ### Requirements
 
 The backend image includes `postgresql-client-16` (installed from the
-PostgreSQL APT repository to match the Postgres 16 server version in compose).
-No additional configuration is needed — the binary is on `PATH` and the
-connection details are derived automatically from `DATABASE_URL`.
+PostgreSQL APT repository to match the Postgres 16 server version in compose)
+and the standard `tar` utility. No additional configuration is needed.
 
 ### No configurable knobs
 
 There are currently no environment variables for the backup endpoint.
-The binary path (`pg_dump`) is hardcoded and resolved from `PATH`.
 
 ---
 
 ## Database restore
 
 SASTBot provides an admin-only endpoint (`POST /admin/db/restore`) that accepts
-a `.dump` file upload and restores it into the application database. The restore
+a backup upload and restores it into the application database. The restore
 operation is available from the **Settings** page in the admin UI, below the
 "Download backup" button.
 
-### How it works
+### Supported input formats
 
-1. The upload is streamed to a temporary file at `/tmp/sastbot-restore-<uuid>.dump`
-   inside the backend container.
-2. A migration-version check is performed (`pg_restore --list`) to warn about
-   differences between the dump's migrations and the running backend's migrations.
-   This is **a warning only** — the restore is never refused on the basis of a
-   migration mismatch. If you are restoring a dump from a different schema
-   version, verify the migration state after the restore completes.
-3. `pg_restore --clean --if-exists --no-owner --no-privileges` runs against the
-   same `DATABASE_URL` the backend uses.
-4. On success: the temp file is deleted and the backend calls `process.exit(0)`
-   so Docker's restart policy brings it back up with fresh database connections.
-   The response `{ ok: true, restarting: true }` is sent before the exit.
-5. On failure: the temp file is **retained** at `/tmp/sastbot-restore-*.dump`
-   for operator inspection. The database may be in a partially-restored state —
-   do not serve traffic until you have verified integrity.
+| Format | Detection | Notes |
+|--------|-----------|-------|
+| SASTBot tarball (`.tar.gz`) | Gzip magic bytes `0x1f 0x8b` | Preferred. Contains version metadata for automatic migration-forward. |
+| Legacy raw dump (`.dump`) | `PGDMP` ASCII magic | Restores unconditionally; no version checks. |
+
+The backend auto-detects the format from the first 4 bytes of the uploaded file.
+
+### Tarball restore workflow
+
+1. The upload is streamed to a temp file in `/tmp`.
+2. The tarball is extracted; only `dump.pgcustom` and `metadata.json` are
+   allowed (path-traversal defence).
+3. `metadata.json` is read and validated. If it is missing or malformed the
+   restore continues with a warning (treated as legacy).
+4. The dump's `schema_version` is compared to the running backend's
+   `expected_schema_version`:
+
+   | Comparison | Action |
+   |---|---|
+   | Equal | Restore as-is. |
+   | Dump is **older** | Restore, then run `prisma migrate deploy` automatically. |
+   | Dump is **newer** | **Refused** (HTTP 422) — upgrade the backend first. |
+
+5. `pg_restore --clean --if-exists --no-owner --no-privileges` runs against
+   `DATABASE_URL`.
+6. If the dump was older: `prisma migrate deploy` runs in the same process.
+   If migration fails, HTTP 500 is returned with the Prisma stderr — the DB is
+   in a partially-migrated state and temp files are retained for inspection.
+7. On full success: temp files are deleted, the backend responds
+   `{ ok: true, restarting: true, migrations_applied: [...] }`, and calls
+   `process.exit(0)` so Docker's restart policy brings it back up.
+
+### Legacy `.dump` restore
+
+Restore proceeds unconditionally. The response includes a `migration_warning`
+noting that no version metadata was present — inspect the DB state after restart.
 
 ### Confirmation UI
 
 The Settings page enforces a two-step confirmation:
 
-1. Select a `.dump` file from disk.
+1. Select a `.tar.gz` or `.dump` file from disk.
 2. Click **Restore…** to open a confirmation dialog.
-3. In the dialog, type `RESTORE` exactly in the confirmation field to enable the
-   destructive button.
+3. Type `RESTORE` exactly in the confirmation field to enable the button.
 4. Click **Restore database** to begin the upload.
 
 After the upload completes, the page enters a "Backend is restarting…" state and
 polls `/healthz` every 2 seconds. When the backend responds with HTTP 200, the
-page reloads automatically.
+page reloads automatically. If migrations were applied, the migration names are
+listed in the restarting banner.
 
 ### Worker container restart
 
@@ -196,23 +236,25 @@ become stale. After a restore completes, restart the worker manually:
 docker compose -f docker/compose/docker-compose.yml restart worker
 ```
 
-This is a known limitation. Adding a Redis pub/sub signal to the worker was
-considered but deferred because the worker has in-flight scan jobs during
-restores, and killing it mid-scan creates more problems than requiring a manual
-restart.
-
 ### Command-line restore (outside the UI)
 
-If you prefer to restore outside the UI — for example, when the backend is down:
+Extract the dump from the tarball, then restore:
 
 ```bash
-# From outside the containers, using psql-compatible tooling:
+tar -xzf sastbot-backup-*.tar.gz             # extracts dump.pgcustom + metadata.json
 pg_restore --clean --if-exists --no-owner --no-privileges \
   -d "postgresql://sastbot:sastbot@localhost:5432/sastbot" \
-  sastbot-backup-<timestamp>.dump
+  dump.pgcustom
 
 # Then restart the backend and worker:
 docker compose -f docker/compose/docker-compose.yml restart backend worker
+```
+
+If the dump is from an older schema version, also run:
+
+```bash
+docker compose -f docker/compose/docker-compose.yml exec backend \
+  pnpm prisma migrate deploy
 ```
 
 ### Configurable knobs
@@ -223,8 +265,8 @@ docker compose -f docker/compose/docker-compose.yml restart backend worker
 
 ### Requirements
 
-Same as the backup endpoint — `postgresql-client-16` must be installed in the
-backend image (it is, by default). No additional configuration is needed.
+Same as the backup endpoint — `postgresql-client-16` and `tar` must be installed
+in the backend image (both are present by default).
 
 ### Worker concurrency
 

@@ -2,31 +2,37 @@
  * Admin DB restore route.
  *
  * POST /admin/db/restore
- *   Accepts a multipart upload of a pg_dump custom-format file and restores
- *   it into the configured DATABASE_URL using pg_restore. Admin-only.
+ *   Accepts a multipart upload of either:
+ *     (a) A SASTBot tarball backup (*.tar.gz) — contains dump.pgcustom + metadata.json.
+ *         Format is detected by the gzip magic bytes (0x1f 0x8b) at the start.
+ *     (b) A legacy raw pg_dump custom-format file (*.dump) — detected by the
+ *         "PGDMP" ASCII magic at the start (Stream F format).
  *
- *   Workflow:
- *     1. Pre-flight: check Content-Length against available /tmp disk space (507).
- *     2. Stream upload to a temp file at /tmp/sastbot-restore-<uuid>.dump.
- *     3. Run `pg_restore --list` to extract migration names for a mismatch check.
- *     4. Run `pg_restore --clean --if-exists --no-owner --no-privileges`.
- *     5. On success: delete temp file, respond { ok: true, restarting: true },
- *        then call process.exit(0) so Docker restart policy brings the backend
- *        back with clean DB connections.
- *     6. On failure: keep the temp file for operator inspection, return 500 with
- *        the captured stderr and a warning that the DB may be partially restored.
+ *   Tarball path workflow:
+ *     1. Pre-flight: disk-space check (Content-Length, 10% margin).
+ *     2. Stream upload to a temp file.
+ *     3. Peek at first 4 bytes to detect format.
+ *     4. Extract tarball to /tmp/sastbot-restore-<uuid>/extracted/.
+ *     5. Validate the two expected files are present (path-traversal defence).
+ *     6. Read + Zod-validate metadata.json.
+ *     7. Compare dump schema_version to running expected_schema_version:
+ *          equal  → restore as-is
+ *          older  → restore, then run `prisma migrate deploy`
+ *          newer  → HTTP 422 (refuse)
+ *     8. Run pg_restore --clean --if-exists --no-owner --no-privileges.
+ *     9. If schema was older: run prisma migrate deploy, capture applied migrations.
+ *    10. On full success: cleanup temp files, respond, then process.exit(0).
+ *    11. On failure: keep temp files for inspection, return 500 with stderr.
+ *
+ *   Legacy .dump path:
+ *     Same as before (Stream F) — pg_restore unconditionally, with a warning
+ *     in the response body that no version metadata was present.
  *
  * Security notes:
  *   - DB credentials passed via PG* env vars only, never as CLI arguments.
- *   - Temp file is written to /tmp inside the backend container — this is safe
- *     because the container runs as a non-root user with no process isolation
- *     concern, and /tmp is ephemeral (destroyed when the container restarts).
- *     The dump file does not contain the master encryption key; it contains
- *     ciphertext. An attacker with container exec access already has the
- *     plaintext master key via process.env, so the temp file adds no extra
- *     exposure beyond what already exists in that threat model.
- *   - multipart plugin is registered at the route level (not globally) to avoid
- *     applying a 2 GiB body-size limit to all routes.
+ *   - Tarball extraction validates that only the two expected filenames are
+ *     present (path-traversal defence) before using any extracted file.
+ *   - Temp files written to /tmp inside the backend container.
  */
 
 import * as crypto from "node:crypto";
@@ -44,32 +50,28 @@ import { z } from "zod";
 
 import { loadConfig } from "../config.js";
 import { ErrorSchema } from "../schemas.js";
+import { pgEnvFromUrl } from "./adminBackup.js";
+import { APP_VERSION, getExpectedSchemaVersion } from "./version.js";
 
 const TMP_DIR = "/tmp";
 
-/**
- * Decompose a postgres:// URL into the env vars pg_restore understands.
- * Identical logic to the backup route's helper — kept local to avoid a
- * shared-import coupling between two sibling route files.
- */
-function pgEnvFromUrl(databaseUrl: string): Record<string, string> | null {
-  let url: URL;
-  try {
-    url = new URL(databaseUrl);
-  } catch {
-    return null;
-  }
+// ---------------------------------------------------------------------------
+// Metadata schema (Zod) — validated after extraction
+// ---------------------------------------------------------------------------
 
-  const env: Record<string, string> = {};
-  if (url.hostname) env["PGHOST"] = url.hostname;
-  if (url.port) env["PGPORT"] = url.port;
-  if (url.username) env["PGUSER"] = decodeURIComponent(url.username);
-  if (url.password) env["PGPASSWORD"] = decodeURIComponent(url.password);
-  const dbName = url.pathname.slice(1);
-  if (dbName) env["PGDATABASE"] = dbName;
+const MetadataSchema = z.object({
+  app_version: z.string(),
+  schema_version: z.string(),
+  expected_schema_version: z.string(),
+  exported_at: z.string(),
+  sastbot_dump_format_version: z.number().int(),
+});
 
-  return env;
-}
+type BackupMetadata = z.infer<typeof MetadataSchema>;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 /**
  * Return available bytes in the given directory's filesystem.
@@ -82,69 +84,198 @@ async function availableBytesIn(dir: string): Promise<number> {
 }
 
 /**
- * Run `pg_restore --list` on the temp file and extract migration names.
- * Returns an array of migration directory names found in the dump's TOC.
- * Returns [] on any error (non-blocking — used only for a warning).
+ * Peek at the first N bytes of a file without reading the whole thing.
  */
-async function extractDumpMigrationNames(dumpPath: string, pgEnv: Record<string, string>): Promise<string[]> {
+async function readFirstBytes(filePath: string, n: number): Promise<Buffer> {
+  const fd = await fsPromises.open(filePath, "r");
+  try {
+    const buf = Buffer.alloc(n);
+    const { bytesRead } = await fd.read(buf, 0, n, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await fd.close();
+  }
+}
+
+type FileFormat = "tarball" | "pgdump" | "unknown";
+
+/**
+ * Detect the format of the uploaded file from its magic bytes:
+ *   0x1f 0x8b  → gzip (tarball)
+ *   "PGDMP"    → pg_dump custom format (5 ASCII bytes)
+ *   otherwise  → unknown
+ */
+async function detectFormat(filePath: string): Promise<FileFormat> {
+  const bytes = await readFirstBytes(filePath, 5);
+  if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    return "tarball";
+  }
+  if (bytes.length >= 5 && bytes.toString("ascii", 0, 5) === "PGDMP") {
+    return "pgdump";
+  }
+  return "unknown";
+}
+
+/**
+ * Extract a tar.gz file into the given directory using the system `tar` binary.
+ * Validates that only the two expected filenames are in the archive (path-traversal
+ * defence — even though we control producers, the input is operator-supplied).
+ *
+ * Returns an error string on failure, or null on success.
+ */
+async function extractTarball(tarPath: string, extractDir: string): Promise<string | null> {
+  await fsPromises.mkdir(extractDir, { recursive: true });
+
   return new Promise((resolve) => {
-    let pr: ReturnType<typeof spawn>;
+    let proc: ReturnType<typeof spawn>;
     try {
-      pr = spawn("pg_restore", ["--list", dumpPath], {
-        env: { ...process.env, ...pgEnv },
-        stdio: ["ignore", "pipe", "pipe"],
+      proc = spawn("tar", ["-xzf", tarPath, "-C", extractDir], {
+        stdio: ["ignore", "ignore", "pipe"],
       });
-    } catch {
-      resolve([]);
+    } catch (err) {
+      resolve(`Failed to spawn tar: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
 
-    const chunks: Buffer[] = [];
-    pr.stdout?.on("data", (c: Buffer) => chunks.push(c));
-    pr.on("close", (code) => {
-      if (code !== 0) { resolve([]); return; }
-      const text = Buffer.concat(chunks).toString("utf8");
-      // TOC lines that reference _prisma_migrations look like:
-      //   2941; 0 5 TABLE public _prisma_migrations sastbot
-      // We want the migration names stored in the data: extract them from
-      // TABLE DATA lines that reference _prisma_migrations specifically.
-      // Simpler approach: look for any line containing _prisma_migrations.
-      const migrationNames: string[] = [];
-      for (const line of text.split("\n")) {
-        const m = line.match(/20\d{17}_\w+/);
-        if (m) migrationNames.push(m[0]);
+    const stderrChunks: Buffer[] = [];
+    proc.stderr?.on("data", (c: Buffer) => stderrChunks.push(c));
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+        resolve(`tar exited with code ${code}. ${stderr}`);
+      } else {
+        resolve(null);
       }
-      resolve(migrationNames);
     });
-    pr.on("error", () => resolve([]));
+    proc.on("error", (err) => resolve(`tar error: ${err.message}`));
   });
 }
 
 /**
- * Read the local migration directory names (the timestamps) from the Prisma
- * migrations folder. Used to compare against the dump's migration list.
+ * Run pg_restore --clean --if-exists --no-owner --no-privileges against the
+ * given dump file. Returns { exitCode, stderr }.
+ *
+ * pg_restore 16 requires an explicit -d/--dbname even when PGDATABASE is set in
+ * the environment — unlike earlier versions that would fall back to the env var.
  */
-async function localMigrationNames(): Promise<string[]> {
-  // Resolve relative to this source file: src/routes/ → src/ → backend/ → migrations/
-  const migrationsDir = path.resolve(
-    path.dirname(new URL(import.meta.url).pathname),
-    "../../prisma/migrations",
-  );
-  try {
-    const entries = await fsPromises.readdir(migrationsDir, { withFileTypes: true });
-    return entries
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-  } catch {
-    return [];
-  }
+async function runPgRestore(
+  dumpPath: string,
+  pgEnv: Record<string, string>,
+): Promise<{ exitCode: number | null; stderr: string }> {
+  const dbName = pgEnv["PGDATABASE"] ?? "";
+
+  return new Promise((resolve) => {
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn(
+        "pg_restore",
+        [
+          "--clean",
+          "--if-exists",
+          "--no-owner",
+          "--no-privileges",
+          ...(dbName ? ["-d", dbName] : []),
+          dumpPath,
+        ],
+        {
+          env: { ...process.env, ...pgEnv },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+    } catch (err) {
+      resolve({ exitCode: -1, stderr: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+
+    const stderrChunks: Buffer[] = [];
+    proc.stderr?.on("data", (c: Buffer) => stderrChunks.push(c));
+    proc.on("close", (code) => {
+      resolve({
+        exitCode: code,
+        stderr: Buffer.concat(stderrChunks).toString("utf8").trim(),
+      });
+    });
+    proc.on("error", (err) => {
+      resolve({ exitCode: -1, stderr: err.message });
+    });
+  });
 }
+
+/**
+ * Run `prisma migrate deploy` via the local binary.
+ * Returns { ok, appliedMigrations, stderr }.
+ *
+ * The binary is resolved relative to this file: ../../node_modules/.bin/prisma
+ */
+async function runPrismaMigrateDeploy(
+  databaseUrl: string,
+): Promise<{ ok: boolean; appliedMigrations: string[]; stderr: string }> {
+  // Resolve the prisma CLI relative to backend/node_modules
+  const prismaBin = path.resolve(
+    path.dirname(new URL(import.meta.url).pathname),
+    "../../node_modules/.bin/prisma",
+  );
+
+  return new Promise((resolve) => {
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn(prismaBin, ["migrate", "deploy"], {
+        env: { ...process.env, DATABASE_URL: databaseUrl },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (err) {
+      resolve({
+        ok: false,
+        appliedMigrations: [],
+        stderr: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    proc.stdout?.on("data", (c: Buffer) => stdoutChunks.push(c));
+    proc.stderr?.on("data", (c: Buffer) => stderrChunks.push(c));
+
+    proc.on("close", (code) => {
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+
+      // Parse migration names from prisma migrate deploy stdout.
+      // Lines look like:  ✔ <migration_name>
+      // or (plain ASCII): [✓] <migration_name>
+      // We simply scan for lines that reference migration directory names.
+      const applied: string[] = [];
+      for (const line of stdout.split("\n")) {
+        // Prisma prints "Applying migration `20240101_foo`"
+        const m = line.match(/`(20\d{13}_\w+)`/);
+        if (m) applied.push(m[1]);
+      }
+
+      resolve({ ok: code === 0, appliedMigrations: applied, stderr });
+    });
+
+    proc.on("error", (err) => {
+      resolve({ ok: false, appliedMigrations: [], stderr: err.message });
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Response schema
+// ---------------------------------------------------------------------------
 
 const RestoreResponseSchema = z.object({
   ok: z.boolean(),
   restarting: z.boolean(),
+  migrations_applied: z.array(z.string()).optional(),
   migration_warning: z.string().optional(),
+  app_version_warning: z.string().optional(),
 });
+
+// ---------------------------------------------------------------------------
+// Route plugin
+// ---------------------------------------------------------------------------
 
 const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
   const config = loadConfig();
@@ -167,11 +298,12 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
       preHandler: [app.requireAdmin],
       schema: {
         tags: ["admin", "backup"],
-        summary: "Upload a pg_dump file and restore it into the application database",
+        summary: "Upload a pg_dump file or SASTBot tarball and restore it into the application database",
         response: {
           200: RestoreResponseSchema,
           401: ErrorSchema,
           403: ErrorSchema,
+          422: ErrorSchema,
           507: ErrorSchema,
           500: ErrorSchema,
         },
@@ -185,8 +317,6 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
 
       // -----------------------------------------------------------------------
       // 1. Pre-flight: disk space check
-      //    Read Content-Length before the body has been consumed. If the header
-      //    is present, reject early if there won't be enough space (10% margin).
       // -----------------------------------------------------------------------
       const contentLength = req.headers["content-length"];
       if (contentLength) {
@@ -206,14 +336,14 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
       // 2. Accept the multipart upload and stream to a temp file
       // -----------------------------------------------------------------------
       let uploadedFilename = "<unknown>";
-      const tmpPath = path.join(TMP_DIR, `sastbot-restore-${crypto.randomUUID()}.dump`);
+      const uploadId = crypto.randomUUID();
+      const tmpPath = path.join(TMP_DIR, `sastbot-restore-${uploadId}.upload`);
 
       let data: Awaited<ReturnType<typeof req.file>>;
       try {
         data = await req.file();
       } catch (err) {
         // @fastify/multipart throws a 413-status FastifyError when fileSize is exceeded.
-        // Let Fastify's global error handler re-throw it as-is (it already has statusCode 413).
         throw err;
       }
 
@@ -227,13 +357,11 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
         const writeStream = fs.createWriteStream(tmpPath);
         await pipeline(data.file as stream.Readable, writeStream);
       } catch (err) {
-        // Clean up partial write
         await fsPromises.unlink(tmpPath).catch(() => undefined);
         const msg = err instanceof Error ? err.message : String(err);
         return reply.code(500).send({ detail: `Failed to write upload to disk: ${msg}` });
       }
 
-      // Verify the upload landed (non-empty file)
       const stat = await fsPromises.stat(tmpPath).catch(() => null);
       if (!stat || stat.size === 0) {
         await fsPromises.unlink(tmpPath).catch(() => undefined);
@@ -241,116 +369,223 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // -----------------------------------------------------------------------
-      // 3. Migration version mismatch check (warn only — never refuse)
+      // 3. Detect format
       // -----------------------------------------------------------------------
-      let migrationWarning: string | undefined;
-      try {
-        const [dumpMigrations, localMigrations] = await Promise.all([
-          extractDumpMigrationNames(tmpPath, pgEnv),
-          localMigrationNames(),
-        ]);
+      const format = await detectFormat(tmpPath);
 
-        if (dumpMigrations.length > 0 && localMigrations.length > 0) {
-          const localSet = new Set(localMigrations);
-          const dumpSet = new Set(dumpMigrations);
-          const missingFromDump = localMigrations.filter((m) => !dumpSet.has(m));
-          const extraInDump = dumpMigrations.filter((m) => !localSet.has(m));
-          if (missingFromDump.length > 0 || extraInDump.length > 0) {
-            const parts: string[] = [];
-            if (missingFromDump.length > 0) {
-              parts.push(`migrations in this backend not in the dump: ${missingFromDump.join(", ")}`);
-            }
-            if (extraInDump.length > 0) {
-              parts.push(`migrations in the dump not in this backend: ${extraInDump.join(", ")}`);
-            }
-            migrationWarning = `Migration version mismatch — proceed with caution. ${parts.join("; ")}.`;
-          }
-        }
-      } catch {
-        // Migration check is best-effort; never block on it
-      }
-
-      // -----------------------------------------------------------------------
-      // 4. Run pg_restore --clean --if-exists --no-owner --no-privileges
-      // -----------------------------------------------------------------------
-      app.log.info({ tmpPath, filename: uploadedFilename, size: stat.size }, "Starting pg_restore");
-
-      let pgRestore: ReturnType<typeof spawn>;
-      try {
-        pgRestore = spawn(
-          "pg_restore",
-          [
-            "--clean",
-            "--if-exists",
-            "--no-owner",
-            "--no-privileges",
-            tmpPath,
-            // Connection comes from PG* env vars; no connection-string arg.
-          ],
-          {
-            env: { ...process.env, ...pgEnv },
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-        );
-      } catch (spawnErr) {
+      if (format === "unknown") {
         await fsPromises.unlink(tmpPath).catch(() => undefined);
-        const msg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
-        return reply.code(500).send({ detail: `Failed to spawn pg_restore: ${msg}. Is postgresql-client-16 installed in the backend image?` });
+        return reply.code(400).send({
+          detail: "Unrecognized file format. Expected a SASTBot tarball (.tar.gz, gzip magic 0x1f 0x8b) or a legacy pg_dump custom file (magic 'PGDMP').",
+        });
       }
 
-      const stderrChunks: Buffer[] = [];
-      pgRestore.stderr?.on("data", (c: Buffer) => stderrChunks.push(c));
-
-      const restoreExitCode = await new Promise<number | null>((resolve) => {
-        pgRestore.on("close", resolve);
-        pgRestore.on("error", () => resolve(-1));
-      });
-
-      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
-
       // -----------------------------------------------------------------------
-      // 5a. Success path
+      // 4. Tarball path — extract, validate, version-check, restore
       // -----------------------------------------------------------------------
-      if (restoreExitCode === 0) {
-        // Delete the temp file before exiting — do this non-fatally.
-        await fsPromises.unlink(tmpPath).catch((e) => {
-          app.log.warn({ err: e, tmpPath }, "Could not delete restore temp file");
-        });
+      if (format === "tarball") {
+        const extractDir = path.join(TMP_DIR, `sastbot-restore-${uploadId}`, "extracted");
 
-        app.log.info({ filename: uploadedFilename }, "pg_restore completed successfully — backend will restart");
-
-        const responseBody = {
-          ok: true,
-          restarting: true,
-          ...(migrationWarning ? { migration_warning: migrationWarning } : {}),
+        // Cleanup helper for the tarball path.
+        const cleanupTarball = async (): Promise<void> => {
+          await fsPromises.unlink(tmpPath).catch(() => undefined);
+          await fsPromises.rm(
+            path.join(TMP_DIR, `sastbot-restore-${uploadId}`),
+            { recursive: true, force: true },
+          ).catch(() => undefined);
         };
 
-        // Send the HTTP response first, then exit after a short tick so the
-        // OS has time to flush the socket buffers before the process dies.
+        // Extract
+        const extractErr = await extractTarball(tmpPath, extractDir);
+        if (extractErr) {
+          await cleanupTarball();
+          return reply.code(500).send({ detail: `Failed to extract tarball: ${extractErr}` });
+        }
+
+        // Validate that only the two expected files are present (path-traversal defence).
+        let extractedEntries: string[];
+        try {
+          extractedEntries = await fsPromises.readdir(extractDir);
+        } catch (err) {
+          await cleanupTarball();
+          return reply.code(500).send({ detail: `Failed to read extracted contents: ${err instanceof Error ? err.message : String(err)}` });
+        }
+
+        const allowed = new Set(["dump.pgcustom", "metadata.json"]);
+        const unexpected = extractedEntries.filter((e) => !allowed.has(e));
+        if (unexpected.length > 0) {
+          await cleanupTarball();
+          return reply.code(400).send({
+            detail: `Tarball contains unexpected files: ${unexpected.join(", ")}. Expected only dump.pgcustom and metadata.json.`,
+          });
+        }
+
+        const dumpPath = path.join(extractDir, "dump.pgcustom");
+        const metaPath = path.join(extractDir, "metadata.json");
+
+        // Check the dump file exists
+        const dumpStat = await fsPromises.stat(dumpPath).catch(() => null);
+        if (!dumpStat) {
+          await cleanupTarball();
+          return reply.code(400).send({ detail: "Tarball does not contain dump.pgcustom." });
+        }
+
+        // Read + validate metadata.json.
+        let metadata: BackupMetadata | null = null;
+        let metadataWarning: string | undefined;
+        if (extractedEntries.includes("metadata.json")) {
+          try {
+            const raw = await fsPromises.readFile(metaPath, "utf8");
+            const parsed = MetadataSchema.safeParse(JSON.parse(raw));
+            if (parsed.success) {
+              metadata = parsed.data;
+            } else {
+              metadataWarning = "metadata.json is present but could not be parsed — treating as legacy dump. Version compatibility is unknown.";
+            }
+          } catch {
+            metadataWarning = "metadata.json could not be read — treating as legacy dump. Version compatibility is unknown.";
+          }
+        } else {
+          metadataWarning = "Tarball does not contain metadata.json — treating as legacy dump. Version compatibility is unknown.";
+        }
+
+        // Version check: compare dump's schema_version to running expected_schema_version.
+        // Prisma migration names start with YYYYMMDDHHMMSS_ timestamps, so
+        // lexicographic comparison is equivalent to chronological comparison.
+        let appVersionWarning: string | undefined;
+        if (metadata) {
+          const runningExpected = await getExpectedSchemaVersion();
+          const dumpSchema = metadata.schema_version;
+
+          if (dumpSchema > runningExpected) {
+            // Dump is from a newer schema — refuse
+            await cleanupTarball();
+            return reply.code(422).send({
+              detail:
+                `Cannot restore: the backup was created with a newer schema version ` +
+                `("${dumpSchema}") than the running backend expects ("${runningExpected}"). ` +
+                `Upgrade the backend to at least the version that produced this backup, ` +
+                `then retry the restore.`,
+            });
+          }
+
+          // App version mismatch (with schema match or older-schema case): warn but proceed.
+          if (metadata.app_version !== APP_VERSION) {
+            appVersionWarning = `Backup app version (${metadata.app_version}) differs from the running backend (${APP_VERSION}). The restore will proceed — verify functionality after restart.`;
+          }
+        }
+
+        // Run pg_restore
+        app.log.info({ dumpPath, filename: uploadedFilename, size: dumpStat.size }, "Starting pg_restore (tarball path)");
+        const restoreResult = await runPgRestore(dumpPath, pgEnv);
+
+        if (restoreResult.exitCode !== 0) {
+          app.log.error(
+            { code: restoreResult.exitCode, stderr: restoreResult.stderr, dumpPath },
+            "pg_restore failed — temp files retained for inspection",
+          );
+          return reply.code(500).send({
+            detail:
+              `pg_restore exited with code ${restoreResult.exitCode}. ` +
+              "The database may be in a partially-restored state — verify before serving traffic. " +
+              `Temp files retained at: ${extractDir}. ` +
+              (restoreResult.stderr ? `pg_restore stderr: ${restoreResult.stderr}` : "No stderr output captured."),
+          });
+        }
+
+        // Auto migrate-forward if the dump schema is older than expected.
+        let migrationsApplied: string[] = [];
+        if (metadata && metadata.schema_version < (await getExpectedSchemaVersion())) {
+          app.log.info(
+            { dumpSchema: metadata.schema_version },
+            "Dump schema is older than expected — running prisma migrate deploy",
+          );
+          const migrateResult = await runPrismaMigrateDeploy(config.databaseUrl);
+
+          if (!migrateResult.ok) {
+            // DB is in a partially-migrated state — return 500 with guidance.
+            app.log.error(
+              { stderr: migrateResult.stderr, extractDir },
+              "prisma migrate deploy failed — DB may be in partially-migrated state",
+            );
+            return reply.code(500).send({
+              detail:
+                `pg_restore succeeded but prisma migrate deploy failed. ` +
+                `The database is in a partially-migrated state — do not serve traffic until migration is complete. ` +
+                `Temp files retained at: ${extractDir}. ` +
+                (migrateResult.stderr ? `Prisma stderr: ${migrateResult.stderr}` : "No stderr output captured."),
+            });
+          }
+
+          migrationsApplied = migrateResult.appliedMigrations;
+          app.log.info({ migrationsApplied }, "prisma migrate deploy completed");
+        }
+
+        // Full success
+        await cleanupTarball();
+        app.log.info({ filename: uploadedFilename }, "Restore (tarball) completed successfully — backend will restart");
+
+        const responseBody: z.infer<typeof RestoreResponseSchema> = {
+          ok: true,
+          restarting: true,
+          migrations_applied: migrationsApplied,
+          ...(metadataWarning ? { migration_warning: metadataWarning } : {}),
+          ...(appVersionWarning ? { app_version_warning: appVersionWarning } : {}),
+        };
+
         await reply.code(200).send(responseBody);
 
-        // Use setImmediate to give the event loop one tick to flush the response.
         setImmediate(() => {
-          app.log.info("Exiting for clean Docker restart after DB restore");
+          app.log.info("Exiting for clean Docker restart after DB restore (tarball path)");
           process.exit(0);
         });
         return;
       }
 
       // -----------------------------------------------------------------------
-      // 5b. Failure path — keep the temp file for operator inspection
+      // 5. Legacy .dump path — restore unconditionally with a warning
       // -----------------------------------------------------------------------
+      // (format === "pgdump")
+
+      app.log.info({ tmpPath, filename: uploadedFilename, size: stat.size }, "Starting pg_restore (legacy .dump path)");
+
+      const restoreResult = await runPgRestore(tmpPath, pgEnv);
+
+      if (restoreResult.exitCode === 0) {
+        await fsPromises.unlink(tmpPath).catch((e) => {
+          app.log.warn({ err: e, tmpPath }, "Could not delete restore temp file");
+        });
+
+        app.log.info({ filename: uploadedFilename }, "pg_restore (legacy) completed successfully — backend will restart");
+
+        const responseBody: z.infer<typeof RestoreResponseSchema> = {
+          ok: true,
+          restarting: true,
+          migrations_applied: [],
+          migration_warning: "File has no version metadata (legacy .dump format). No version compatibility checks were performed — verify the DB state after restart.",
+        };
+
+        await reply.code(200).send(responseBody);
+
+        setImmediate(() => {
+          app.log.info("Exiting for clean Docker restart after DB restore (legacy path)");
+          process.exit(0);
+        });
+        return;
+      }
+
+      // Legacy restore failure
       app.log.error(
-        { code: restoreExitCode, stderr, tmpPath },
-        "pg_restore failed — temp file retained for inspection",
+        { code: restoreResult.exitCode, stderr: restoreResult.stderr, tmpPath },
+        "pg_restore failed (legacy path) — temp file retained for inspection",
       );
 
       return reply.code(500).send({
         detail:
-          `pg_restore exited with code ${restoreExitCode}. ` +
+          `pg_restore exited with code ${restoreResult.exitCode}. ` +
           "The database may be in a partially-restored state — verify before serving traffic. " +
           `Temp file retained at: ${tmpPath}. ` +
-          (stderr ? `pg_restore stderr: ${stderr}` : "No stderr output captured."),
+          (restoreResult.stderr ? `pg_restore stderr: ${restoreResult.stderr}` : "No stderr output captured."),
       });
     },
   );

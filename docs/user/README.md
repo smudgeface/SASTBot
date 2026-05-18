@@ -5,6 +5,7 @@ This directory contains operator-facing documentation for SASTBot.
 | Page | Status |
 |------|--------|
 | [Configuration](configuration.md) | Complete |
+| [Versioning and backup/restore](versioning.md) | Complete |
 | Installation and first boot | Stub — content lands in a later phase |
 | Scanning repositories | Stub — content lands in a later phase |
 | Triage workflow | Stub — content lands in a later phase |

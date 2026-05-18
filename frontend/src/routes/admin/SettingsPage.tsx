@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCredentials } from "@/api/queries/credentials";
 import { useSettings, useUpdateSettings, useCheckLlm } from "@/api/queries/settings";
 import { useCheckJiraConnection } from "@/api/queries/jira";
+import { useVersion } from "@/api/queries/version";
 import type { AdminSettingsUpdate, LlmApiFormat, ReachabilityMinSeverity } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,6 +42,7 @@ export default function SettingsPage() {
   const updateSettings = useUpdateSettings();
   const checkLlm = useCheckLlm();
   const checkJira = useCheckJiraConnection();
+  const versionInfo = useVersion();
   const { toast } = useToast();
 
   // Jira section state
@@ -484,8 +486,8 @@ export default function SettingsPage() {
           <CardTitle>Database backup &amp; restore</CardTitle>
           <CardDescription>
             Download or restore a complete backup of the application database.
-            The dump format is PostgreSQL custom (compressed), compatible with{" "}
-            <code className="font-mono text-xs">pg_restore</code>.
+            The backup is a <code className="font-mono text-xs">.tar.gz</code> archive containing
+            a PostgreSQL custom-format dump and version metadata.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -506,10 +508,9 @@ export default function SettingsPage() {
               Download backup
             </Button>
             <p className="mt-2 text-xs text-muted-foreground">
-              Includes schema and data. Command-line restore:{" "}
-              <code className="font-mono">
-                pg_restore --clean --if-exists -d &lt;dbname&gt; backup.dump
-              </code>
+              Produces a <code className="font-mono">sastbot-backup-*.tar.gz</code> archive
+              containing <code className="font-mono">dump.pgcustom</code> and{" "}
+              <code className="font-mono">metadata.json</code> with version info.
             </p>
           </div>
 
@@ -519,6 +520,30 @@ export default function SettingsPage() {
           <RestoreSection />
         </CardContent>
       </Card>
+
+      {/* Version footer */}
+      <div className="pt-2 pb-4">
+        {versionInfo.data ? (
+          <p className={cn(
+            "text-xs text-muted-foreground",
+            versionInfo.data.schema !== versionInfo.data.expected_schema
+              ? "text-amber-600 dark:text-amber-400"
+              : "",
+          )}>
+            SASTBot v{versionInfo.data.app}
+            {" · "}
+            schema{" "}
+            <span className="font-mono">{versionInfo.data.schema.slice(0, 14)}</span>
+            {versionInfo.data.schema !== versionInfo.data.expected_schema ? (
+              <>
+                {" · "}expected{" "}
+                <span className="font-mono">{versionInfo.data.expected_schema.slice(0, 14)}</span>
+                {" "}— schema mismatch, migration may be pending
+              </>
+            ) : null}
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -541,6 +566,8 @@ function RestoreSection() {
   const [confirmText, setConfirmText] = useState("");
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [migrationWarning, setMigrationWarning] = useState<string | null>(null);
+  const [migrationsApplied, setMigrationsApplied] = useState<string[]>([]);
+  const [appVersionWarning, setAppVersionWarning] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -550,6 +577,8 @@ function RestoreSection() {
     setConfirmText("");
     setErrorDetail(null);
     setMigrationWarning(null);
+    setMigrationsApplied([]);
+    setAppVersionWarning(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
@@ -585,7 +614,7 @@ function RestoreSection() {
 
   const openModal = () => {
     if (!selectedFile) {
-      toast({ variant: "destructive", title: "No file selected", description: "Choose a .dump file first." });
+      toast({ variant: "destructive", title: "No file selected", description: "Choose a .tar.gz backup or legacy .dump file first." });
       return;
     }
     setConfirmText("");
@@ -609,8 +638,16 @@ function RestoreSection() {
       });
 
       if (resp.ok) {
-        const body = await resp.json() as { ok: boolean; restarting: boolean; migration_warning?: string };
+        const body = await resp.json() as {
+          ok: boolean;
+          restarting: boolean;
+          migrations_applied?: string[];
+          migration_warning?: string;
+          app_version_warning?: string;
+        };
         if (body.migration_warning) setMigrationWarning(body.migration_warning);
+        if (body.migrations_applied) setMigrationsApplied(body.migrations_applied);
+        if (body.app_version_warning) setAppVersionWarning(body.app_version_warning);
         setPhase("restarting");
         startPolling();
       } else {
@@ -635,9 +672,22 @@ function RestoreSection() {
           The restore completed successfully. The backend process is restarting to establish fresh database connections.
           This page will reload automatically once it is reachable again.
         </p>
+        {appVersionWarning && (
+          <p className="text-xs text-amber-700 dark:text-amber-400 border-t border-amber-200 dark:border-amber-800 pt-2">
+            Note: {appVersionWarning}
+          </p>
+        )}
+        {migrationsApplied.length > 0 && (
+          <div className="text-xs text-amber-700 dark:text-amber-400 border-t border-amber-200 dark:border-amber-800 pt-2 space-y-0.5">
+            <p className="font-medium">Migrations applied ({migrationsApplied.length}):</p>
+            {migrationsApplied.map((m) => (
+              <p key={m} className="font-mono">{m}</p>
+            ))}
+          </div>
+        )}
         {migrationWarning && (
           <p className="text-xs text-amber-700 dark:text-amber-400 border-t border-amber-200 dark:border-amber-800 pt-2">
-            ⚠ {migrationWarning}
+            Note: {migrationWarning}
           </p>
         )}
       </div>
@@ -649,9 +699,11 @@ function RestoreSection() {
       <div>
         <p className="text-sm font-medium">Restore from backup</p>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Upload a <code className="font-mono">.dump</code> file produced by this tool or by{" "}
-          <code className="font-mono">pg_dump --format=custom</code>. This will{" "}
-          <strong>replace all data</strong> in the database and restart the backend.
+          Upload a <code className="font-mono">.tar.gz</code> backup produced by the "Download backup"
+          button above, or a legacy <code className="font-mono">.dump</code> file from a previous
+          SASTBot version. This will <strong>replace all data</strong> in the database and restart
+          the backend. If the backup is from an older schema version, migrations will be applied
+          automatically.
         </p>
       </div>
 
@@ -659,7 +711,7 @@ function RestoreSection() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".dump,application/octet-stream"
+          accept=".tar.gz,.dump,application/gzip,application/octet-stream"
           onChange={onFileChange}
           className="text-sm file:mr-2 file:rounded file:border file:border-input file:bg-transparent file:px-2 file:py-1 file:text-xs file:font-medium"
         />

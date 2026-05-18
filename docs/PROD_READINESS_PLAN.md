@@ -435,6 +435,61 @@ No image change needed.
 
 ---
 
+## Follow-up: versioning + cross-version restore (post-plan addition, 2026-05-17)
+
+A versioning scheme and version-aware backup/restore were added as a follow-up
+to Stream F (DB backup export).
+
+**What shipped:**
+
+### App + schema versioning
+
+- `backend/package.json` and `frontend/package.json` — both set to `0.1.0`.
+- New public route `GET /version` returns `{ app, schema, expected_schema, sastbot_dump_format_version }`.
+  - `schema`: latest applied migration from `_prisma_migrations` (via `$queryRawUnsafe`).
+  - `expected_schema`: lexicographically-last directory name under `backend/prisma/migrations/`.
+  - `sastbot_dump_format_version`: integer constant `1` (bump on incompatible format change).
+- `backend/src/routes/version.ts` — new route file; exports `APP_VERSION`,
+  `SASTBOT_DUMP_FORMAT_VERSION`, `getExpectedSchemaVersion()`, `getAppliedSchemaVersion()`.
+- `backend/src/server.ts` — registers `versionRoutes`.
+
+### Backup format change (Stream F follow-up)
+
+- `GET /admin/db/backup` now returns a `.tar.gz` archive instead of a raw `.dump`.
+- Archive contains exactly: `dump.pgcustom` + `metadata.json`.
+- `metadata.json`: `{ app_version, schema_version, expected_schema_version, exported_at, sastbot_dump_format_version: 1 }`.
+- Filename: `sastbot-backup-<UTC-timestamp>-<schema-short>.tar.gz`.
+- `adminBackup.ts` refactored: pg_dump writes to a temp dir, metadata.json is written there, `tar -czf - -C <tmpdir>` pipes to HTTP response, temp dir cleaned up.
+- `pgEnvFromUrl` exported from `adminBackup.ts` and imported by `adminRestore.ts` (eliminates duplication).
+
+### Version-aware restore (`adminRestore.ts` extended)
+
+- Format detection by magic bytes: `0x1f 0x8b` → tarball, `PGDMP` → legacy, anything else → HTTP 400.
+- **Tarball path**: extract to `/tmp/sastbot-restore-<uuid>/extracted/`; validate only `dump.pgcustom` + `metadata.json` present (path-traversal defence); Zod-validate `metadata.json`; lexicographic schema-version comparison:
+  - Equal → restore as-is.
+  - Dump older → restore + `prisma migrate deploy`; response includes `migrations_applied`.
+  - Dump newer → HTTP 422, refuse.
+  - App version mismatch (schema OK) → warn in `app_version_warning`, proceed.
+- **Legacy `.dump` path**: restore unconditionally; `migration_warning` in response.
+- `runPrismaMigrateDeploy()`: spawns `node_modules/.bin/prisma migrate deploy`, captures applied migration names from stdout.
+- Ordering: pg_restore → migrate deploy → cleanup → respond → exit. `process.exit(0)` fires after `setImmediate`.
+
+### UI updates
+
+- `frontend/src/api/queries/version.ts` — new `useVersion()` hook hitting `GET /version`.
+- `frontend/src/routes/admin/SettingsPage.tsx`:
+  - Version footer at the bottom of the page: `SASTBot v0.1.0 · schema YYYYMMDDHHMMSS`. Amber if schema ≠ expected.
+  - Backup card description updated to describe `.tar.gz` format.
+  - Restore section: file picker accepts `.tar.gz` and `.dump`; restarting banner shows `migrations_applied` list and `app_version_warning`.
+
+### Docs
+
+- `docs/user/versioning.md` — NEW. Covers all five restore mismatch cases, the `/version` endpoint, backup tarball format, and `sestbot_dump_format_version`.
+- `docs/user/configuration.md` — "Database backup" and "Database restore" sections updated to describe the tarball format and version-aware restore.
+- `docs/user/README.md` — versioning.md added to the index.
+
+---
+
 ## Out of scope for this plan
 
 These are intentionally NOT in the six streams above. They live in

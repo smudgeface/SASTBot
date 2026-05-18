@@ -1,37 +1,13 @@
 /**
  * Unit tests for the DB backup route helper and auth gating.
  *
- * The pgEnvFromUrl helper is the core security-sensitive logic (it must never
- * leak passwords via argv). We test it by importing the route file and using
- * Fastify's inject() to drive the route without a real pg_dump binary.
+ * pgEnvFromUrl is now exported from adminBackup.ts (also consumed by
+ * adminRestore.ts) so we test the canonical implementation directly.
  */
 
 import { describe, expect, it } from "vitest";
 
-// ---------------------------------------------------------------------------
-// pgEnvFromUrl — tested by calling it indirectly via the exported helper.
-// Since the function is private to the route module, we replicate the logic
-// here to validate the URL-decomposition contract.
-// ---------------------------------------------------------------------------
-
-function pgEnvFromUrl(databaseUrl: string): Record<string, string> | null {
-  let url: URL;
-  try {
-    url = new URL(databaseUrl);
-  } catch {
-    return null;
-  }
-
-  const env: Record<string, string> = {};
-  if (url.hostname) env["PGHOST"] = url.hostname;
-  if (url.port) env["PGPORT"] = url.port;
-  if (url.username) env["PGUSER"] = decodeURIComponent(url.username);
-  if (url.password) env["PGPASSWORD"] = decodeURIComponent(url.password);
-  const dbName = url.pathname.slice(1);
-  if (dbName) env["PGDATABASE"] = dbName;
-
-  return env;
-}
+import { pgEnvFromUrl } from "../src/routes/adminBackup.js";
 
 describe("pgEnvFromUrl", () => {
   it("decomposes a standard DATABASE_URL into PG* env vars", () => {
