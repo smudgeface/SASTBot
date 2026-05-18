@@ -78,8 +78,22 @@ SASTBot/
 Operator-facing guides live in [`docs/user/`](docs/user/README.md):
 
 - [Configuration](docs/user/configuration.md) — all config keys, three-source precedence (env / YAML / CLI), worked examples
+- [Versioning](docs/user/versioning.md) — app version (SemVer), DB schema version, backup tarball format, cross-version restore behaviour
 
 More pages (installation, scanning, triage workflow, Jira, SARIF export) are in progress.
+
+## Versioning — read before cutting a release
+
+SASTBot tracks **two** versions, both surfaced at `GET /version` and in the admin Settings footer:
+
+| Version | Source | When it changes |
+|---------|--------|------------------|
+| **App version** (SemVer) | `backend/package.json` AND `frontend/package.json` (must match) | **Manual bump** in a dedicated commit. Currently `0.1.0`. PATCH for bug fixes, MINOR for backwards-compatible features, MAJOR reserved for post-1.0 breaking changes. |
+| **DB schema version** | Latest folder in `backend/prisma/migrations/` (also recorded in the `_prisma_migrations` table) | **Automatic** — running `pnpm prisma migrate dev --name …` produces the new folder. Commit it; that IS the bump. |
+
+The backup tarball produced by `GET /admin/db/backup` embeds both versions. The restore endpoint compares them to the running backend and either restores as-is, auto-migrates forward, or refuses (newer-than-running). Bumping the app version when shipping a schema or operator-visible change is what makes cross-version restore safe — don't skip it.
+
+Contributors and AI agents: see the prominent **⚠️ Versioning policy** section near the top of [`CLAUDE.md`](CLAUDE.md) for the full rules and the exact order of operations for combined schema + feature changes.
 
 ## Configuration
 
