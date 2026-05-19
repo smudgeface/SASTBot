@@ -1819,3 +1819,204 @@ commit per stream.
   `listRepos()` loads all rows — fine at current admin scale,
   needs a DB-level skip/take if repo counts grow.
 
+## First trial deploy to homelab Dokploy (2026-05-19)
+
+End-to-end deployment of SASTBot onto the homelab Dokploy node as a
+dress rehearsal for the eventual company LMI Dokploy deploy. The plan
+was four pre-flight commits, push, hand off to Dokploy. Reality: four
+in-flight debug cycles surfaced bugs that only the Dokploy build farm
+exposed. Each cycle: read the build/runtime log, hypothesise, patch,
+push, redeploy. The final stack came up green and the pre-deploy DB
+backup restored cleanly via the in-app `/admin/db/restore` endpoint.
+
+### What shipped — pre-flight (before first deploy attempt)
+
+- **trustProxy scoped to two hops (`6af2657`).** Fastify's
+  `trustProxy: true` trusted any `X-Forwarded-For`, allowing a client
+  to spoof its source IP through the chain. Scoped to `2` (Traefik on
+  the edge + the per-stack nginx-frontend that fronts the SPA) so the
+  backend sees the real client IP without being spoofable. Bumped to
+  `0.1.1`.
+
+- **All domain routes mount under `/api/*` (`0e51e4c`).** Previously
+  routes lived at bare paths (`/auth/login`, `/admin/repos`, …). The
+  prod nginx config needs a clean `location /api/` block to forward
+  everything to backend without enumerating each prefix. Server-side
+  refactor: parent register adds the `/api` prefix to the whole
+  bundle; route files keep their bare-path declarations. Frontend's
+  `apiFetch` was updated to normalise either form so call sites
+  didn't all need touching at once. Bumped to `0.2.0`.
+
+- **Production compose stack + nginx config (`06a23ce`).**
+  `docker/compose/docker-compose.prod.yml` (no bind mounts, env from
+  Dokploy editor, `target: prod` build stage, healthchecks chained
+  via `depends_on.condition: service_healthy`) plus
+  `docker/nginx.prod.conf` (the frontend container's nginx, fronting
+  the SPA + reverse-proxying `/api/*` and the four root-level
+  operator endpoints to `backend:8000`).
+
+- **Dropped frontend host port publish (`e952560`).** Original draft
+  published `80:80` on the frontend container. Dokploy fronts every
+  stack with Traefik, so publishing the host port both collides with
+  the Dokploy proxy and bypasses its routing. Removed the `ports:`
+  block; Traefik reaches the container by service name + port on the
+  shared compose network.
+
+### What shipped — in-flight (after each Dokploy deploy attempt)
+
+- **Bookworm-slim + lockfile-less frontend build (`866bea3`).**
+  Build attempt 1 died with `Cannot find module
+  @rollup/rollup-linux-x64-musl` during `vite build`. Root cause:
+  `npm ci` against a macOS-generated `package-lock.json` doesn't
+  install Rollup's per-platform native binding for Linux (npm bug
+  4828). Fix: switch the build stage base from `node:20-alpine` to
+  `node:20-bookworm-slim` (glibc, prebuilt Rollup native) AND copy
+  only `package.json` so `npm install` resolves optional deps fresh
+  for the build platform. Image is ~100 MB larger but only at the
+  build stage; the final layer is still `nginx:alpine`.
+
+- **Pinned pnpm to 10.33.4 (`9031c0c`).** Build attempt 2 died with
+  `Error: No such built-in module: node:sqlite` during
+  `corepack prepare pnpm@latest --activate`. Root cause: pnpm 11.1.3
+  shipped on the registry on 2026-05-18 and dropped Node 20 support
+  (requires v22.13+). The backend image runs Node 20. Fix: pin to
+  the latest pnpm 10.x (10.33.4) in both build stages of the backend
+  Dockerfile. Lockfile is v9, read natively by pnpm 10.
+
+- **Moved `prisma` CLI to dependencies (`2f24252`).** Build attempt 3
+  succeeded; the backend container then crash-looped with
+  `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL  Command "prisma" not found`.
+  Root cause: the prod stage runs `pnpm prune --prod` to slim the
+  layer, which removed the `prisma` CLI (a devDependency); the
+  compose `command:` then tries `pnpm prisma migrate deploy`. Per
+  Prisma's prod-deploy guidance, when `migrate deploy` runs at boot
+  the CLI must be a regular dependency. Moved it across, regenerated
+  the lockfile.
+
+- **Frontend `/api/` prefix on backup + restore call sites
+  (`2f123f1`).** After the deploy was green and the smoke tests
+  passed, the Settings → Download backup button on local dev had
+  always been "downloading" a 714-byte HTML file. Two call sites in
+  `SettingsPage.tsx` were missed by the `0e51e4c` refactor because
+  they bypass `apiFetch`: the backup anchor (`a.href = "/admin/db/backup"`)
+  and the restore POST (`fetch("/admin/db/restore", ...)`).
+  `apiFetch`'s path-normalisation didn't help; neither call site uses
+  it. In dev, Vite's hand-rolled proxy list only forwards
+  `/api`+`/healthz`+`/version`+`/openapi.json`+`/docs`, so
+  `/admin/*` falls through to the SPA fallback and the "download" is
+  `index.html`. In prod nginx the same path returns 405 / aborts the
+  multipart POST → browser fetch rejects with `Failed to fetch`.
+  Patched both to use explicit `/api/admin/...`.
+
+### Operator quirks discovered live
+
+- **POSTGRES_PASSWORD with `/` broke Prisma's URL parser.** The
+  compose template `postgresql://${USER}:${PASSWORD}@postgres:5432/${DB}`
+  percent-encodes nothing. A `/` (or any of `@ : ? # & %`) in the
+  password breaks `prisma migrate deploy` with `P1013: invalid port
+  number`. Worked around by regenerating the password without `/`.
+  Resolution path required wiping the postgres data volume (the
+  password is baked into pgdata on first init) — and Dokploy's "Stop"
+  doesn't `docker rm`, so the stopped container still holds the
+  volume reference and `docker volume rm` refuses. Forced via
+  `docker rm -f sastbot-fullstack-elogex-postgres-1`.
+
+- **macOS DNS cache cratered after Dokploy redeploy.** After the
+  split-horizon record on UDM started resolving, a redeploy briefly
+  tore the stack down and `mDNSResponder` cached a negative answer.
+  `dig` still returned the right IP (it queries libresolv directly);
+  `curl` and the browser couldn't reach the host until
+  `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`
+  plus a full browser restart.
+
+### What we learned
+
+- **Local pre-flight only catches what's reproducible locally.** The
+  pre-flight on this branch was thorough (rebuilt the dev image,
+  smoke-tested the compose stack, took a backup). Every issue that
+  surfaced in flight required a build host with different state than
+  our laptop: a clean npm cache (Rollup musl), a registry that just
+  rev'd pnpm (Node 20 mismatch), a build stage that runs
+  `pnpm prune --prod` (CLI strip), and a Dokploy-managed nginx that
+  doesn't have the Vite dev fallback (the bare-path frontend bug).
+  Three of those four were invisible to any local rebuild. The
+  takeaway is structural: a Dokploy-environment build dry-run (or a
+  no-cache CI build against a fresh image) is needed in the
+  pre-flight loop, not just a "rebuild the dev image" pass.
+
+- **`pnpm prune --prod` is a runtime contract, not a build
+  optimisation.** Anything the prod `command:` reaches for must live
+  in `dependencies`, not `devDependencies`. The two contracts that
+  matter at the boundary are (a) the binaries in `node_modules/.bin/`
+  the entrypoint shell scripts call (`prisma`), and (b) the runtime
+  modules the compiled `dist/*.js` requires. Audit the compose
+  `command:` against the output of `pnpm prune --prod` before
+  shipping a new prod image.
+
+- **`pnpm@latest` is a lie at build time.** Corepack resolves
+  `latest` against the registry at the moment of `corepack prepare`,
+  which by definition drifts. We pinned to a specific 10.x. The
+  same trap applies to anything else fetched by tag in a Dockerfile
+  — `npm install -g <tool>@latest`, `apt-get install <pkg>` against
+  rolling distros. Pin or budget for breakage.
+
+- **Vite dev proxy is opt-in, not catch-all.** Any backend path not
+  in `proxied = ["/api", "/healthz", "/version", "/openapi.json",
+  "/docs"]` falls through to the SPA's `try_files` and the user gets
+  `index.html` back. The CLAUDE.md note about `apiFetch`
+  path-normalisation applied only to `apiFetch`; raw `fetch` or
+  `<a href>` for binary downloads bypassed it. When refactoring
+  route prefixes, grep the frontend for **call sites that bypass
+  apiFetch** (`fetch("/`, `a.href = "/`, `window.location =
+  "/`), not just `apiFetch` arguments.
+
+- **Cross-version backup/restore round-tripped clean.** Pre-deploy
+  dev → post-deploy trial, same app version + schema version,
+  metadata.json shape compatible, restore succeeded. The endpoint's
+  auto-migration logic was unused (versions matched), but the
+  round-trip validated the format. Worth re-validating once we
+  hit a real version mismatch (e.g. a schema bump between dev and
+  trial).
+
+- **The `unless-stopped` restart policy + Dokploy supervision
+  fights you during volume rotation.** Even after Dokploy's "Stop",
+  the container record persists and locks the volume. The reliable
+  sequence is: Stop in Dokploy UI → `docker rm -f <name>` → `docker
+  volume rm <name>` → update env in Dokploy → Deploy. Documenting
+  this in the operator runbook before company deploy.
+
+### Known follow-ups (next session)
+
+- **Generic `docs/HOW_TO_DEPLOY_WEB_APP_ON_DOKPLOY.md`.** The
+  public-shareable deliverable distilled from this experience. Cover
+  the four classes of issue (npm/Rollup, package-manager pinning,
+  prune-vs-runtime contract, frontend-call-site sweep on a route
+  refactor) plus the operator quirks (URL-safe password chars,
+  container-rm-before-volume-rm). Targeted at engineers deploying
+  a Node + Postgres + Redis stack to Dokploy for the first time.
+
+- **HTTPS on the trial.** Currently plain HTTP through Traefik.
+  Dokploy's Let's Encrypt wizard wants externally-resolvable DNS
+  (HTTP-01 challenge), which this homelab record doesn't satisfy
+  — split-horizon DNS only. Options: bring an internal CA cert, or
+  do DNS-01 with a public-side CNAME, or run HTTPS-terminated
+  inside the LAN with a self-signed cert + browser trust. Decide
+  before exercising real workflows that use `SESSION_COOKIE_SECURE`.
+
+- **Harden the compose to accept `DATABASE_URL` directly.** The
+  template-substitution form is a foot-gun for any password with a
+  URL-reserved char. Switching the prod compose to pass
+  `DATABASE_URL` through as a single Dokploy env var (with the
+  operator responsible for percent-encoding) removes one class of
+  bug at the cost of one more env var to manage.
+
+- **Browser exercise the trial UI end-to-end.** Click through
+  Repos / Scopes / Settings / scan a small repo. The curl smoke
+  tests only covered what curl can do; cookies, large payloads, and
+  any SSE / long-poll streams need a real browser.
+
+- **Capture the bootstrap admin password.** The first-boot
+  `BOOTSTRAP_ADMIN_PASSWORD` log line is the only printed copy. If
+  not already saved, regenerate via the `bootstrap-admin` CLI
+  before the log rolls.
+
