@@ -1,7 +1,21 @@
 /**
  * Thin fetch wrapper. All requests use credentials: "include" so the
  * sastbot_session cookie is sent automatically.
+ *
+ * Domain paths are normalised under /api/* at fetch time so call sites can
+ * stay legible ("/auth/login" rather than "/api/auth/login"). Two operational
+ * paths — /version and /healthz — stay at root because monitoring and the
+ * SPA footer probe them by convention; paths already starting with /api are
+ * passed through unchanged so /api/scopes/... etc. still work.
  */
+
+const ROOT_PATHS = new Set(["/version", "/healthz"]);
+
+function withApiPrefix(path: string): string {
+  if (ROOT_PATHS.has(path)) return path;
+  if (path === "/api" || path.startsWith("/api/")) return path;
+  return `/api${path}`;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -34,7 +48,7 @@ export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptio
     finalHeaders.set("Accept", "application/json");
   }
 
-  const response = await fetch(path, {
+  const response = await fetch(withApiPrefix(path), {
     credentials: "include",
     ...rest,
     headers: finalHeaders,

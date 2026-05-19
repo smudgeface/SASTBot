@@ -19,7 +19,7 @@ const healthRoutes: FastifyPluginAsync = async (app) => {
         response: { 200: HealthResponseSchema },
       },
     },
-    async () => ({ status: "ok" as const, version: "0.1.0" }),
+    async () => ({ status: "ok" as const, version: "0.2.0" }),
   );
 };
 

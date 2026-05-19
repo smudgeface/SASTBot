@@ -77,7 +77,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/auth/login": {
+    "/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** App version, schema version, and dump format version (public) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            app: string;
+                            schema: string;
+                            expected_schema: string;
+                            sastbot_dump_format_version: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/login": {
         parameters: {
             query?: never;
             header?: never;
@@ -139,7 +180,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/auth/logout": {
+    "/api/auth/logout": {
         parameters: {
             query?: never;
             header?: never;
@@ -177,7 +218,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/auth/me": {
+    "/api/auth/me": {
         parameters: {
             query?: never;
             header?: never;
@@ -232,7 +273,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/repos": {
+    "/api/admin/repos": {
         parameters: {
             query?: never;
             header?: never;
@@ -542,7 +583,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/repos/{id}": {
+    "/api/admin/repos/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -889,7 +930,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/repos/{id}/purge-cache": {
+    "/api/admin/repos/{id}/purge-cache": {
         parameters: {
             query?: never;
             header?: never;
@@ -1000,7 +1041,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/repos/{id}/check-connection": {
+    "/api/admin/repos/{id}/check-connection": {
         parameters: {
             query?: never;
             header?: never;
@@ -1079,7 +1120,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/repos/{id}/scopes": {
+    "/api/admin/repos/{id}/scopes": {
         parameters: {
             query?: never;
             header?: never;
@@ -1159,7 +1200,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/repos/{id}/scan": {
+    "/api/admin/repos/{id}/scan": {
         parameters: {
             query?: never;
             header?: never;
@@ -1283,7 +1324,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/settings": {
+    "/api/admin/settings": {
         parameters: {
             query?: never;
             header?: never;
@@ -1540,7 +1581,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/settings/llm/check": {
+    "/api/admin/settings/llm/check": {
         parameters: {
             query?: never;
             header?: never;
@@ -1605,7 +1646,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/settings/jira/check": {
+    "/api/admin/settings/jira/check": {
         parameters: {
             query?: never;
             header?: never;
@@ -1672,7 +1713,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/jira/resolutions": {
+    "/api/admin/jira/resolutions": {
         parameters: {
             query?: never;
             header?: never;
@@ -1745,7 +1786,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/credentials": {
+    "/api/admin/credentials": {
         parameters: {
             query?: never;
             header?: never;
@@ -1962,7 +2003,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/credentials/{id}": {
+    "/api/admin/credentials/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2130,7 +2171,7 @@ export interface paths {
         };
         trace?: never;
     };
-    "/admin/credentials/{id}/rotate": {
+    "/api/admin/credentials/{id}/rotate": {
         parameters: {
             query?: never;
             header?: never;
@@ -2281,14 +2322,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/db/backup": {
+    "/api/admin/db/backup": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Stream a pg_dump of the application database (custom format, compress=9) */
+        /** Stream a tar.gz backup archive (dump.pgcustom + metadata.json) */
         get: {
             parameters: {
                 query?: never;
@@ -2341,7 +2382,104 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scans": {
+    "/api/admin/db/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload a pg_dump file or SASTBot tarball and restore it into the application database */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            restarting: boolean;
+                            migrations_applied?: string[];
+                            migration_warning?: string;
+                            app_version_warning?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                507: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scans": {
         parameters: {
             query?: never;
             header?: never;
@@ -2446,7 +2584,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scans/{id}": {
+    "/api/scans/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2556,7 +2694,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scans/{id}/cancel": {
+    "/api/scans/{id}/cancel": {
         parameters: {
             query?: never;
             header?: never;
@@ -2677,7 +2815,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scans/{id}/findings": {
+    "/api/scans/{id}/findings": {
         parameters: {
             query?: never;
             header?: never;
@@ -2793,7 +2931,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scans/{id}/sbom": {
+    "/api/scans/{id}/sbom": {
         parameters: {
             query?: never;
             header?: never;
@@ -2828,7 +2966,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scans/{id}/sast-sarif": {
+    "/api/scans/{id}/sast-sarif": {
         parameters: {
             query?: never;
             header?: never;
@@ -2863,7 +3001,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scans/{id}/components": {
+    "/api/scans/{id}/components": {
         parameters: {
             query?: never;
             header?: never;
@@ -2957,7 +3095,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/scans/{id}/sast-findings": {
+    "/api/scans/{id}/sast-findings": {
         parameters: {
             query?: never;
             header?: never;
@@ -4758,7 +4896,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/jira-tickets/{key}/refresh": {
+    "/api/admin/jira-tickets/{key}/refresh": {
         parameters: {
             query?: never;
             header?: never;

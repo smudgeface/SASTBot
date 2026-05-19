@@ -144,7 +144,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/api/scopes",
+    "/scopes",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -291,7 +291,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/api/scopes/:id",
+    "/scopes/:id",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -424,7 +424,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/api/scopes/:id/sast-issues",
+    "/scopes/:id/sast-issues",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -543,7 +543,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/api/scopes/:id/sca-issues",
+    "/scopes/:id/sca-issues",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -692,7 +692,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   typed.get(
-    "/api/scopes/:id/components",
+    "/scopes/:id/components",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -839,7 +839,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // freely.
 
   typed.delete(
-    "/api/scopes/:id/components/:componentId",
+    "/scopes/:id/components/:componentId",
     {
       preHandler: [app.requireAdmin],
       schema: {
@@ -900,7 +900,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   typed.patch(
-    "/api/scopes/:id/components/:componentId",
+    "/scopes/:id/components/:componentId",
     {
       preHandler: [app.requireAdmin],
       schema: {
@@ -987,7 +987,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // M6q: scope-level SBOM download. Returns sbom_json for the scope's
   // lastScanRunId. Mirrors GET /scans/:id/sbom on the scan page.
   app.get(
-    "/api/scopes/:id/sbom-json",
+    "/scopes/:id/sbom-json",
     {
       preHandler: [app.authenticate],
     },
@@ -1032,7 +1032,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/api/scopes/:id/scans",
+    "/scopes/:id/scans",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -1111,7 +1111,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.post(
-    "/api/sast-issues/:id/triage",
+    "/sast-issues/:id/triage",
     {
       preHandler: [app.requireAdmin],
       schema: {
@@ -1156,7 +1156,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.post(
-    "/api/sca-issues/:id/dismiss",
+    "/sca-issues/:id/dismiss",
     {
       preHandler: [app.requireAdmin],
       schema: {
@@ -1200,7 +1200,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.put(
-    "/api/sast-issues/:id/notes",
+    "/sast-issues/:id/notes",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -1236,7 +1236,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.put(
-    "/api/sca-issues/:id/notes",
+    "/sca-issues/:id/notes",
     {
       preHandler: [app.authenticate],
       schema: {
@@ -1272,7 +1272,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.post(
-    "/api/sast-issues/:id/jira-ticket",
+    "/sast-issues/:id/jira-ticket",
     {
       preHandler: [app.requireAdmin],
       schema: {
@@ -1299,7 +1299,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   );
 
   typed.delete(
-    "/api/sast-issues/:id/jira-ticket",
+    "/sast-issues/:id/jira-ticket",
     {
       preHandler: [app.requireAdmin],
       schema: {
@@ -1323,7 +1323,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.post(
-    "/api/sca-issues/:id/jira-ticket",
+    "/sca-issues/:id/jira-ticket",
     {
       preHandler: [app.requireAdmin],
       schema: {
@@ -1349,7 +1349,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   );
 
   typed.delete(
-    "/api/sca-issues/:id/jira-ticket",
+    "/sca-issues/:id/jira-ticket",
     {
       preHandler: [app.requireAdmin],
       schema: {
@@ -1373,7 +1373,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   // ---------------------------------------------------------------------------
 
   typed.get(
-    "/api/scopes/:id/jira-tickets",
+    "/scopes/:id/jira-tickets",
     {
       preHandler: [app.authenticate],
       schema: {

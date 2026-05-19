@@ -7,7 +7,10 @@ import path from "node:path";
 // docker set BACKEND_URL=http://localhost:8000.
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://backend:8000";
 
-const proxied = ["/auth", "/admin", "/scans", "/scopes", "/sast-issues", "/sca-issues", "/healthz", "/version", "/openapi.json", "/docs", "/api"];
+// Post-M-deploy (0.2.0): all domain routes live under /api/*. The list still
+// includes /healthz, /version, /openapi.json, and /docs since those stay at
+// root in the backend (monitoring + Swagger conventions).
+const proxied = ["/api", "/healthz", "/version", "/openapi.json", "/docs"];
 
 // Vite's proxy matches on path only — but the React app uses some of these
 // paths (e.g. /admin/repos) for client-side routes. If the user reloads or

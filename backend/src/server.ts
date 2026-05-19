@@ -79,7 +79,7 @@ export async function buildServer(): Promise<FastifyInstance> {
         title: "SASTBot API",
         description:
           "LLM-augmented SAST/SCA tool. M1 walking skeleton: auth, repos, settings, credentials, scans (stub).",
-        version: "0.1.1",
+        version: "0.2.0",
       },
       servers: [{ url: "/" }],
       components: {
@@ -106,16 +106,28 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await app.register(authPlugin);
 
+  // /healthz and /version stay at root: monitoring + the SPA footer pre-date
+  // the /api refactor, and external probes expect the conventional path.
   await app.register(healthRoutes);
   await app.register(versionRoutes);
-  await app.register(authRoutes);
-  await app.register(adminReposRoutes);
-  await app.register(adminSettingsRoutes);
-  await app.register(adminCredentialsRoutes);
-  await app.register(adminBackupRoutes);
-  await app.register(adminRestoreRoutes);
-  await app.register(scansRoutes);
-  await app.register(scopesRoutes);
+
+  // All domain routes live under /api/* so the SPA's client-side routes (eg.
+  // /admin, /scans, /scopes) and the backend API paths cannot collide. In
+  // prod, nginx routes by `/api/` prefix; in dev, the Vite proxy does the
+  // same.
+  await app.register(
+    async (api) => {
+      await api.register(authRoutes);
+      await api.register(adminReposRoutes);
+      await api.register(adminSettingsRoutes);
+      await api.register(adminCredentialsRoutes);
+      await api.register(adminBackupRoutes);
+      await api.register(adminRestoreRoutes);
+      await api.register(scansRoutes);
+      await api.register(scopesRoutes);
+    },
+    { prefix: "/api" },
+  );
 
   app.setErrorHandler((err, _req, reply) => {
     // Zod validation errors come through with a `.issues` array; let
