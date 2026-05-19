@@ -498,7 +498,7 @@ export default function SettingsPage() {
               variant="outline"
               onClick={() => {
                 const a = document.createElement("a");
-                a.href = "/admin/db/backup";
+                a.href = "/api/admin/db/backup";
                 a.download = "";
                 document.body.appendChild(a);
                 a.click();
@@ -631,7 +631,7 @@ function RestoreSection() {
     formData.append("file", selectedFile, selectedFile.name);
 
     try {
-      const resp = await fetch("/admin/db/restore", {
+      const resp = await fetch("/api/admin/db/restore", {
         method: "POST",
         body: formData,
         credentials: "include",
