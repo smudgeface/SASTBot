@@ -104,8 +104,15 @@ services:
       context: ../..
       dockerfile: docker/frontend.Dockerfile
       target: prod
-    ports:
-      - "80:80"
+    # No `ports:` block on purpose. Dokploy fronts every Compose stack with
+    # Traefik; the reverse proxy reaches this container on its internal
+    # network using the hostname + port that Dokploy's "Domains" UI
+    # configures (Host: sastbot.smudgeface.net -> frontend:80). Publishing
+    # the host's port 80 here would collide with every other Dokploy app
+    # on the same host that tries to do the same. The container still
+    # listens on 80 internally (see nginx config + EXPOSE 80 in the
+    # frontend Dockerfile) — Traefik picks it up via Docker DNS, not
+    # via a published port.
     depends_on:
       - backend
     restart: unless-stopped
