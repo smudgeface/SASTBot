@@ -43,7 +43,14 @@ export async function buildServer(): Promise<FastifyInstance> {
               options: { translateTime: "HH:MM:ss.l", singleLine: true },
             },
     },
-    trustProxy: true,
+    // Two proxy hops in front of Fastify in the Dokploy production topology:
+    // Traefik (edge) → frontend nginx (SPA + /api/* reverse-proxy) → here.
+    // `trustProxy: 2` skips the rightmost two entries of X-Forwarded-For so the
+    // recorded client IP is the real LAN/WAN origin, not the nginx hop.
+    // The local dev compose has only one effective hop (Vite dev-server proxy);
+    // a too-large trust value there is harmless because the upstream entry just
+    // isn't present, leaving Fastify to fall back to the socket address.
+    trustProxy: 2,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -72,7 +79,7 @@ export async function buildServer(): Promise<FastifyInstance> {
         title: "SASTBot API",
         description:
           "LLM-augmented SAST/SCA tool. M1 walking skeleton: auth, repos, settings, credentials, scans (stub).",
-        version: "0.1.0",
+        version: "0.1.1",
       },
       servers: [{ url: "/" }],
       components: {

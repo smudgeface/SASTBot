@@ -55,6 +55,7 @@ logs/
 
 # Personal / homelab-specific docs that shouldn't leak to work repo
 docs/DEPLOY_HOMELAB.md
+docs/DEPLOY_DOKPLOY_*.md
 
 # Layered config files — contain secrets; YAML file must never be committed
 backend/config.local.yaml
