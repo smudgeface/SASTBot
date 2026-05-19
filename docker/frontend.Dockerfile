@@ -27,7 +27,15 @@
 ############################
 # Base: node + pnpm-free npm
 ############################
-FROM node:20-alpine AS base
+# glibc (bookworm-slim) on purpose — alpine/musl breaks Rollup. When `npm ci`
+# runs against a package-lock.json generated on a developer's macOS laptop,
+# the `@rollup/rollup-linux-x64-musl` optional dep is NOT pinned, so Vite's
+# production build (`tsc -b && vite build`) crashes with
+# "Cannot find module @rollup/rollup-linux-x64-musl" (npm bug
+# https://github.com/npm/cli/issues/4828). The glibc-x64 variant IS in the
+# lockfile and works. Image is ~100MB larger but only affects the build
+# stage — the prod stage is still nginx:alpine.
+FROM node:20-bookworm-slim AS base
 WORKDIR /app
 ENV CI=1
 
@@ -46,8 +54,20 @@ CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
 # Build
 ############################
 FROM base AS build
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+# Copy package.json only — intentionally NOT the lockfile. npm bug
+# https://github.com/npm/cli/issues/4828: optional deps for the build
+# platform's libc/arch aren't included in a lockfile generated on a
+# different platform. Rollup ships its native bindings as such optional
+# deps (linux-x64-gnu, linux-arm64-gnu, ...). With the macOS-generated
+# lockfile present, both `npm ci` AND `npm install` honour it strictly
+# and leave the Linux binding uninstalled, then `vite build` crashes
+# with "Cannot find module @rollup/rollup-<arch>-<libc>".
+# Letting npm resolve afresh inside the container picks the right
+# optional dep for the current platform. We accept the loss of
+# lockfile-driven determinism here because the alternative (build
+# failure) is worse.
+COPY frontend/package.json ./
+RUN npm install --no-audit --no-fund
 COPY frontend/ .
 RUN npm run build
 
