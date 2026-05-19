@@ -1,4 +1,7 @@
-import { defineConfig } from "vite";
+// vitest/config re-exports vite's defineConfig with vitest's options merged
+// in, so the `test:` block at the bottom is type-checked. Importing from
+// `vite` directly would type-error on `test` under `tsc -b` (the prod build).
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 

@@ -107,10 +107,15 @@ RUN corepack enable && corepack prepare pnpm@latest --activate \
       https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
       > /etc/apt/sources.list.d/pgdg.list \
  && apt-get update \
- && apt-get install -y --no-install-recommends openssl ripgrep postgresql-client-16 \
+ && apt-get install -y --no-install-recommends \
+      openssl git openssh-client ripgrep postgresql-client-16 \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g @anthropic-ai/claude-code \
  || echo "WARN: prod-stage tool install partial failure"
+
+# claude-p refuses --dangerously-skip-permissions when invoked as root.
+# Worker drops to this user before spawning claude (see llmSastService et al).
+RUN useradd --create-home --uid 1001 --shell /bin/bash claudeuser
 
 WORKDIR /app/backend
 

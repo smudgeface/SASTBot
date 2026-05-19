@@ -52,18 +52,10 @@ COPY frontend/ .
 RUN npm run build
 
 ############################
-# Prod (nginx serves /dist)
+# Prod (nginx serves /dist + reverse-proxies /api/* to backend)
 ############################
 FROM nginx:1.27-alpine AS prod
 COPY --from=build /app/dist /usr/share/nginx/html
-# A minimal SPA-friendly default config.
-RUN printf 'server {\n\
-  listen 80;\n\
-  root /usr/share/nginx/html;\n\
-  index index.html;\n\
-  location / {\n\
-    try_files $uri /index.html;\n\
-  }\n\
-}\n' > /etc/nginx/conf.d/default.conf
+COPY docker/nginx.prod.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

@@ -1,0 +1,118 @@
+# SASTBot production Compose stack.
+#
+# Intended for Dokploy (or any orchestrator that consumes Compose).
+# Differences from docker-compose.yml (dev):
+#   - All image-built services use `target: prod` (no Vite, no tsx watch).
+#   - No host bind-mounts (the host source tree doesn't exist on the
+#     deploy host; Dokploy builds the images from Git).
+#   - Only port 80 is published, from `frontend`. Postgres, Redis, and
+#     the backend are reachable only on the internal Docker network.
+#   - Backend command runs `prisma migrate deploy` then the compiled
+#     server. Worker runs the compiled worker.
+#   - Operator-provided env vars (MASTER_KEY, POSTGRES_*, APP_ORIGIN, ...)
+#     come from Dokploy's env editor; no .env on the deploy host.
+#
+# Build context is the repo root, resolved relative to this file. Dokploy
+# typically invokes `docker compose -f <this-file>` from the cloned repo,
+# so `context: ../..` lands on the right place.
+
+name: sastbot
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - sastbot_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    volumes:
+      - sastbot_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: docker/backend.Dockerfile
+      target: prod
+    environment:
+      MASTER_KEY: ${MASTER_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      APP_ORIGIN: ${APP_ORIGIN}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SCAN_WORKER_CONCURRENCY: ${SCAN_WORKER_CONCURRENCY:-2}
+      PORT: "8000"
+      CLONE_CACHE_DIR: /app/clones
+    volumes:
+      - sastbot_repo_cache:/app/clones
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command:
+      - "sh"
+      - "-c"
+      - "pnpm prisma migrate deploy && node dist/server.js"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: docker/backend.Dockerfile
+      target: prod
+    environment:
+      MASTER_KEY: ${MASTER_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SCAN_WORKER_CONCURRENCY: ${SCAN_WORKER_CONCURRENCY:-2}
+      CLONE_CACHE_DIR: /app/clones
+    volumes:
+      - sastbot_repo_cache:/app/clones
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: ["node", "dist/worker.js"]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: docker/frontend.Dockerfile
+      target: prod
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  sastbot_pgdata:
+  sastbot_redisdata:
+  # Retained git clones the worker reuses between scans. Lives alongside
+  # the DB volume — purging this just forces a fresh clone on next scan.
+  sastbot_repo_cache:
