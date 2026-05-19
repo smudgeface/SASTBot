@@ -16,8 +16,11 @@ ENV NODE_ENV=development \
     PATH=/pnpm:$PATH \
     CI=1
 
-# Enable pnpm via corepack.
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Enable pnpm via corepack. Pinned to a specific 10.x version because
+# `pnpm@latest` resolved to 11.1.3, which dropped Node 20 (requires
+# 22.13+) and fails with "No such built-in module: node:sqlite". The
+# lockfile is v9, which pnpm 10 reads natively.
+RUN corepack enable && corepack prepare pnpm@10.33.4 --activate
 
 # System tools:
 #   openssl, ca-certificates — TLS + Prisma
@@ -98,7 +101,7 @@ ENV NODE_ENV=production \
     PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH
 
-RUN corepack enable && corepack prepare pnpm@latest --activate \
+RUN corepack enable && corepack prepare pnpm@10.33.4 --activate \
  && apt-get update \
  && apt-get install -y --no-install-recommends gnupg curl ca-certificates \
  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
