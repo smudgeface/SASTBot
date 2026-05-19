@@ -56,6 +56,9 @@ importers:
       pino:
         specifier: ^8.20.0
         version: 8.21.0
+      prisma:
+        specifier: ^5.12.1
+        version: 5.22.0
       yaml:
         specifier: ^2.8.3
         version: 2.8.3
@@ -90,9 +93,6 @@ importers:
       pino-pretty:
         specifier: ^11.0.0
         version: 11.3.0
-      prisma:
-        specifier: ^5.12.1
-        version: 5.22.0
       supertest:
         specifier: ^7.0.0
         version: 7.2.2
