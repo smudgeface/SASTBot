@@ -44,6 +44,8 @@ Two versions matter, and they have different rules:
 
 ### When making a change that touches both — the order that matters
 
+Before writing any migration, work through `docs/MIGRATIONS_CHECKLIST.md` — it covers renames, NOT NULL on populated tables, big-table locking, JSON shape changes, and the worker-backfill contract.
+
 1. Edit `prisma/schema.prisma`.
 2. `pnpm prisma migrate dev --name describe_change` → generates migration folder.
 3. Implement the feature using the new schema.
