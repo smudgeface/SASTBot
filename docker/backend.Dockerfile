@@ -127,6 +127,13 @@ COPY --from=build /app/backend/node_modules ./node_modules
 COPY --from=build /app/backend/dist ./dist
 COPY --from=build /app/backend/prisma ./prisma
 
+# Pre-deploy backup + migrate + exec wrapper. See script header for the full
+# lifecycle and env vars. The compose `command:` provides the final exec
+# argv (server vs worker).
+COPY docker/backend-entrypoint.sh /usr/local/bin/sastbot-entrypoint.sh
+RUN chmod +x /usr/local/bin/sastbot-entrypoint.sh
+
 EXPOSE 8000
 
+ENTRYPOINT ["/usr/local/bin/sastbot-entrypoint.sh"]
 CMD ["node", "dist/server.js"]

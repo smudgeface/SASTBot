@@ -61,17 +61,23 @@ services:
       SCAN_WORKER_CONCURRENCY: ${SCAN_WORKER_CONCURRENCY:-2}
       PORT: "8000"
       CLONE_CACHE_DIR: /app/clones
+      # Pre-deploy backup + migrate are owned by the backend container —
+      # see docker/backend-entrypoint.sh. The worker disables both below.
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_COUNT: ${BACKUP_RETENTION_COUNT:-10}
+      ALLOW_DEPLOY_WITHOUT_BACKUP: ${ALLOW_DEPLOY_WITHOUT_BACKUP:-false}
+      SASTBOT_TAKE_BACKUP: "true"
+      SASTBOT_RUN_MIGRATIONS: "true"
     volumes:
       - sastbot_repo_cache:/app/clones
+      - sastbot_backups:/backups
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command:
-      - "sh"
-      - "-c"
-      - "pnpm prisma migrate deploy && node dist/server.js"
+    # ENTRYPOINT in the image runs backup → migrate → exec this CMD.
+    command: ["node", "dist/server.js"]
     restart: unless-stopped
 
   worker:
@@ -87,6 +93,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       SCAN_WORKER_CONCURRENCY: ${SCAN_WORKER_CONCURRENCY:-2}
       CLONE_CACHE_DIR: /app/clones
+      # Backup + migrate are owned by the backend container — see its env
+      # block above. The worker just runs its job process.
+      SASTBOT_TAKE_BACKUP: "false"
+      SASTBOT_RUN_MIGRATIONS: "false"
     volumes:
       - sastbot_repo_cache:/app/clones
     depends_on:
@@ -123,3 +133,7 @@ volumes:
   # Retained git clones the worker reuses between scans. Lives alongside
   # the DB volume — purging this just forces a fresh clone on next scan.
   sastbot_repo_cache:
+  # Pre-deploy backup tarballs. Mounted into the backend container at /backups
+  # and rotated to keep the last N (BACKUP_RETENTION_COUNT, default 10).
+  # Operators can copy out via: docker cp <backend-cid>:/backups/<file> ./
+  sastbot_backups:

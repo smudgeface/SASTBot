@@ -37,7 +37,8 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
 import { loadConfig } from "../config.js";
 import { ErrorSchema } from "../schemas.js";
-import { APP_VERSION, SASTBOT_DUMP_FORMAT_VERSION, getAppliedSchemaVersion, getExpectedSchemaVersion } from "./version.js";
+import { buildBackupMetadata } from "../services/backupMetadata.js";
+import { getAppliedSchemaVersion, getExpectedSchemaVersion } from "./version.js";
 
 /**
  * Decompose a postgres:// URL into the env vars pg_dump understands.
@@ -168,13 +169,7 @@ const adminBackupRoutes: FastifyPluginAsync = async (app) => {
       // -------------------------------------------------------------------
       // Step 2: Write metadata.json
       // -------------------------------------------------------------------
-      const metadata = {
-        app_version: APP_VERSION,
-        schema_version: schemaVersion,
-        expected_schema_version: expectedSchemaVersion,
-        exported_at: new Date().toISOString(),
-        sastbot_dump_format_version: SASTBOT_DUMP_FORMAT_VERSION,
-      };
+      const metadata = buildBackupMetadata({ schemaVersion, expectedSchemaVersion });
       try {
         await fsPromises.writeFile(metaPath, JSON.stringify(metadata, null, 2), "utf8");
       } catch (err) {
