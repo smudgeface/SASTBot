@@ -3,6 +3,7 @@ import type { ScanRun } from "@prisma/client";
 import { prisma } from "../db.js";
 import { RepoNotFoundError } from "./repoService.js";
 import { getScanQueue } from "../queue/scanQueue.js";
+import { deleteScanArtifacts } from "./artifactStore.js";
 
 export class ScanRunNotFoundError extends Error {
   constructor() { super("Scan run not found"); }
@@ -117,5 +118,69 @@ export async function cancelScanRun(scanRunId: string, orgId: string | null): Pr
         ? "Cancelled by user while running — partial results may have been written"
         : "Cancelled by user before scan started",
     },
+  });
+}
+
+/**
+ * Raised when an operator tries to delete the scan_run that's currently
+ * anchoring its scope's truth set (scope.lastScanRunId). Trigger a new
+ * scan first, then re-attempt the delete.
+ */
+export class ScanIsCurrentLatestError extends Error {
+  constructor(public readonly scopeId: string, public readonly scanRunId: string) {
+    super("Scan is the scope's lastScanRunId");
+  }
+}
+
+/**
+ * Raised when a delete is attempted on a scan that's still pending/running.
+ * Cancel it first.
+ */
+export class ScanStillRunningError extends Error {
+  constructor(public readonly status: string) {
+    super(`Scan is still ${status}; cancel it first`);
+  }
+}
+
+/**
+ * Delete a scan_run and its artifact files. Refuses to delete when the run
+ * is the scope's current `lastScanRunId` (the run anchoring the scope's
+ * truth set — see CLAUDE.md "Scan trustworthiness gates remediation logic").
+ * Refuses to delete a pending/running scan; cancel it first.
+ *
+ * On success: scan_run row is removed (cascades sbom_components,
+ * scan_findings, scan_run_components, etc.). The artifact files (SBOM + SARIF
+ * on disk) are deleted best-effort — a filesystem-side failure logs a warning
+ * but doesn't undo the DB delete (DB is authoritative).
+ *
+ * Note: rows on sast_issues / sca_issues whose `lastSeenScanRunId` happens
+ * to match the deleted run will point at a dangling UUID afterwards. The
+ * scope.lastScanRunId guard above ensures the *latest* scan is never the
+ * deleted one, so most such rows will already point to a newer scan. Any
+ * that don't will be re-anchored by the next scan. No active re-anchor here.
+ */
+export async function deleteScanRun(scanRunId: string, orgId: string | null): Promise<void> {
+  const run = await prisma.scanRun.findFirst({
+    where: { id: scanRunId, orgId: orgId ?? null },
+    select: { id: true, scopeId: true, status: true },
+  });
+  if (!run) throw new ScanRunNotFoundError();
+
+  if (run.status === "pending" || run.status === "running") {
+    throw new ScanStillRunningError(run.status);
+  }
+
+  const scope = await prisma.scanScope.findUnique({
+    where: { id: run.scopeId },
+    select: { id: true, lastScanRunId: true },
+  });
+  if (scope?.lastScanRunId === run.id) {
+    throw new ScanIsCurrentLatestError(scope.id, run.id);
+  }
+
+  await prisma.scanRun.delete({ where: { id: run.id } });
+
+  await deleteScanArtifacts(run.id).catch((err: unknown) => {
+    console.warn("[scanService] artifact cleanup failed for scan", run.id, err);
   });
 }

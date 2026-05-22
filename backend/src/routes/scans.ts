@@ -17,7 +17,13 @@ import {
   SbomComponentOutSchema,
 } from "../schemas.js";
 import { scanFindingToOut, scanRunToOut, sastIssueToOut, sbomComponentToOut } from "../services/mappers.js";
-import { cancelScanRun, ScanRunNotFoundError } from "../services/scanService.js";
+import {
+  cancelScanRun,
+  deleteScanRun,
+  ScanIsCurrentLatestError,
+  ScanRunNotFoundError,
+  ScanStillRunningError,
+} from "../services/scanService.js";
 import { bySeverity, byStatus, cmpNum, cmpStr, dirSign } from "../services/issueSort.js";
 import { sbomPathFor, sarifPathFor, tryReadArtifact } from "../services/artifactStore.js";
 
@@ -113,6 +119,53 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       } catch (err) {
         if (err instanceof ScanRunNotFoundError) {
           return reply.code(404).send({ detail: "Scan run not found" });
+        }
+        throw err;
+      }
+    },
+  );
+
+  typed.delete(
+    "/scans/:id",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["scans"],
+        summary: "Delete a scan run and its artifacts",
+        description:
+          "Refuses (409) when the run is the scope's current lastScanRunId; " +
+          "refuses (400) when the run is still pending/running. Admin-only.",
+        params: IdParamsSchema,
+        response: {
+          204: z.null(),
+          400: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      try {
+        await deleteScanRun(req.params.id, orgId);
+        return reply.code(204).send();
+      } catch (err) {
+        if (err instanceof ScanRunNotFoundError) {
+          return reply.code(404).send({ detail: "Scan run not found" });
+        }
+        if (err instanceof ScanStillRunningError) {
+          return reply.code(400).send({
+            detail: `Scan is still ${err.status}. Cancel it first via POST /scans/:id/cancel, then retry the delete.`,
+          });
+        }
+        if (err instanceof ScanIsCurrentLatestError) {
+          return reply.code(409).send({
+            detail:
+              `Cannot delete the scan currently anchoring this scope's truth set ` +
+              `(it's scope.lastScanRunId=${err.scanRunId}). Trigger a new scan first, ` +
+              `then delete this one.`,
+          });
         }
         throw err;
       }

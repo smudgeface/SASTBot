@@ -2297,3 +2297,14 @@ backup restored cleanly via the in-app `/admin/db/restore` endpoint.
   not already saved, regenerate via the `bootstrap-admin` CLI
   before the log rolls.
 
+---
+
+### M9 side task — DELETE /api/scans/:id (2026-05-22)
+
+Added the `DELETE /api/scans/:id` admin endpoint and its backing service function, completing the side task tracked in `docs/M9_STREAM_B_PLAN.md` §15. No version bump — bundled under the 0.8.0 already shipped in Deploy 3.
+
+- **409 current-latest guard.** If the scan being deleted is the scope's `lastScanRunId` (the anchor for the scope's truth set), the endpoint returns 409 with a message directing the operator to trigger a new scan first. This prevents accidentally orphaning the scope's live issue state.
+- **400 still-running guard.** Deleting a pending or running scan returns 400; the operator must cancel it first via `POST /scans/:id/cancel`.
+- **Artifact cleanup is best-effort.** After the DB row is deleted (cascading `sbom_components`, `scan_findings`, etc.), `deleteScanArtifacts` removes the SBOM + SARIF files from disk. A filesystem error logs a warning but does not undo the DB delete — the DB is authoritative.
+- **Unit tests** in `backend/tests/scansDelete.test.ts` cover all five cases: happy path, 409 guard, 404, 400 (pending + running), and artifact-cleanup failure swallowed.
+
