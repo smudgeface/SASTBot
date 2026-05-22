@@ -210,6 +210,7 @@ docker compose -f docker/compose/docker-compose.yml down -v          # stop AND 
 - Read `docs/M5_PLAN.md` for the M5 phase checklist (5d Scheduler + 5e Hardening still pending).
 - Orient in ≤3 tool calls: `git log --oneline -10`, `tail -40 docs/PROGRESS.md`, `docker compose ps`.
 - **🔖 Versioning is not optional.** Before adding a schema migration → confirm the migration folder is committed (that IS the schema version). Before cutting a release or shipping an operator-visible change → bump `backend/package.json` AND `frontend/package.json` to the same SemVer string in one commit. Cross-version backup/restore relies on this — see the "⚠️ Versioning policy" section at the top of this file.
+- 🚦 **M9 closure gate is pending.** Per-stream unit tests deliberately do not cover end-to-end behaviour (worker pipeline, HTTP round-trips, operator UI flows, backup/restore on real artifact files). Before declaring M9 done, run the test round in `docs/M9_E2E_TEST_PLAN.md`. Remove this line in the commit that updates that doc's §5 (gate-passed header).
 - Never commit real secrets. `.env` is gitignored; `.env.example` is the canonical source of variable names.
 - Never push to the GitHub remote without explicit user approval. The user creates the remote (`smudgeface/SASTBot`).
 - Keep generic docs free of the homelab IP (`10.0.0.0`) and internal hostnames.
