@@ -70,6 +70,13 @@ export interface CuratedSbomDoc {
   components: CycloneDxComponent[];
 }
 
+// Module-level constant so both builders share the same tools array without
+// duplicating the literal.
+const SBOM_TOOLS_COMPONENTS: Array<{ name: string; version?: string; type: string }> = [
+  { type: "application", name: "SASTBot", version: "M6q" },
+  { type: "application", name: "cdxgen", version: "12.2" },
+];
+
 /**
  * Build a CycloneDX 1.7 doc from the persisted sbom_components rows for
  * `scanRunId`. Returns null when the scan run doesn't exist or has no
@@ -159,15 +166,159 @@ export async function buildCuratedSbomJson(
     metadata: {
       timestamp: (run.finishedAt ?? run.createdAt).toISOString(),
       tools: {
-        components: [
-          { type: "application", name: "SASTBot", version: "M6q" },
-          { type: "application", name: "cdxgen", version: "12.2" },
-        ],
+        components: SBOM_TOOLS_COMPONENTS,
       },
       component: {
         type: "application",
         name: `${run.repo.name}${run.scope.path === "/" ? "" : run.scope.path}`,
         version: run.repo.defaultBranch ?? undefined,
+      },
+    },
+    components,
+  };
+}
+
+/**
+ * Build a CycloneDX 1.7 doc from the durable `scope_components` rows for
+ * `scopeId`. This is the operator-facing artifact for the scope page — it
+ * reflects operator edits (renames, manual evidence) because it reads
+ * scope_components, not the per-scan sbom_components audit table.
+ *
+ * Returns null when the scope doesn't exist or has no active components
+ * (caller maps to 404).
+ *
+ * Identity:
+ *   serialNumber  = urn:uuid:<scopeId>   (stable, identifies this scope's SBOM)
+ *   metadata.timestamp = max(scope_components.updatedAt) for active rows
+ *   metadata.component.version = scope.lastScanRunId ("what scan last touched this")
+ */
+export async function buildCuratedSbomJsonForScope(
+  scopeId: string,
+): Promise<CuratedSbomDoc | null> {
+  const scope = await prisma.scanScope.findUnique({
+    where: { id: scopeId },
+    select: {
+      id: true,
+      path: true,
+      lastScanRunId: true,
+      lastScanCompletedAt: true,
+      createdAt: true,
+      repo: { select: { name: true, defaultBranch: true } },
+    },
+  });
+  if (!scope) return null;
+
+  const scopeComponents = await prisma.scopeComponent.findMany({
+    where: { scopeId, dismissedStatus: "active" },
+    orderBy: [{ ecosystem: "asc" }, { name: "asc" }],
+  });
+  if (scopeComponents.length === 0) return null;
+
+  // Compute metadata.timestamp = max(scope_components.updatedAt) across active
+  // rows. Falls back to scope.lastScanCompletedAt or scope.createdAt if for
+  // some reason no components have updatedAt (shouldn't happen given step above).
+  const fallbackDate = scope.lastScanCompletedAt ?? scope.createdAt;
+  const maxUpdatedAt = scopeComponents.reduce<Date>((max, sc) => {
+    return sc.updatedAt > max ? sc.updatedAt : max;
+  }, fallbackDate);
+  const timestamp = maxUpdatedAt.toISOString();
+
+  const components: CycloneDxComponent[] = scopeComponents.map((sc) => {
+    const c: CycloneDxComponent = {
+      type: sc.latestComponentType ?? sc.componentType ?? "library",
+      name: sc.name,
+      purl: sc.purl,
+      "bom-ref": sc.purl,
+    };
+    if (sc.version) c.version = sc.version;
+    if (sc.scope) c.scope = sc.scope;
+
+    const licenses = sc.latestLicenses.length > 0 ? sc.latestLicenses : sc.licenses;
+    if (licenses && licenses.length > 0) {
+      c.licenses = licenses.map((id) => ({ license: { id } }));
+    }
+
+    // Evidence: identity (componentRoot or manifest) + occurrences (usage).
+    const evidence: CycloneDxEvidence = {};
+
+    // identity block: prefer componentRoot (vendored), fall back to manifest file.
+    const componentRoot = sc.componentRoot;
+    if (componentRoot) {
+      evidence.identity = [{
+        field: "purl",
+        concludedValue: componentRoot,
+        methods: [{
+          technique: "filename",
+          value: componentRoot,
+          confidence: 0.9,
+        }],
+        confidence: 0.9,
+      }];
+    } else if (sc.manifestFile) {
+      evidence.identity = [{
+        field: "purl",
+        concludedValue: sc.manifestFile,
+        methods: [{
+          technique: "manifest-analysis",
+          value: sc.manifestFile,
+          confidence: 0.8,
+        }],
+        confidence: 0.8,
+      }];
+    }
+
+    // occurrences: use the operator-curated evidence[] array (identity
+    // evidence), then usage[] for usage locations.
+    const evidenceArr = (sc.evidence ?? []) as unknown as Array<{ path: string; line?: number | null }>;
+    const usageArr = (sc.usage ?? []) as unknown as ComponentOccurrence[];
+    // Combine: evidence entries first (identity), then usage locations.
+    const allOccurrences: Array<{ path: string; line?: number | null }> = [
+      ...evidenceArr,
+      ...usageArr,
+    ];
+    if (allOccurrences.length > 0) {
+      evidence.occurrences = allOccurrences.map((o) => ({
+        location: o.line != null ? `${o.path}#${o.line}` : o.path,
+      }));
+    }
+
+    if (evidence.identity || evidence.occurrences) c.evidence = evidence;
+
+    // Properties.
+    const properties: Array<{ name: string; value: string }> = [];
+    const discoveryMethod = sc.latestDiscoveryMethod ?? sc.discoveryMethod;
+    if (discoveryMethod) {
+      properties.push({ name: "sastbot:discovery_method", value: discoveryMethod });
+    }
+    if (sc.isDevOnly) {
+      properties.push({ name: "cdx:npm:package:development", value: "true" });
+    }
+    const llmEvidenceBlob = (sc.latestLlmEvidence ?? sc.llmEvidence) as unknown as LlmEvidence | null;
+    if (llmEvidenceBlob && typeof llmEvidenceBlob === "object" && llmEvidenceBlob.llmReason) {
+      properties.push({ name: "sastbot:llm_rationale", value: llmEvidenceBlob.llmReason });
+      if (llmEvidenceBlob.path) {
+        properties.push({ name: "sastbot:llm_evidence_path", value: llmEvidenceBlob.path });
+      }
+    }
+    if (properties.length > 0) c.properties = properties;
+
+    return c;
+  });
+
+  return {
+    bomFormat: "CycloneDX",
+    specVersion: "1.7",
+    serialNumber: `urn:uuid:${scope.id}`,
+    version: 1,
+    metadata: {
+      timestamp,
+      tools: {
+        components: SBOM_TOOLS_COMPONENTS,
+      },
+      component: {
+        type: "application",
+        name: `${scope.repo.name}${scope.path === "/" ? "" : scope.path}`,
+        version: scope.lastScanRunId ?? undefined,
       },
     },
     components,

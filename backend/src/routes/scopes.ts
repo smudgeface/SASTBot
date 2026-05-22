@@ -999,21 +999,20 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         where: { id: params.id, orgId: orgId ?? null },
         select: {
           id: true,
-          lastScanRunId: true,
           path: true,
           repo: { select: { name: true } },
         },
       });
       if (!scope) return reply.code(404).send({ detail: "Scope not found" });
-      if (!scope.lastScanRunId) return reply.code(404).send({ detail: "No successful scan for this scope" });
 
-      // Build from the curated sbom_components rows (M6q follow-up: don't
-      // serve the raw cdxgen output, which contains CMake find_package
-      // probes + absolute "Filename /app/clones/..." paths that bypass
-      // the M6q CWD fix).
-      const { buildCuratedSbomJson } = await import("../services/sbomCurated.js");
-      const doc = await buildCuratedSbomJson(scope.lastScanRunId);
-      if (!doc) return reply.code(404).send({ detail: "SBOM not yet available for this scan" });
+      // M9 Stream C: derive SBOM from scope_components (scope-level durable
+      // state) rather than sbom_components (per-scan audit table). This
+      // ensures operator edits — renames, manual evidence, deduplications —
+      // are reflected in the download. The scan-detail page still uses
+      // buildCuratedSbomJson (sbom_components) for its audit-trail view.
+      const { buildCuratedSbomJsonForScope } = await import("../services/sbomCurated.js");
+      const doc = await buildCuratedSbomJsonForScope(scope.id);
+      if (!doc) return reply.code(404).send({ detail: "SBOM not yet available for this scope" });
 
       const repoName = (scope.repo as { name: string }).name;
       // Build a slug from the scope path: "/" → "root", "/GoWeb" → "GoWeb"

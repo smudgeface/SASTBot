@@ -2394,7 +2394,9 @@ export interface paths {
         /** Upload a pg_dump file or SASTBot tarball and restore it into the application database */
         post: {
             parameters: {
-                query?: never;
+                query?: {
+                    mode?: "full" | "runtime";
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;

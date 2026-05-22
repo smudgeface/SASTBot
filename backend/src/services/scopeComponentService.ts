@@ -156,11 +156,15 @@ export async function persistScanComponentsToScopeState(
         // evidence if they were empty on the existing row (so the identity
         // strengthens over time as the LLM emits richer data). jsonb_array_length
         // is the jsonb equivalent of array_length here.
+        // latest* fields always overwrite — they represent "what the latest
+        // scan saw", not operator choices. No COALESCE.
+        const latestLicensesArr = `{${c.licenses.map((l) => `"${l.replace(/"/g, '\\"')}"`).join(",")}}`;
+        const latestLlmEvidenceJson = c.llmEvidence !== null ? JSON.stringify(c.llmEvidence) : null;
         await prisma.$executeRawUnsafe(
           `UPDATE scope_components SET
-            last_seen_scan_run_id = $1::uuid,
-            last_seen_at          = now(),
-            updated_at            = now(),
+            last_seen_scan_run_id    = $1::uuid,
+            last_seen_at             = now(),
+            updated_at               = now(),
             component_root = COALESCE(component_root, $3),
             evidence = CASE
               WHEN source = 'manual_override' THEN evidence
@@ -190,7 +194,12 @@ export async function persistScanComponentsToScopeState(
             dismissed_at = CASE
               WHEN dismissed_status = 'removed' THEN NULL
               ELSE dismissed_at
-            END
+            END,
+            latest_licenses         = $7::text[],
+            latest_cpe              = $8,
+            latest_component_type   = $9,
+            latest_discovery_method = $10,
+            latest_llm_evidence     = $11::jsonb
           WHERE id = $2::uuid`,
           scanRunId,
           scopeComponentId,
@@ -198,6 +207,11 @@ export async function persistScanComponentsToScopeState(
           evidenceJson,
           incomingEvidenceIsRicher,
           usageJson,
+          latestLicensesArr,
+          incomingCpe ?? null,
+          c.componentType ?? null,
+          c.discoveryMethod ?? null,
+          latestLlmEvidenceJson,
         );
         upserted++;
         // Strengthen the cached identity so subsequent incoming components
@@ -212,6 +226,8 @@ export async function persistScanComponentsToScopeState(
         // missed an existing row but the strict identity collides (e.g. an
         // identical row inserted in the same loop with NULL version against
         // PG's NULL-distinct semantics).
+        const latestLicensesArr = `{${c.licenses.map((l) => `"${l.replace(/"/g, '\\"')}"`).join(",")}}`;
+        const latestLlmEvidenceJson = c.llmEvidence !== null ? JSON.stringify(c.llmEvidence) : null;
         await prisma.$executeRawUnsafe(
           `INSERT INTO scope_components (
             id, scope_id, org_id,
@@ -220,6 +236,8 @@ export async function persistScanComponentsToScopeState(
             manifest_file, discovery_method, evidence_line,
             evidence_path, component_root, evidence,
             llm_evidence, cpe, usage,
+            latest_licenses, latest_cpe, latest_component_type,
+            latest_discovery_method, latest_llm_evidence,
             source, dismissed_status,
             first_seen_scan_run_id, last_seen_scan_run_id, last_seen_at,
             created_at, updated_at
@@ -231,15 +249,17 @@ export async function persistScanComponentsToScopeState(
             $11, $12, $13,
             $14, $15, $16::jsonb,
             $17::jsonb, $18, $21::jsonb,
+            $22::text[], $23, $24,
+            $25, $26::jsonb,
             'scan', 'active',
             $19::uuid, $19::uuid, now(),
             now(), now()
           )
           ON CONFLICT (scope_id, name, version, purl) DO UPDATE
-            SET last_seen_scan_run_id = EXCLUDED.last_seen_scan_run_id,
-                last_seen_at          = EXCLUDED.last_seen_at,
-                updated_at            = now(),
-                component_root        = COALESCE(scope_components.component_root, EXCLUDED.component_root),
+            SET last_seen_scan_run_id    = EXCLUDED.last_seen_scan_run_id,
+                last_seen_at             = EXCLUDED.last_seen_at,
+                updated_at               = now(),
+                component_root           = COALESCE(scope_components.component_root, EXCLUDED.component_root),
                 evidence = CASE
                   WHEN scope_components.source = 'manual_override' THEN scope_components.evidence
                   WHEN scope_components.evidence IS NULL OR jsonb_array_length(scope_components.evidence) = 0
@@ -268,7 +288,12 @@ export async function persistScanComponentsToScopeState(
                 dismissed_at = CASE
                   WHEN scope_components.dismissed_status = 'removed' THEN NULL
                   ELSE scope_components.dismissed_at
-                END`,
+                END,
+                latest_licenses         = EXCLUDED.latest_licenses,
+                latest_cpe              = EXCLUDED.latest_cpe,
+                latest_component_type   = EXCLUDED.latest_component_type,
+                latest_discovery_method = EXCLUDED.latest_discovery_method,
+                latest_llm_evidence     = EXCLUDED.latest_llm_evidence`,
           scopeId,
           orgId ?? null,
           c.name,
@@ -290,6 +315,11 @@ export async function persistScanComponentsToScopeState(
           scanRunId,
           incomingEvidenceIsRicher,
           usageJson,
+          latestLicensesArr,
+          incomingCpe ?? null,
+          c.componentType ?? null,
+          c.discoveryMethod ?? null,
+          latestLlmEvidenceJson,
         );
 
         upserted++;

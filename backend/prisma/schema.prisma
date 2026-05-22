@@ -609,6 +609,18 @@ model ScopeComponent {
   llmEvidence     Json?     @map("llm_evidence")
   cpe             String?
 
+  // M9 Stream C: fields promoted from sbom_components so the scope-level
+  // curated SBOM can be built entirely from scope_components (F1/F6 fix).
+  // Populated on every scan merge pass; always overwritten (not COALESCE'd)
+  // because they represent "what the latest scan observed", not an operator
+  // choice. NULL on rows that pre-date this migration and have not been
+  // re-scanned since.
+  latestLicenses        String[]  @default([]) @map("latest_licenses")
+  latestCpe             String?   @map("latest_cpe")
+  latestComponentType   String?   @map("latest_component_type")
+  latestDiscoveryMethod String?   @map("latest_discovery_method")
+  latestLlmEvidence     Json?     @map("latest_llm_evidence")
+
   // Lifecycle — mirrors SastIssue / ScaIssue pattern
   source          String    @default("scan")
   // "active" | "removed" | "manual_override"
