@@ -4,6 +4,7 @@ import { prisma } from "../db.js";
 import type { RepoCreate, RepoUpdate } from "../schemas.js";
 
 import { createCredential } from "./credentialService.js";
+import { deleteScanArtifacts } from "./artifactStore.js";
 
 export class RepoNotFoundError extends Error {
   constructor() {
@@ -220,7 +221,20 @@ export async function listScopesForRepo(
 export async function deleteRepo(id: string, orgId: string | null): Promise<void> {
   const existing = await prisma.repo.findFirst({ where: { id, orgId: orgId ?? null } });
   if (!existing) throw new RepoNotFoundError();
+
+  // Collect all scan run IDs before the cascade delete so we can remove their
+  // artifact files from disk after the DB rows are gone. Artifact cleanup is
+  // best-effort: a failure here does not roll back the repo delete.
+  const scanRuns = await prisma.scanRun.findMany({
+    where: { repoId: id },
+    select: { id: true },
+  });
+
   await prisma.repo.delete({ where: { id } });
+
+  // Clean up artifact files for all deleted scan runs. Missing files are
+  // silently ignored (force: true semantics in deleteArtifact).
+  await Promise.allSettled(scanRuns.map((run) => deleteScanArtifacts(run.id)));
 }
 
 function isUniqueViolation(err: unknown): boolean {

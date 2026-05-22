@@ -247,6 +247,12 @@ model ScanRun {
   // status is "running".
   currentPhase            String?   @map("current_phase")
   phaseProgress           Json?     @map("phase_progress")
+  // M9: discriminator for how this scan run's SBOM was produced.
+  // "cdxgen" = standard pipeline (cdxgen + LLM augmentation).
+  // "upload" = operator uploaded an external SBOM file (future Stream B work).
+  // Stored as a plain string rather than a Prisma enum so adding new values
+  // in the future does not require a multi-step enum migration.
+  source                  String    @default("cdxgen") @map("source")
   createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   org               Org?               @relation(fields: [orgId], references: [id], onDelete: SetNull)

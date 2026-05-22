@@ -187,6 +187,11 @@ const EnvSchema = z.object({
   // named volume mounted into both the backend and worker services so
   // either can purge the cache.
   CLONE_CACHE_DIR: z.string().default("/app/clones"),
+  // Directory where canonical SBOM + SARIF artifact files are stored, one
+  // per scan run. In compose this is a named volume (sastbot_artifacts)
+  // shared between backend and worker. Files are deleted in lock-step with
+  // their parent scan_runs rows via deleteScanArtifacts().
+  ARTIFACT_DIR: z.string().default("/var/lib/sastbot/artifacts"),
   // Number of BullMQ scan jobs the worker processes in parallel.
   // Default 2; hard-capped at 4 to avoid overloading the host.
   SCAN_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(2),
@@ -221,6 +226,7 @@ export type AppConfig = {
   logLevel: string;
   port: number;
   cloneCacheDir: string;
+  artifactDir: string;
   authRateLimitMax: number;
   authRateLimitWindowMs: number;
   scanWorkerConcurrency: number;
@@ -319,6 +325,7 @@ export function loadConfig(): AppConfig {
     logLevel: parsed.data.LOG_LEVEL,
     port: parsed.data.PORT,
     cloneCacheDir: parsed.data.CLONE_CACHE_DIR,
+    artifactDir: parsed.data.ARTIFACT_DIR,
     authRateLimitMax: parsed.data.AUTH_RATE_LIMIT_MAX,
     authRateLimitWindowMs: parsed.data.AUTH_RATE_LIMIT_WINDOW_MS,
     scanWorkerConcurrency: parsed.data.SCAN_WORKER_CONCURRENCY,
