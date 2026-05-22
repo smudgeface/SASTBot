@@ -10,6 +10,12 @@ Numbered to match the validation report so cross-references stay stable.
 
 ## Issue 1 — `scan_runs.component_count` denorm goes stale on recheck recovery
 
+**Status: ✅ DISSOLVED by M9 Stream E** (see `docs/M9_STREAM_E_PLAN.md`). After E1 ships, `componentCount` is written once at ingest from the file's component count, and downstream phases (recheck-recovery, rebuildComponentsFromScopeState) no longer touch `sbom_components` for this scanRunId — so the denorm cannot drift. Keeping the section heading + original write-up so the post-E1 maintainer has the historical context.
+
+---
+
+(Original write-up below — kept for context.)
+
 **Symptom.** On the 2026-05-22 run, FSS reported `scan_runs.component_count = 1` but `sbom_components` had 31 rows for that scan and the curated SBOM file emitted by B1 contained 31 components. GOC similar: denorm=2434, actual=2439.
 
 **Root cause.** `worker.ts:~1383` sets `componentCount: finalComponents.length` inside the augmentation-persist transaction. That number reflects the LLM augmentation result only. The downstream phases — `materializeRecoveredComponents` (recheck-recovered rows) and `rebuildComponentsFromScopeState` (merge-survivor rows) — insert additional `sbom_components` rows for the same scan_run but do not update the denorm.
@@ -104,6 +110,12 @@ Keeping the section heading so the numbering stays stable across cross-reference
 ---
 
 ## Issue 5 — `mergedRowsRemoved: 1` on Gocator /GoWeb — is the merge logic correct?
+
+**Status: ✅ DISSOLVED by M9 Stream E** (see `docs/M9_STREAM_E_PLAN.md`). After E1 ships, the scan-page SBOM is built from this scan's direct observations only (file-first emit, before any recheck/merge runs). The scope-page SBOM continues to integrate recheck verdicts. Divergence between the two endpoints becomes meaningful and expected: `scan SBOM ≤ scope SBOM`, with the delta being exactly the recheck-recovery + merge work done by scope-update phases. No documentation patch needed because the architecture now matches operator mental model. Keeping the section + original write-up so the post-E1 maintainer has the historical context.
+
+---
+
+(Original write-up below — kept for context.)
 
 **Symptom.** GOC scan reported `mergedRowsRemoved: 1` from the SBOM recheck (`worker.ts:~1463`). Final state: `sbom_components` has 2439 rows, `scope_components` has 2438 — one fewer in the scope. The artifact file (per-scan, from sbom_components) has 2439; the scope-level SBOM endpoint (from scope_components) has 2438.
 
@@ -329,7 +341,7 @@ After Deploy 3 (B5+B6) ships AND the closure gate (`docs/M9_E2E_TEST_PLAN.md`) p
 
 1. Read this doc.
 2. Open one PR-shaped commit cluster titled `fix(m9-followups): post-deploy-3 cleanup`.
-3. Address Issues 1, 5, 6, 7, 8, 10, 11. (2 and 9 fixed in v0.8.1; 3 dissolved with the no-backfill posture; 4 is infra-not-code; 5 is a documentation-only fix per the recommendation in that issue.) Issue 10 is the highest-priority remaining item — it can let the scope re-anchor to a near-empty result when parse-error drop ratio is high.
+3. Address Issues 6, 7, 8, 10, 11. (2 and 9 fixed in v0.8.1; **1 and 5 dissolved by M9 Stream E** — see `docs/M9_STREAM_E_PLAN.md`; 3 dissolved with the no-backfill posture; 4 is infra-not-code.) Issue 10 is the highest-priority remaining item — it can let the scope re-anchor to a near-empty result when parse-error drop ratio is high. Issue 7 (`ALLOWED_PHASES` allowlist) needs the `sast_ingest` phase added when Stream E2 ships, in addition to the existing phases it's missing.
 4. Delete this file in the same commit, OR retain it with a "✅ Closed YYYY-MM-DD" header and a one-line summary per issue.
 5. Remove the pin from CLAUDE.md "For AI agents" section.
 
