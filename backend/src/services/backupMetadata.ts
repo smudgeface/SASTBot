@@ -18,6 +18,8 @@ export interface BackupMetadata {
   expected_schema_version: string;
   exported_at: string;
   sastbot_dump_format_version: number;
+  artifact_count: number;
+  artifact_bytes_total: number;
 }
 
 export interface BackupMetadataInput {
@@ -26,6 +28,8 @@ export interface BackupMetadataInput {
   exportedAt?: Date;
   appVersion?: string;
   dumpFormatVersion?: number;
+  artifactCount?: number;
+  artifactBytesTotal?: number;
 }
 
 export function buildBackupMetadata(input: BackupMetadataInput): BackupMetadata {
@@ -35,5 +39,7 @@ export function buildBackupMetadata(input: BackupMetadataInput): BackupMetadata 
     expected_schema_version: input.expectedSchemaVersion,
     exported_at: (input.exportedAt ?? new Date()).toISOString(),
     sastbot_dump_format_version: input.dumpFormatVersion ?? SASTBOT_DUMP_FORMAT_VERSION,
+    artifact_count: input.artifactCount ?? 0,
+    artifact_bytes_total: input.artifactBytesTotal ?? 0,
   };
 }

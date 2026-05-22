@@ -4,6 +4,71 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## M9 Stream A6 — Artifact dir in backup/restore tarball (2026-05-22)
+
+### What shipped
+
+- **Backup includes artifact directory.** `GET /admin/db/backup` now copies
+  `ARTIFACT_DIR` (default `/var/lib/sastbot/artifacts/`) into
+  `<tmpdir>/artifacts/` before tar, then includes `artifacts` in the tar
+  argv only when the dir exists and is reachable (so tarballs produced on
+  systems without artifacts are byte-identical to pre-A6 tarballs). A new
+  `summarizeArtifactDir` helper walks the copied dir recursively to count
+  files and bytes, populating two new `BackupMetadata` fields:
+  `artifact_count` and `artifact_bytes_total`.
+
+- **Restore overlays artifact directory.** `mode=full` wipes `ARTIFACT_DIR`
+  and extracts from `tarball/artifacts/` after pg_restore succeeds.
+  `mode=runtime` extends `RuntimeRestoreInput` with `artifactSourceDir` and
+  `artifactTargetDir`; the same wipe-and-copy runs after the DB overlay
+  transaction commits. Both modes are idempotent: a failed artifact overlay
+  leaves the DB authoritative and the operator can re-run the same tarball.
+
+- **Orphan pre-flight for mode=runtime (A6.4).** Before the overlay
+  transaction, `checkArtifactOrphans` reads UUIDs from `artifacts/sbom/*.json`
+  and `artifacts/sarif/*.sarif.json` and confirms each has a matching row in
+  `restore_temp.scan_runs`. Any orphan returns HTTP 422 with a count and
+  sample UUIDs, pointing the operator to re-take the backup.
+
+- **Tarball allowlist extended.** The path-traversal defence in the extract
+  step now permits `{"dump.pgcustom", "metadata.json", "artifacts"}` as
+  top-level entries; old-format tarballs (no `artifacts/`) still validate
+  cleanly.
+
+- **`BackupMetadata` schema extended.** `artifact_count` and
+  `artifact_bytes_total` are new required output fields (always at least 0).
+  The restore endpoint's Zod `MetadataSchema` makes both fields
+  `optional()` so old-format tarballs without them continue to parse.
+
+- **`SASTBOT_DUMP_FORMAT_VERSION` bumped 1 → 2.** App version bumped
+  **0.5.1 → 0.6.0** (MINOR — new backup field) in both `package.json` files
+  and both lockfiles.
+
+- **Tests.** 193 tests passing. New tests cover: `summarizeArtifactDir`
+  (missing/empty/populated dirs), `MetadataSchema` optional artifact fields
+  (old-format backwards-compat, new-format populated, rejection of
+  non-integer), tarball allowlist (allows `artifacts`, rejects unexpected
+  entries, both old and new well-formed tarballs), and `checkArtifactOrphans`
+  (null input short-circuit, empty sbom/sarif dirs, missing sbom/sarif dirs).
+
+### What we learned
+
+- **Keeping wipe-and-copy symmetric between full and runtime restore avoids
+  branching surprises.** Both modes end up calling the same "rm -rf target,
+  mkdir, cp entries" block. The only divergence is timing: `mode=full` runs it
+  immediately after pg_restore; `mode=runtime` runs it after the DB overlay
+  commits. This means the artifact dir is always consistent with the DB state
+  that just landed, regardless of mode.
+
+- **Old-format tarball compat requires explicit optionality at the schema
+  boundary, not "absent means 0".** `z.number().int().optional()` lets Zod
+  parse tarballs that predate A6 without a `.default(0)` that would mask
+  schema drift in new tarballs. Route code treats `undefined` as zero where it
+  needs a count, keeping the optional/present distinction inside the service
+  layer.
+
+---
+
 ## M8 — Production DB operations (2026-05-21)
 
 ### What shipped

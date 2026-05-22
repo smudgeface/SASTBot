@@ -81,6 +81,8 @@ const MetadataSchema = z.object({
   expected_schema_version: z.string(),
   exported_at: z.string(),
   sastbot_dump_format_version: z.number().int(),
+  artifact_count: z.number().int().optional(),
+  artifact_bytes_total: z.number().int().optional(),
 });
 
 type BackupMetadata = z.infer<typeof MetadataSchema>;
@@ -432,12 +434,12 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
           return reply.code(500).send({ detail: `Failed to read extracted contents: ${err instanceof Error ? err.message : String(err)}` });
         }
 
-        const allowed = new Set(["dump.pgcustom", "metadata.json"]);
+        const allowed = new Set(["dump.pgcustom", "metadata.json", "artifacts"]);
         const unexpected = extractedEntries.filter((e) => !allowed.has(e));
         if (unexpected.length > 0) {
           await cleanupTarball();
           return reply.code(400).send({
-            detail: `Tarball contains unexpected files: ${unexpected.join(", ")}. Expected only dump.pgcustom and metadata.json.`,
+            detail: `Tarball contains unexpected files: ${unexpected.join(", ")}. Expected only dump.pgcustom, metadata.json, and artifacts/.`,
           });
         }
 
@@ -529,7 +531,14 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
             { dumpPath, filename: uploadedFilename, size: dumpStat.size },
             "Starting runtime-tier restore",
           );
-          const runtimeResult = await runRuntimeRestore({ dumpPath, pgEnv });
+          const tarballArtifacts = path.join(extractDir, "artifacts");
+          const hasArtifacts = await fsPromises.access(tarballArtifacts).then(() => true).catch(() => false);
+          const runtimeResult = await runRuntimeRestore({
+            dumpPath,
+            pgEnv,
+            artifactSourceDir: hasArtifacts ? tarballArtifacts : null,
+            artifactTargetDir: config.artifactDir,
+          });
 
           if (!runtimeResult.ok) {
             app.log.error(
@@ -580,6 +589,30 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
               "The database may be in a partially-restored state — verify before serving traffic. " +
               `Temp files retained at: ${extractDir}. ` +
               (restoreResult.stderr ? `pg_restore stderr: ${restoreResult.stderr}` : "No stderr output captured."),
+          });
+        }
+
+        // A6.2: overlay artifact directory. mode=full = "exactly as backup".
+        try {
+          await fsPromises.rm(config.artifactDir, { recursive: true, force: true });
+          await fsPromises.mkdir(config.artifactDir, { recursive: true });
+          const tarballArtifacts = path.join(extractDir, "artifacts");
+          const hasArtifacts = await fsPromises.access(tarballArtifacts).then(() => true).catch(() => false);
+          if (hasArtifacts) {
+            const entries = await fsPromises.readdir(tarballArtifacts);
+            for (const entry of entries) {
+              await fsPromises.cp(
+                path.join(tarballArtifacts, entry),
+                path.join(config.artifactDir, entry),
+                { recursive: true },
+              );
+            }
+          }
+          app.log.info({ artifactCount: metadata?.artifact_count ?? 0 }, "A6: artifact dir overlaid (mode=full)");
+        } catch (err) {
+          app.log.error({ err }, "A6: artifact overlay failed (mode=full) — DB is restored but artifact dir is empty");
+          return reply.code(500).send({
+            detail: `pg_restore succeeded but artifact overlay failed: ${err instanceof Error ? err.message : String(err)}. The database is restored from the backup; the artifact directory is empty. Re-run mode=full with the same tarball to retry the artifact overlay (idempotent).`,
           });
         }
 

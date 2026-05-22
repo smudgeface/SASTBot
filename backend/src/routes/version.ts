@@ -23,13 +23,13 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 
 /** Integer bump if/when the tarball backup format changes incompatibly. */
-export const SASTBOT_DUMP_FORMAT_VERSION = 1;
+export const SASTBOT_DUMP_FORMAT_VERSION = 2;
 
 /**
  * App version — kept in sync with backend/package.json `version` field.
  * Update this when bumping the package version.
  */
-export const APP_VERSION = "0.3.0";
+export const APP_VERSION = "0.6.0";
 
 /**
  * Read the lexicographically-last migration directory name from the Prisma

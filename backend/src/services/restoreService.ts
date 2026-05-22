@@ -41,6 +41,8 @@
  * migrate-forward restore must use mode=full.
  */
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { spawn } from "node:child_process";
 
 import { prisma } from "../db.js";
@@ -287,12 +289,56 @@ async function dropRestoreTemp(): Promise<void> {
 }
 
 /**
+ * A6.4: Pre-flight orphan check for mode=runtime.
+ *
+ * Enumerates artifact files under <artifactSourceDir>/sbom/ and
+ * <artifactSourceDir>/sarif/, parses the UUID from each filename, and
+ * confirms that every UUID corresponds to a row in restore_temp.scan_runs.
+ * Any UUID that doesn't match is an "orphan" — evidence that the dump is
+ * internally inconsistent (artifact file with no matching scan run row).
+ *
+ * Only called after the rename dance has placed the dump in restore_temp.
+ * Returns { orphans: [] } when artifactSourceDir is null (old-format tarball).
+ */
+export async function checkArtifactOrphans(
+  artifactSourceDir: string | null,
+): Promise<{ orphans: string[] }> {
+  if (!artifactSourceDir) return { orphans: [] };
+
+  const sbomDir = path.join(artifactSourceDir, "sbom");
+  const sarifDir = path.join(artifactSourceDir, "sarif");
+  const sbomFiles = await fs.readdir(sbomDir).catch(() => [] as string[]);
+  const sarifFiles = await fs.readdir(sarifDir).catch(() => [] as string[]);
+  const uuids = new Set<string>();
+  for (const f of sbomFiles) {
+    const m = f.match(/^([0-9a-f-]{36})\.json$/);
+    if (m) uuids.add(m[1]);
+  }
+  for (const f of sarifFiles) {
+    const m = f.match(/^([0-9a-f-]{36})\.sarif\.json$/);
+    if (m) uuids.add(m[1]);
+  }
+  if (uuids.size === 0) return { orphans: [] };
+
+  const ids = [...uuids];
+  const rows = await prisma.$queryRawUnsafe<{ id: string }[]>(
+    `SELECT id::text AS id FROM restore_temp.scan_runs WHERE id = ANY($1::uuid[])`,
+    ids,
+  );
+  const known = new Set(rows.map((r) => r.id));
+  const orphans = ids.filter((id) => !known.has(id));
+  return { orphans };
+}
+
+/**
  * High-level entry point. Caller (the route handler) has already validated
  * the upload, version-checked it, and produced a path to the .pgcustom dump.
  */
 export interface RuntimeRestoreInput {
   dumpPath: string;
   pgEnv: Record<string, string>;
+  artifactSourceDir: string | null;  // extractDir/artifacts/, or null for old-format tarballs
+  artifactTargetDir: string;          // config.artifactDir
 }
 
 export type RuntimeRestoreResult =
@@ -340,6 +386,30 @@ export async function runRuntimeRestore(input: RuntimeRestoreInput): Promise<Run
     return { ok: false, status: 422, detail, violations };
   }
 
+  // A6.4: artifact orphan pre-flight (after rename dance, before overlay).
+  let orphanResult: { orphans: string[] };
+  try {
+    orphanResult = await checkArtifactOrphans(input.artifactSourceDir);
+  } catch (err) {
+    await dropRestoreTemp();
+    return {
+      ok: false,
+      status: 500,
+      detail: `Artifact orphan pre-flight failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  if (orphanResult.orphans.length > 0) {
+    await dropRestoreTemp();
+    return {
+      ok: false,
+      status: 422,
+      detail:
+        `Tarball contains ${orphanResult.orphans.length} artifact file(s) without matching scan_runs rows in the dump ` +
+        `(e.g. ${orphanResult.orphans.slice(0, 3).join(", ")}). The dump appears corrupted — re-take the backup.`,
+    };
+  }
+
   // Phase 3: overlay.
   try {
     await applyRuntimeOverlay();
@@ -357,6 +427,35 @@ export async function runRuntimeRestore(input: RuntimeRestoreInput): Promise<Run
   }
 
   await dropRestoreTemp();
+
+  // A6.3: artifact dir overlay — after DB transaction commits, wipe and copy.
+  // Failure here leaves the DB authoritative; operator can re-run idempotently.
+  try {
+    await fs.rm(input.artifactTargetDir, { recursive: true, force: true });
+    await fs.mkdir(input.artifactTargetDir, { recursive: true });
+    if (input.artifactSourceDir) {
+      const hasSource = await fs.access(input.artifactSourceDir).then(() => true).catch(() => false);
+      if (hasSource) {
+        const entries = await fs.readdir(input.artifactSourceDir);
+        for (const entry of entries) {
+          await fs.cp(
+            path.join(input.artifactSourceDir, entry),
+            path.join(input.artifactTargetDir, entry),
+            { recursive: true },
+          );
+        }
+      }
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      status: 500,
+      detail:
+        `DB overlay succeeded but artifact-dir overlay failed: ${err instanceof Error ? err.message : String(err)}. ` +
+        `Re-run the same tarball in mode=runtime to retry (idempotent — DB will TRUNCATE+overlay to the same end state).`,
+    };
+  }
+
   return { ok: true };
 }
 

@@ -32,6 +32,29 @@ import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 
+/**
+ * Walk a directory recursively and return the count and total size in bytes
+ * of all regular files found within it.
+ */
+export async function summarizeArtifactDir(dir: string): Promise<{ count: number; bytes: number }> {
+  let count = 0;
+  let bytes = 0;
+  try {
+    const entries = await fsPromises.readdir(dir, { withFileTypes: true, recursive: true });
+    for (const entry of entries) {
+      if (entry.isFile()) {
+        count++;
+        const fullPath = path.join(entry.parentPath ?? (entry as { path?: string }).path ?? dir, entry.name);
+        const st = await fsPromises.stat(fullPath).catch(() => null);
+        if (st) bytes += st.size;
+      }
+    }
+  } catch {
+    // If the dir can't be walked, return zeros.
+  }
+  return { count, bytes };
+}
+
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
@@ -167,9 +190,33 @@ const adminBackupRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // -------------------------------------------------------------------
-      // Step 2: Write metadata.json
+      // Step 2: Write metadata.json (and optionally copy artifact dir)
       // -------------------------------------------------------------------
-      const metadata = buildBackupMetadata({ schemaVersion, expectedSchemaVersion });
+      let artifactCount = 0;
+      let artifactBytesTotal = 0;
+      let artifactSrcExists = false;
+      const artifactSrc = config.artifactDir;
+      const artifactDst = path.join(tmpDir, "artifacts");
+      try {
+        await fsPromises.access(artifactSrc);
+        artifactSrcExists = true;
+      } catch {
+        artifactSrcExists = false;
+      }
+      if (artifactSrcExists) {
+        await fsPromises.mkdir(artifactDst, { recursive: true });
+        await fsPromises.cp(artifactSrc, artifactDst, { recursive: true });
+        const stats = await summarizeArtifactDir(artifactDst);
+        artifactCount = stats.count;
+        artifactBytesTotal = stats.bytes;
+      }
+
+      const metadata = buildBackupMetadata({
+        schemaVersion,
+        expectedSchemaVersion,
+        artifactCount,
+        artifactBytesTotal,
+      });
       try {
         await fsPromises.writeFile(metaPath, JSON.stringify(metadata, null, 2), "utf8");
       } catch (err) {
@@ -181,6 +228,9 @@ const adminBackupRoutes: FastifyPluginAsync = async (app) => {
       // -------------------------------------------------------------------
       // Step 3: Spawn tar and pipe stdout directly into the HTTP response
       // -------------------------------------------------------------------
+      const tarEntries = ["dump.pgcustom", "metadata.json"];
+      if (artifactSrcExists) tarEntries.push("artifacts");
+
       let tarProc: ReturnType<typeof spawn>;
       try {
         tarProc = spawn(
@@ -188,8 +238,7 @@ const adminBackupRoutes: FastifyPluginAsync = async (app) => {
           [
             "-czf", "-",
             "-C", tmpDir,
-            "dump.pgcustom",
-            "metadata.json",
+            ...tarEntries,
           ],
           {
             stdio: ["ignore", "pipe", "pipe"],

@@ -25,8 +25,10 @@ describe("buildBackupMetadata", () => {
     expect(Object.keys(out).sort()).toEqual(
       [
         "app_version",
-        "exported_at",
+        "artifact_bytes_total",
+        "artifact_count",
         "expected_schema_version",
+        "exported_at",
         "sastbot_dump_format_version",
         "schema_version",
       ].sort(),
@@ -70,5 +72,51 @@ describe("buildBackupMetadata", () => {
     expect(typeof out.app_version).toBe("string");
     expect(out.app_version.length).toBeGreaterThan(0);
     expect(Number.isInteger(out.sastbot_dump_format_version)).toBe(true);
+  });
+
+  it("artifact_count and artifact_bytes_total default to 0 when omitted", () => {
+    const out = buildBackupMetadata({
+      schemaVersion: "20260516165953_add_per_repo_llm_token_budgets",
+      expectedSchemaVersion: "20260516165953_add_per_repo_llm_token_budgets",
+    });
+    expect(out.artifact_count).toBe(0);
+    expect(out.artifact_bytes_total).toBe(0);
+  });
+
+  it("artifact_count and artifact_bytes_total are populated when provided", () => {
+    const out = buildBackupMetadata({
+      schemaVersion: "x",
+      expectedSchemaVersion: "x",
+      artifactCount: 42,
+      artifactBytesTotal: 1_234_567,
+    });
+    expect(out.artifact_count).toBe(42);
+    expect(out.artifact_bytes_total).toBe(1_234_567);
+  });
+
+  it("produces the extended field set including artifact fields", () => {
+    const out = buildBackupMetadata({
+      schemaVersion: "x",
+      expectedSchemaVersion: "x",
+      exportedAt: new Date("2026-05-22T12:00:00.000Z"),
+      appVersion: "0.6.0",
+      dumpFormatVersion: 2,
+      artifactCount: 5,
+      artifactBytesTotal: 999,
+    });
+    expect(Object.keys(out).sort()).toEqual(
+      [
+        "app_version",
+        "artifact_bytes_total",
+        "artifact_count",
+        "expected_schema_version",
+        "exported_at",
+        "sastbot_dump_format_version",
+        "schema_version",
+      ].sort(),
+    );
+    expect(out.artifact_count).toBe(5);
+    expect(out.artifact_bytes_total).toBe(999);
+    expect(out.sastbot_dump_format_version).toBe(2);
   });
 });

@@ -5,9 +5,13 @@
  * adminRestore.ts) so we test the canonical implementation directly.
  */
 
+import * as fsPromises from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { pgEnvFromUrl } from "../src/routes/adminBackup.js";
+import { pgEnvFromUrl, summarizeArtifactDir } from "../src/routes/adminBackup.js";
 
 describe("pgEnvFromUrl", () => {
   it("decomposes a standard DATABASE_URL into PG* env vars", () => {
@@ -58,5 +62,48 @@ describe("pgEnvFromUrl", () => {
     expect(env?.["PGHOST"]).not.toContain(password);
     expect(env?.["PGUSER"]).not.toContain(password);
     expect(env?.["PGDATABASE"]).not.toContain(password);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// summarizeArtifactDir
+// ---------------------------------------------------------------------------
+
+describe("summarizeArtifactDir", () => {
+  it("returns zero count and bytes for a missing directory", async () => {
+    const result = await summarizeArtifactDir("/tmp/nonexistent-dir-12345-sastbot-test");
+    expect(result.count).toBe(0);
+    expect(result.bytes).toBe(0);
+  });
+
+  it("returns zero count and bytes for an empty directory", async () => {
+    const tmpDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "sastbot-test-"));
+    try {
+      const result = await summarizeArtifactDir(tmpDir);
+      expect(result.count).toBe(0);
+      expect(result.bytes).toBe(0);
+    } finally {
+      await fsPromises.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts files and sums their sizes recursively", async () => {
+    const tmpDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "sastbot-test-"));
+    try {
+      const sbomDir = path.join(tmpDir, "sbom");
+      const sarifDir = path.join(tmpDir, "sarif");
+      await fsPromises.mkdir(sbomDir, { recursive: true });
+      await fsPromises.mkdir(sarifDir, { recursive: true });
+      // Write 3 files with known sizes
+      await fsPromises.writeFile(path.join(sbomDir, "a.json"), "x".repeat(100));
+      await fsPromises.writeFile(path.join(sbomDir, "b.json"), "y".repeat(200));
+      await fsPromises.writeFile(path.join(sarifDir, "c.sarif.json"), "z".repeat(300));
+
+      const result = await summarizeArtifactDir(tmpDir);
+      expect(result.count).toBe(3);
+      expect(result.bytes).toBe(600);
+    } finally {
+      await fsPromises.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

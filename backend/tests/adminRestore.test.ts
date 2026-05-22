@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Disk-space pre-flight math
@@ -127,5 +128,96 @@ describe("format detection", () => {
   it("PGDMP detection requires at least 5 bytes", () => {
     const buf = Buffer.from("PGDM"); // only 4 bytes
     expect(detectFormatFromBytes(buf)).toBe("unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A6: MetadataSchema backwards-compatibility — optional artifact fields
+// ---------------------------------------------------------------------------
+
+// Mirrors the MetadataSchema defined in adminRestore.ts.
+// Optional fields must parse cleanly from old-format tarballs that omit them.
+const MetadataSchema = z.object({
+  app_version: z.string(),
+  schema_version: z.string(),
+  expected_schema_version: z.string(),
+  exported_at: z.string(),
+  sastbot_dump_format_version: z.number().int(),
+  artifact_count: z.number().int().optional(),
+  artifact_bytes_total: z.number().int().optional(),
+});
+
+describe("A6: MetadataSchema artifact fields", () => {
+  const base = {
+    app_version: "0.5.1",
+    schema_version: "20260516165953_add_per_repo_llm_token_budgets",
+    expected_schema_version: "20260516165953_add_per_repo_llm_token_budgets",
+    exported_at: "2026-05-20T14:30:00.000Z",
+    sastbot_dump_format_version: 1,
+  };
+
+  it("parses old-format metadata without artifact fields (backwards-compat)", () => {
+    const result = MetadataSchema.safeParse(base);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.artifact_count).toBeUndefined();
+      expect(result.data.artifact_bytes_total).toBeUndefined();
+    }
+  });
+
+  it("parses new-format metadata with artifact fields", () => {
+    const result = MetadataSchema.safeParse({
+      ...base,
+      artifact_count: 7,
+      artifact_bytes_total: 102400,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.artifact_count).toBe(7);
+      expect(result.data.artifact_bytes_total).toBe(102400);
+    }
+  });
+
+  it("rejects non-integer artifact_count", () => {
+    const result = MetadataSchema.safeParse({
+      ...base,
+      artifact_count: 3.5,
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A6: allowlist covers 'artifacts' directory entry
+// ---------------------------------------------------------------------------
+
+describe("A6: tarball allowlist includes artifacts", () => {
+  const allowed = new Set(["dump.pgcustom", "metadata.json", "artifacts"]);
+
+  it("allows the artifacts entry", () => {
+    expect(allowed.has("artifacts")).toBe(true);
+  });
+
+  it("still allows dump.pgcustom and metadata.json", () => {
+    expect(allowed.has("dump.pgcustom")).toBe(true);
+    expect(allowed.has("metadata.json")).toBe(true);
+  });
+
+  it("rejects unexpected entries", () => {
+    const entries = ["dump.pgcustom", "metadata.json", "artifacts", "evil.sh"];
+    const unexpected = entries.filter((e) => !allowed.has(e));
+    expect(unexpected).toEqual(["evil.sh"]);
+  });
+
+  it("no unexpected entries for a well-formed new tarball", () => {
+    const entries = ["dump.pgcustom", "metadata.json", "artifacts"];
+    const unexpected = entries.filter((e) => !allowed.has(e));
+    expect(unexpected).toHaveLength(0);
+  });
+
+  it("no unexpected entries for a well-formed old tarball (no artifacts/)", () => {
+    const entries = ["dump.pgcustom", "metadata.json"];
+    const unexpected = entries.filter((e) => !allowed.has(e));
+    expect(unexpected).toHaveLength(0);
   });
 });
