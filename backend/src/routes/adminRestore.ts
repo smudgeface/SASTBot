@@ -50,8 +50,24 @@ import { z } from "zod";
 
 import { loadConfig } from "../config.js";
 import { ErrorSchema } from "../schemas.js";
+import { runRuntimeRestore } from "../services/restoreService.js";
 import { pgEnvFromUrl } from "./adminBackup.js";
 import { APP_VERSION, getExpectedSchemaVersion } from "./version.js";
+
+/**
+ * Restore mode — controls how much of the database the dump overlays.
+ *
+ *   full     — current behaviour. pg_restore --clean --if-exists replaces
+ *              every table. Auto-runs prisma migrate deploy on older dumps.
+ *   runtime  — rebuilds only the scan-output tables; auth + admin-config
+ *              tables (orgs, users, sessions, credentials, repos,
+ *              app_settings, encryption_canary) keep their current values.
+ *              Requires dump.schema_version == running expected_schema_version.
+ *
+ * See backend/src/services/restoreService.ts and docs/user/backup-restore.md
+ * for the details and the FK edge case.
+ */
+const RestoreModeSchema = z.enum(["full", "runtime"]).default("full");
 
 const TMP_DIR = "/tmp";
 
@@ -299,6 +315,9 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
       schema: {
         tags: ["admin", "backup"],
         summary: "Upload a pg_dump file or SASTBot tarball and restore it into the application database",
+        querystring: z.object({
+          mode: RestoreModeSchema,
+        }),
         response: {
           200: RestoreResponseSchema,
           401: ErrorSchema,
@@ -310,6 +329,8 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (req, reply) => {
+      const mode = req.query.mode;
+
       const pgEnv = pgEnvFromUrl(config.databaseUrl);
       if (!pgEnv) {
         return reply.code(500).send({ detail: "Could not parse DATABASE_URL to build pg_restore connection parameters" });
@@ -475,7 +496,76 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
           }
         }
 
-        // Run pg_restore
+        // -----------------------------------------------------------------
+        // mode=runtime branch — preserve auth + admin-config tables; rebuild
+        // scan-output tables only. Requires metadata + exact schema match.
+        // -----------------------------------------------------------------
+        if (mode === "runtime") {
+          if (!metadata) {
+            await cleanupTarball();
+            return reply.code(422).send({
+              detail:
+                "mode=runtime requires a SASTBot tarball with valid metadata.json " +
+                "(this lets the server check that the dump's schema matches the " +
+                "running backend). Re-take the backup via Admin → Settings → Backup, " +
+                "or use mode=full to restore this legacy dump.",
+            });
+          }
+
+          const runningExpected = await getExpectedSchemaVersion();
+          if (metadata.schema_version !== runningExpected) {
+            await cleanupTarball();
+            return reply.code(422).send({
+              detail:
+                `mode=runtime requires the backup's schema version ` +
+                `("${metadata.schema_version}") to exactly match the running backend's ` +
+                `expected schema ("${runningExpected}"). ` +
+                `Use mode=full to restore older backups (which migrates the dump forward) ` +
+                `or take a fresh backup against the running backend.`,
+            });
+          }
+
+          app.log.info(
+            { dumpPath, filename: uploadedFilename, size: dumpStat.size },
+            "Starting runtime-tier restore",
+          );
+          const runtimeResult = await runRuntimeRestore({ dumpPath, pgEnv });
+
+          if (!runtimeResult.ok) {
+            app.log.error(
+              { detail: runtimeResult.detail, status: runtimeResult.status },
+              "Runtime restore failed",
+            );
+            // Cleanup the tarball temp dir; the restore service cleans up
+            // restore_temp on its own.
+            await cleanupTarball();
+            return reply.code(runtimeResult.status).send({ detail: runtimeResult.detail });
+          }
+
+          await cleanupTarball();
+          app.log.info({ filename: uploadedFilename }, "Runtime restore completed — backend will restart");
+
+          const appVersionWarning =
+            metadata.app_version !== APP_VERSION
+              ? `Backup app version (${metadata.app_version}) differs from the running backend (${APP_VERSION}). The runtime restore proceeded — verify functionality after restart.`
+              : undefined;
+
+          const responseBody: z.infer<typeof RestoreResponseSchema> = {
+            ok: true,
+            restarting: true,
+            migrations_applied: [],
+            ...(appVersionWarning ? { app_version_warning: appVersionWarning } : {}),
+          };
+
+          await reply.code(200).send(responseBody);
+          setImmediate(() => {
+            app.log.info("Exiting for clean Docker restart after runtime DB restore");
+            process.exit(0);
+          });
+          return;
+        }
+
+        // Run pg_restore (mode=full)
         app.log.info({ dumpPath, filename: uploadedFilename, size: dumpStat.size }, "Starting pg_restore (tarball path)");
         const restoreResult = await runPgRestore(dumpPath, pgEnv);
 
@@ -546,6 +636,16 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
       // 5. Legacy .dump path — restore unconditionally with a warning
       // -----------------------------------------------------------------------
       // (format === "pgdump")
+
+      if (mode === "runtime") {
+        await fsPromises.unlink(tmpPath).catch(() => undefined);
+        return reply.code(422).send({
+          detail:
+            "mode=runtime requires a SASTBot tarball with metadata.json so the server " +
+            "can verify the dump's schema version. The uploaded legacy .dump file has " +
+            "no metadata. Use mode=full to restore this file.",
+        });
+      }
 
       app.log.info({ tmpPath, filename: uploadedFilename, size: stat.size }, "Starting pg_restore (legacy .dump path)");
 

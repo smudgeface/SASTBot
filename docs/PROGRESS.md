@@ -4,6 +4,132 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## M8 — Production DB operations (2026-05-21)
+
+### What shipped
+
+- **Migrations checklist (`docs/MIGRATIONS_CHECKLIST.md`).** 13-item
+  contributor guide for any PR touching `prisma/schema.prisma`: renames
+  lose data unless hand-edited, NOT NULL on populated tables is two
+  migrations, `CREATE INDEX CONCURRENTLY` for big tables, the JSON
+  dual-read pattern, worker-backfill idempotency contract (with the M7
+  anti-pattern call-out), enum DDL, multi-table dual-write, app-version
+  bump rules. Worked example at the bottom. One-line reference from
+  CLAUDE.md under the Versioning-policy section so every contributor
+  hits it before merging schema work. (Commit `5fa9fbe`.)
+
+- **Pre-deploy auto-backup via container entrypoint
+  (`docker/backend-entrypoint.sh`).** The prod backend image now runs a
+  bash entrypoint that takes a `pg_dump` tarball to `/backups`
+  (sastbot_backups named volume), runs `gunzip -t` to verify gzip
+  CRC32 integrity, rotates to the last `BACKUP_RETENTION_COUNT`
+  (default 10), then proceeds to `prisma migrate deploy` and the
+  original command. Backup failure aborts the deploy unless
+  `ALLOW_DEPLOY_WITHOUT_BACKUP=true`. Worker service sets
+  `SASTBOT_TAKE_BACKUP=false` + `SASTBOT_RUN_MIGRATIONS=false` so its
+  restarts don't double-backup or race the backend on migrate. New
+  `backend/src/services/backupMetadata.ts` shared util powers both the
+  HTTP `/admin/db/backup` route and the new
+  `cli/write-backup-metadata.ts` so the restore endpoint validates both
+  paths identically. (Commit `04aa959`.)
+
+- **Restore tiering — `mode=full` vs `mode=runtime`.** The restore
+  endpoint accepts a new `mode` query parameter. `mode=full` (default)
+  is unchanged. `mode=runtime` is new: preserves auth + admin-config
+  tables (`orgs`, `users`, `sessions`, `credentials`, `repos`,
+  `app_settings`, `encryption_canary`) and rebuilds only the scan-output
+  bucket from the dump. Operator mental model: "undo bad scan data
+  without losing settings I've changed since the backup". Implemented
+  via the **schema-rename dance** —
+  `ALTER SCHEMA public RENAME TO public_live; CREATE SCHEMA public;
+   pg_restore --clean; ALTER SCHEMA public RENAME TO restore_temp;
+   ALTER SCHEMA public_live RENAME TO public;` — gets the dump's data
+  into a sibling schema without text-replacing `public.` in SQL (which
+  would silently corrupt user-supplied strings containing that
+  substring). Pre-flight FK check via LEFT JOIN catches the
+  "operator deleted a repo or org since backup" edge case and returns
+  HTTP 422 pointing at `mode=full`. `mode=runtime` also requires
+  exact schema match — older dumps are refused with the same
+  `mode=full` redirect, because overlaying old-schema rows into
+  new-schema tables doesn't survive column-set mismatch. UI radio
+  button in the Settings restore dialog defaults to `full`; runtime
+  shows an amber caution about the FK edge case. Operator doc lives
+  at `docs/user/backup-restore.md`. App version bumped to **0.3.0**
+  in both `package.json` files. (This entry's commit.)
+
+### What we learned
+
+- **The plan's "restore into a temp schema" implementation sketch was
+  cleaner in writing than in code.** The obvious path —
+  `pg_restore -f /tmp/sql.dump && sed 's/public\./restore_temp./g'` —
+  is unsafe because user-supplied strings (CVE summaries, Jira issue
+  titles, scope notes) can contain the literal substring `public.<word>`
+  and would be silently corrupted in the restored data. The
+  schema-rename dance avoids text manipulation entirely: rename the
+  live schema aside, restore into a fresh `public`, then rotate it
+  into `restore_temp` and put the live one back. Atomic per-rename,
+  no data corruption surface.
+
+- **Sharing infra between backup paths is worth one shared util.**
+  Pre-M8 the metadata.json was constructed inline in the HTTP route.
+  Pre-deploy backup needed the same shape but from a bash-invoked CLI.
+  Extracting `buildBackupMetadata({schemaVersion, expectedSchemaVersion})`
+  to a service means there's a single producer the restore endpoint's
+  Zod schema validates against — if the shape ever drifts the test in
+  `backupMetadata.test.ts` catches it.
+
+- **Stream-3 sub-agent worked well for UI + docs in parallel with main
+  agent's backend service.** Locking the API contract
+  (`?mode=full|runtime`) and the bucket-partition tables before
+  spawning let the sub-agent operate independently. Both parts
+  finished in well under an hour. Compare to a sequential session
+  where I'd have written backend, then context-switched to frontend.
+
+- **`ENTRYPOINT` + shared image needs explicit env-var gates per
+  service.** Backend and worker share the same Docker image but only
+  the backend should take backups + run migrations. Initial entrypoint
+  ran both unconditionally; switching to `SASTBOT_TAKE_BACKUP` +
+  `SASTBOT_RUN_MIGRATIONS` env gates (defaults `true` on backend,
+  explicit `false` on worker) avoids race-conditioning on `migrate
+  deploy` and prevents double-backups per redeploy.
+
+### Known follow-ups
+
+- **Off-host backup pipeline (S3 / B2 / NAS).** Currently the
+  Dokploy host's local disk is the only copy of the data. Required
+  before any deploy where data loss on host disk failure is
+  unacceptable.
+
+- **Scheduled backups beyond pre-deploy.** Nightly / weekly. Pairs
+  with the off-host pipeline.
+
+- **Automated restorability verification cron.** Periodically restore
+  the latest backup into a throwaway DB and run a smoke check —
+  catches "the backup format silently broke" before it bites.
+
+- **Per-row preservation of operator overrides** in `scope_components`.
+  M8 takes the whole-table partition: operator hand-edits between
+  backup and restore are lost in both modes. Deferred per the plan's
+  scope decision.
+
+- **Staging stack.** A second Dokploy application that mirrors prod
+  with a recent backup restored. Tests destructive migrations against
+  real data shapes before prod runs them. Revisit before the company
+  LMI Dokploy deploy.
+
+- **HMAC-SHA256 on backups** when we move to off-host storage where
+  the storage tier is partly trusted. Until then the gzip CRC32 in
+  `.tar.gz` is sufficient for the host-local threat model.
+
+- **Cross-version `mode=runtime` restore.** Today refused with
+  HTTP 422 if the dump's schema doesn't exactly match. A future
+  enhancement could migrate `restore_temp` forward to the live schema
+  before overlay, enabling "I want to undo bad scan data from a
+  backup taken before yesterday's schema deploy". Operationally
+  complex (Prisma doesn't support migrating a non-public schema).
+
+---
+
 ## SAST dedup — same-scope merger + cross-file recheck verdict (2026-05-15)
 
 ### What shipped

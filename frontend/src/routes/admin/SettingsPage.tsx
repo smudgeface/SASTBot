@@ -552,6 +552,8 @@ export default function SettingsPage() {
 // DB Restore subcomponent
 // --------------------------------------------------------------------------
 
+type RestoreMode = "full" | "runtime";
+
 type RestorePhase =
   | "idle"
   | "confirming"   // modal open, waiting for confirmation
@@ -562,6 +564,7 @@ type RestorePhase =
 function RestoreSection() {
   const { toast } = useToast();
   const [phase, setPhase] = useState<RestorePhase>("idle");
+  const [restoreMode, setRestoreMode] = useState<RestoreMode>("full");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [confirmText, setConfirmText] = useState("");
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
@@ -580,6 +583,7 @@ function RestoreSection() {
     setMigrationsApplied([]);
     setAppVersionWarning(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    // intentionally do NOT reset restoreMode — let the operator keep their selection
   }, []);
 
   // Poll /healthz after a successful restore until the backend comes back up.
@@ -631,7 +635,7 @@ function RestoreSection() {
     formData.append("file", selectedFile, selectedFile.name);
 
     try {
-      const resp = await fetch("/api/admin/db/restore", {
+      const resp = await fetch(`/api/admin/db/restore?mode=${restoreMode}`, {
         method: "POST",
         body: formData,
         credentials: "include",
@@ -701,10 +705,58 @@ function RestoreSection() {
         <p className="text-xs text-muted-foreground mt-0.5">
           Upload a <code className="font-mono">.tar.gz</code> backup produced by the "Download backup"
           button above, or a legacy <code className="font-mono">.dump</code> file from a previous
-          SASTBot version. This will <strong>replace all data</strong> in the database and restart
-          the backend. If the backup is from an older schema version, migrations will be applied
-          automatically.
+          SASTBot version. The backend will restart after a successful restore.
         </p>
+      </div>
+
+      {/* Restore mode selector */}
+      <div className="space-y-2" data-testid="restore-mode-group">
+        <p className="text-xs font-medium text-foreground">Restore mode</p>
+        <div className="space-y-2">
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="radio"
+              name="restore-mode"
+              value="full"
+              checked={restoreMode === "full"}
+              onChange={() => setRestoreMode("full")}
+              className="mt-0.5"
+              data-testid="restore-mode-full"
+            />
+            <div>
+              <span className="text-sm font-medium">Full restore (rebuild from scratch)</span>
+              <p className="text-xs text-muted-foreground">
+                Replaces the entire database with the backup — use this when recovering from data
+                loss or migrating to a new instance.
+              </p>
+            </div>
+          </label>
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="radio"
+              name="restore-mode"
+              value="runtime"
+              checked={restoreMode === "runtime"}
+              onChange={() => setRestoreMode("runtime")}
+              className="mt-0.5"
+              data-testid="restore-mode-runtime"
+            />
+            <div>
+              <span className="text-sm font-medium">Runtime-only restore (undo scan data, keep settings)</span>
+              <p className="text-xs text-muted-foreground">
+                Preserves your current users, credentials, repos, and app settings while
+                restoring scan findings to the backup state — use this to undo a bad scan run
+                without losing configuration changes made since the backup.
+              </p>
+            </div>
+          </label>
+        </div>
+        {restoreMode === "runtime" && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+            If you have deleted any repos or upgraded the backend since this backup was taken, use
+            Full restore instead.
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-3">
@@ -744,7 +796,9 @@ function RestoreSection() {
             <DialogDescription asChild>
               <div className="space-y-3 pt-1">
                 <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive font-medium">
-                  This will replace ALL data in the database. This action cannot be undone.
+                  {restoreMode === "full"
+                    ? "This will replace ALL data in the database. This action cannot be undone."
+                    : "This will overwrite scan data (findings, scan runs, components) from the backup while keeping your current settings, users, and repos. This action cannot be undone."}
                 </div>
                 <p className="text-sm">
                   File to restore:{" "}
