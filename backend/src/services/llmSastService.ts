@@ -36,52 +36,93 @@ const CLAUDE_GID = 1001;
 
 const SeverityEnum = z.enum(["critical", "high", "medium", "low", "info"]);
 
-const SastRecord = z.object({
+export const SastRecord = z.object({
   kind: z.literal("sast"),
   cwe: z.string(),
   severity: SeverityEnum,
   cvss_vector: z.string().optional(),
-  file_path: z.string(),
+  // Accept canonical name and LLM-drift alias.
+  file_path: z.string().optional(),
+  /** LLM-drift alias for file_path — normalized to file_path by .transform(). */
+  file: z.string().optional(),
   start_line: z.number().int().nonnegative(),
   end_line: z.number().int().nonnegative(),
-  summary: z.string(),
+  // Accept canonical name and LLM-drift alias.
+  summary: z.string().optional(),
+  /** LLM-drift alias for summary — normalized to summary by .transform(). */
+  title: z.string().optional(),
   // M6k: snippet is now built by the worker from the file on disk so we
   // can guarantee a canonical N-line context window. Accept the field if
   // the model emits it (back-compat / chatty models) but never trust it.
   snippet: z.string().optional(),
-  confidence: z.number().min(0).max(1),
-  reasoning: z.string(),
-});
+  // Soft fields — sensible defaults if the LLM didn't emit them.
+  confidence: z.number().min(0).max(1).default(0.5),
+  /** LLM-drift alias for reasoning — accepted but not required. */
+  description: z.string().optional(),
+  reasoning: z.string().optional(),
+}).refine(
+  (r) => !!(r.file_path || r.file),
+  { message: "must provide file_path or file" },
+).refine(
+  (r) => !!(r.summary || r.title),
+  { message: "must provide summary or title" },
+).transform((r) => ({
+  ...r,
+  file_path: (r.file_path ?? r.file)!,
+  summary: (r.summary ?? r.title)!,
+  reasoning: r.reasoning ?? r.description ?? "",
+}));
 export type SastRecord = z.infer<typeof SastRecord>;
 
 const SastAbsenceRecord = z.object({
   kind: z.literal("sast_absence"),
   cwe: z.string(),
   severity: SeverityEnum,
-  summary: z.string(),
-  evidence_file: z.string(),
-  evidence_line: z.number().int().nonnegative(),
-  confidence: z.number().min(0).max(1),
-  reasoning: z.string(),
-});
+  summary: z.string().optional(),
+  /** LLM-drift alias for summary. */
+  title: z.string().optional(),
+  evidence_file: z.string().optional(),
+  /** LLM-drift alias for evidence_file (mirrors file alias on SastRecord). */
+  file: z.string().optional(),
+  evidence_line: z.number().int().nonnegative().optional(),
+  confidence: z.number().min(0).max(1).default(0.5),
+  reasoning: z.string().optional(),
+  /** LLM-drift alias for reasoning. */
+  description: z.string().optional(),
+}).refine(
+  (r) => !!(r.summary || r.title),
+  { message: "must provide summary or title" },
+).transform((r) => ({
+  ...r,
+  summary: (r.summary ?? r.title)!,
+  evidence_file: r.evidence_file ?? r.file ?? "",
+  evidence_line: r.evidence_line ?? 0,
+  reasoning: r.reasoning ?? r.description ?? "",
+}));
 export type SastAbsenceRecord = z.infer<typeof SastAbsenceRecord>;
 
 const ReachabilityRecord = z.object({
   kind: z.literal("reachability"),
   sca_issue_id: z.string(),
   reachable: z.boolean(),
-  confidence: z.number().min(0).max(1),
+  confidence: z.number().min(0).max(1).default(0.5),
   call_sites: z
     .array(
       z.object({
-        file: z.string(),
+        // Canonical name. Accept legacy `file` alias; normalize to file_path.
+        file_path: z.string().optional(),
+        /** Legacy alias — normalized to file_path by transform. */
+        file: z.string().optional(),
         line: z.number().int().nonnegative(),
         // Worker-built post-detection (M6k); model may still emit it.
         snippet: z.string().optional(),
-      }),
+      }).transform((s) => ({
+        ...s,
+        file_path: (s.file_path ?? s.file) ?? "",
+      })),
     )
     .default([]),
-  reasoning: z.string(),
+  reasoning: z.string().optional().default(""),
 });
 export type ReachabilityRecord = z.infer<typeof ReachabilityRecord>;
 
@@ -94,7 +135,11 @@ const CompleteRecord = z.object({
 });
 export type CompleteRecord = z.infer<typeof CompleteRecord>;
 
-const DetectionRecord = z.discriminatedUnion("kind", [
+// z.union instead of z.discriminatedUnion: SastRecord, SastAbsenceRecord,
+// and ReachabilityRecord all have .refine()/.transform() (ZodEffects) which
+// Zod v3 discriminatedUnion does not accept. z.union still correctly narrows
+// on the `kind` literal; the small performance difference is negligible here.
+export const DetectionRecord = z.union([
   SastRecord,
   SastAbsenceRecord,
   ReachabilityRecord,
@@ -701,6 +746,7 @@ export type RecheckCompleteRecord = z.infer<typeof RecheckCompleteRecord>;
  *  plus the recheck candidates themselves are all valid duplicate targets. */
 export interface RecheckDuplicateTarget {
   id: string;
+  /** Repo-rooted path. Translated to scope-relative before writing to prompt input. */
   file: string;
   line: number;
   cwe: string;
@@ -710,8 +756,8 @@ export interface RecheckDuplicateTarget {
 export interface RecheckIssueInput {
   /** SastIssue.id — round-trips through the LLM so we can map verdict back. */
   id: string;
-  file: string;
-  line: number;
+  file_path: string;
+  start_line: number;
   summary: string;
   snippet: string;
   cwe: string;
@@ -798,7 +844,7 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
   // scope-relative. DB stores repo-rooted; translate per-issue.
   const issuesForModel = input.issues.map((i) => ({
     ...i,
-    file: toScopeRelative(input.scopePath, i.file),
+    file_path: toScopeRelative(input.scopePath, i.file_path),
   }));
   const jsonl = issuesForModel.map((i) => JSON.stringify(i)).join("\n") + "\n";
   await fs.writeFile(issuesInputPath, jsonl, { encoding: "utf8", mode: 0o644 });
@@ -813,7 +859,7 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
     .filter((t) => !candidateIds.has(t.id))
     .map((t) => ({
       ...t,
-      file: toScopeRelative(input.scopePath, t.file),
+      file_path: toScopeRelative(input.scopePath, t.file),
     }));
   const targetsJsonl = targetsForModel.length > 0
     ? targetsForModel.map((t) => JSON.stringify(t)).join("\n") + "\n"
@@ -1348,9 +1394,9 @@ export async function persistDetection(
       // 7-line layout. The LLM-supplied snippet is fallback only.
       const repoRootedSites = await Promise.all(
         r.call_sites.map(async (s) => {
-          const fileSnippet = await readSourceSnippet(input.scopeDir, s.file, s.line);
+          const fileSnippet = await readSourceSnippet(input.scopeDir, s.file_path, s.line);
           return {
-            file: toRepoRelative(input.scopePath, s.file),
+            file: toRepoRelative(input.scopePath, s.file_path),
             line: s.line,
             snippet: fileSnippet?.text ?? s.snippet ?? "",
           };

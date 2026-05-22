@@ -39,7 +39,7 @@ Read `{{SBOM_FILE}}`. **Silence means keep** — components you don't emit a
 record for are kept as-is. Do NOT emit a bare `keep` record for every
 component; only emit records when you have something to say:
 
-- Emit `{"type":"drop","component_id":"<id>","reason":"<reason>","evidence_path":"<optional>"}` if:
+- Emit `{"type":"drop","component_id":"<id>","reason":"<reason>"}` if:
   - Its name starts with a FIRST_PARTY_NAMESPACES prefix, OR
   - It's test-only, build-only, or a .NET BCL assembly, OR
   - You read the source and confirmed it doesn't ship in the product.

@@ -17,7 +17,7 @@ no new findings.
       {{ISSUES_INPUT_PATH}}
 
   Format: JSON-Lines, one object per line with fields
-  `{id, file, line, summary, snippet, cwe}`.
+  `{id, file_path, start_line, summary, snippet, cwe}`.
 
 - **Duplicate targets** ({{DUPLICATE_TARGETS_COUNT}} rows) — other active SAST
   issues in this scope that a candidate could be a relocated / re-labeled
@@ -26,7 +26,7 @@ no new findings.
       {{DUPLICATE_TARGETS_PATH}}
 
   Format: JSON-Lines, one object per line with fields
-  `{id, file, line, cwe, summary}`. Use this list when deciding whether to
+  `{id, file_path, start_line, cwe, summary}`. Use this list when deciding whether to
   emit a `duplicate_of` verdict (see below).
 
 ## What to do

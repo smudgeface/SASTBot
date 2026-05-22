@@ -2308,3 +2308,29 @@ Added the `DELETE /api/scans/:id` admin endpoint and its backing service functio
 - **Artifact cleanup is best-effort.** After the DB row is deleted (cascading `sbom_components`, `scan_findings`, etc.), `deleteScanArtifacts` removes the SBOM + SARIF files from disk. A filesystem error logs a warning but does not undo the DB delete — the DB is authoritative.
 - **Unit tests** in `backend/tests/scansDelete.test.ts` cover all five cases: happy path, 409 guard, 404, 400 (pending + running), and artifact-cleanup failure swallowed.
 
+---
+
+### M9 schema fixes for LLM record drift — v0.8.1 (2026-05-22)
+
+Closes Issues 2 and 9 in `docs/M9_POST_B_FOLLOWUPS.md`. The 2026-05-22 FSS closure-gate scan completed with `status=success` but zero SAST findings (vs. 42 on the prior run) and only 1 SBOM component (vs. 32). Root cause: two independent schema/prompt mismatches caused the parser to drop every valid record the LLM emitted.
+
+**Root causes fixed:**
+
+- **SBOM (`evidence_path: Required` — Issue 2).** `AddRecord.evidence_path` was marked required even though the prompt correctly instructs the LLM to emit the new `evidence: [{path, line}]` shape. Every `add` record was rejected at the Zod boundary. Fix: make all three evidence shapes (`evidence`, `evidence_paths`, `evidence_path`) optional individually, add a `.refine()` that requires at least one to be present, and update downstream callers to derive the primary path defensively.
+
+- **SAST (field-name aliases — Issue 9).** `SastRecord` required `file_path`, `summary`, `confidence`, and `reasoning` by exact name. On this run (Opus 4.7, xhigh effort) the LLM emitted `file`, `title`, `description`, and omitted `confidence`/`reasoning`. All 74 records were rejected. Fix: accept `file`/`title`/`description` as aliases; use `.refine()` + `.transform()` to normalize to canonical names; give `confidence` and `reasoning` safe `.default()` values. Same defensive treatment applied to `SastAbsenceRecord` and `ReachabilityRecord.call_sites[]` (`file` → `file_path`).
+
+**Prompt cleanup:**
+
+- `sast_detection.md`: added "Field-name discipline" section explicitly forbidding `file`/`title`/`description` aliases and listing required fields with defaults. Updated `reachability` example to use `file_path` in `call_sites`.
+- `sast_recheck.md`: updated issues-input format description from `{id, file, line, ...}` to `{id, file_path, start_line, ...}` — matches the updated producer code.
+- `sbom_system.md` / `sbom_augmentation.md`: tightened `evidence` as the only recommended emit shape; `evidence_paths` and `evidence_path` marked deprecated (still accepted).
+
+**Producer update:** `RecheckIssueInput` interface renamed `file` → `file_path`, `line` → `start_line`. Writer in `runRecheck()` and caller in `worker.ts` updated to match.
+
+**Schema union switch:** `DetectionRecord` and `AugmentationRecord` switched from `z.discriminatedUnion` to `z.union` because Zod v3 `discriminatedUnion` doesn't accept `ZodEffects` (the result of `.refine()` / `.transform()`). Semantics are identical; the discriminator literal is still checked at parse time.
+
+**Tests:** 8 new fixture-based unit tests in `backend/tests/llmRecordParseFixtures.test.ts`. Fixtures are the exact 5 SAST + 5 SBOM records that the old schema rejected from the live FSS scan, captured in `backend/tests/fixtures/`. Every fixture line must parse successfully; the tests also verify canonical field names are populated after the transform.
+
+**What we learned:** LLM output is not deterministic across effort levels and model versions. Schema must be defensively forgiving of common name aliases and soft-field omissions — treat anything the LLM "should always include" as an optional-with-default, not required. The `info`-severity `llm_*_parse_errors` warning type needs an escalation path when the drop ratio is high (Issue 10, still pending).
+

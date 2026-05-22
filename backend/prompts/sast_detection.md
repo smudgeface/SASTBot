@@ -63,6 +63,18 @@ sites of the vulnerable component or its known-affected APIs. Emit a
 absence is useful signal too. Skip records only if you genuinely couldn't
 assess (e.g., couldn't determine the affected APIs).
 
+## Field-name discipline
+
+Use EXACTLY these field names. Common drift the schema will reject:
+
+- `file` → use `file_path` instead (applies to ALL record kinds including reachability `call_sites`)
+- `title` → use `summary` instead
+- `description` → use `reasoning` instead
+- omitting `confidence` → always emit; use `0.5` if uncertain
+- omitting `reasoning` → always emit; use a brief one-liner
+
+If you cannot produce one of the required fields, omit the entire record. Partial records get dropped.
+
 ## Output format (JSON-Lines)
 
 Emit one JSON object **per line** — the entire object on a single line, with
@@ -101,7 +113,7 @@ the wrong line creates duplicate findings on the next scan.
 ### `kind: "reachability"` — SCA reachability verdict
 
 ```
-{"kind":"reachability","sca_issue_id":"abc123-...","reachable":true,"confidence":0.85,"call_sites":[{"file":"src/utils.js","line":42}],"reasoning":"lodash.template called with a user-controlled string in BuildManager."}
+{"kind":"reachability","sca_issue_id":"abc123-...","reachable":true,"confidence":0.85,"call_sites":[{"file_path":"src/utils.js","line":42}],"reasoning":"lodash.template called with a user-controlled string in BuildManager."}
 ```
 
 For `reachable: false`, omit `call_sites` (or pass an empty array) and explain

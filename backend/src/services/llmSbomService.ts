@@ -64,7 +64,7 @@ const DropRecord = z.object({
 });
 export type DropRecord = z.infer<typeof DropRecord>;
 
-const AddRecord = z.object({
+export const AddRecord = z.object({
   type: z.literal("add"),
   name: z.string(),
   // The LLM sometimes emits the literal string "unknown" (or "" / "*") when
@@ -104,6 +104,11 @@ const AddRecord = z.object({
    *
    * Diagnostic-only; does not participate in dedup. The UI renders each
    * entry as a clickable FileLink (with `$LINE` substitution when set).
+   *
+   * Three shapes are all first-class inputs — at least one is required:
+   *   - `evidence`: array of {path, line?} or plain strings (preferred)
+   *   - `evidence_paths`: array of plain strings (legacy alias)
+   *   - `evidence_path`: single plain string (legacy alias)
    */
   evidence: z
     .array(
@@ -116,21 +121,26 @@ const AddRecord = z.object({
       ]),
     )
     .optional(),
-  /** Deprecated alias for `evidence`, accepted as plain string[]. */
+  /** Legacy alias for `evidence`, accepted as plain string[]. */
   evidence_paths: z.array(z.string()).optional(),
-  // Legacy single-file evidence path. Accepted for backwards-compat with
-  // older prompt versions; new prompts should emit `evidence` instead.
-  evidence_path: z.string(),
+  /** Legacy single-file alias. All three evidence shapes are accepted; prefer `evidence`. */
+  evidence_path: z.string().optional(),
   evidence_excerpt: z.string().optional(),
   llm_reason: z.string(),
   /** When true the version field could not be determined from the source. */
   version_unknown: z.boolean().optional(),
   /** Optional CPE 2.3 string for precise NVD lookup. */
   cpe: z.string().optional(),
-});
+}).refine(
+  (r) => (r.evidence?.length ?? 0) > 0 || (r.evidence_paths?.length ?? 0) > 0 || !!r.evidence_path,
+  { message: "must provide at least one of: evidence, evidence_paths, evidence_path" },
+);
 export type AddRecord = z.infer<typeof AddRecord>;
 
-const AugmentationRecord = z.discriminatedUnion("type", [
+// z.union instead of z.discriminatedUnion: AddRecord has a .refine() (ZodEffects)
+// which Zod v3 discriminatedUnion does not accept. z.union still type-narrows
+// correctly at parse time; the small performance difference is negligible here.
+export const AugmentationRecord = z.union([
   KeepRecord,
   DropRecord,
   AddRecord,
@@ -693,8 +703,12 @@ export function applySbomAugmentation(
         cpeMap.set(r.component_id, r.cpe);
       }
     } else if (r.type === "add") {
+      const primaryEvidencePath = r.evidence_path
+        ?? (typeof r.evidence?.[0] === "string" ? r.evidence[0] : (r.evidence?.[0] as { path: string } | undefined)?.path)
+        ?? r.evidence_paths?.[0]
+        ?? "";
       evidenceMap.set(r.name, {
-        path: r.evidence_path,
+        path: primaryEvidencePath,
         excerpt: r.evidence_excerpt ?? null,
         llmReason: r.llm_reason,
       });
@@ -756,19 +770,23 @@ export function applySbomAugmentation(
       continue;
     }
     // Compose an identity for the incoming add. componentRoot is taken
-    // verbatim when emitted by the LLM; otherwise the parent dir of
-    // evidence_path is a reasonable proxy (the dedup chain falls back to
-    // CPE/PURL/name when this is null).
+    // verbatim when emitted by the LLM; otherwise the parent dir of the
+    // first evidence path is a reasonable proxy (the dedup chain falls back
+    // to CPE/PURL/name when this is null).
     const ecosystem = r.ecosystem ?? "generic";
     const purl = `pkg:${ecosystem}/${encodeURIComponent(r.name)}${r.version ? `@${encodeURIComponent(r.version)}` : ""}`;
-    const componentRoot = r.component_root ?? path.dirname(r.evidence_path);
+    const firstEvidencePath = r.evidence_path
+      ?? (typeof r.evidence?.[0] === "string" ? r.evidence[0] : (r.evidence?.[0] as { path: string } | undefined)?.path)
+      ?? r.evidence_paths?.[0]
+      ?? null;
+    const componentRoot = r.component_root ?? (firstEvidencePath ? path.dirname(firstEvidencePath) : null);
     const incomingIdentity: ComponentIdentity = {
       name: r.name,
       version: r.version ?? null,
       purl,
       ecosystem,
       componentRoot,
-      evidencePath: r.evidence_path,
+      evidencePath: firstEvidencePath,
       cpe: r.cpe ?? null,
       manifestFile: null,
     };
@@ -859,7 +877,11 @@ export function applySbomAugmentation(
     const eco = r.ecosystem ?? "generic";
     const purl = `pkg:${eco}/${encodeURIComponent(r.name)}${r.version ? `@${encodeURIComponent(r.version)}` : ""}`;
     const evidence = normalizeEvidence(r);
-    const componentRoot = r.component_root ?? path.dirname(r.evidence_path);
+    const synthFirstEvidencePath = r.evidence_path
+      ?? (typeof r.evidence?.[0] === "string" ? r.evidence[0] : (r.evidence?.[0] as { path: string } | undefined)?.path)
+      ?? r.evidence_paths?.[0]
+      ?? null;
+    const componentRoot = r.component_root ?? (synthFirstEvidencePath ? path.dirname(synthFirstEvidencePath) : null);
     synthesised.push({
       name: r.name,
       version: r.version ?? undefined,

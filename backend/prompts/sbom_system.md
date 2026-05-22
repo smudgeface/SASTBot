@@ -119,9 +119,7 @@ the component is there. These render as clickable links in the operator UI
 that jump to the file (and line, when present). Diagnostic only; does not
 affect dedup.
 
-Back-compat: `evidence_paths` (array of strings, no line numbers) and the
-older `evidence_path` (single string) are still accepted. New emissions
-should use `evidence`.
+ALWAYS emit `evidence`. The legacy shapes `evidence_paths` (array of strings) and `evidence_path` (single string) are accepted for back-compat but deprecated — do not emit them in new output.
 
 **CPE 2.3 field (`cpe`):** Optional on `keep` and `add` records. Emit when
 you are **reasonably confident** of the canonical CPE vendor + product names
@@ -142,10 +140,7 @@ component whose canonical CPE vendor/product you are not confident about.
 The `component_id` field MUST match the `component_id` value from the SBOM
 file exactly — copy it verbatim. Do not normalise or reformulate it.
 
-`evidence` (or the legacy `evidence_paths` / `evidence_path`) is **required**
-for every `add`. It is strongly recommended for every `drop`. `component_root`
-is also required on every `add` — it's the dedup identity. Use repo-relative
-paths throughout (relative to the clone root, not absolute).
+`evidence` is **required** for every `add` (legacy `evidence_paths` / `evidence_path` also accepted but deprecated). `component_root` is also required on every `add` — it's the dedup identity. Use repo-relative paths throughout (relative to the clone root, not absolute).
 
 Do not emit a record for components you haven't assessed. Do not emit a
 `complete` sentinel — the orchestrator treats session end as completion.
