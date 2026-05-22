@@ -7,7 +7,6 @@ import { promisify } from "node:util";
 import { toRepoRelative } from "./scopePath.js";
 import { extractOccurrences, resolveManifestLines, ScopeFileIndex } from "./sbomOccurrences.js";
 import type { ComponentOccurrence } from "./sbomOccurrences.js";
-import { readManifestSnippet } from "./manifestSnippet.js";
 
 import { Prisma } from "@prisma/client";
 import type { PrismaClient, SbomComponent } from "@prisma/client";
@@ -71,7 +70,7 @@ export interface CycloneDxDocument {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function extractEcosystem(purl: string | undefined): string | null {
+export function extractEcosystem(purl: string | undefined): string | null {
   if (!purl) return null;
   const m = purl.match(/^pkg:([^/]+)\//);
   return m ? m[1] : null;
@@ -89,14 +88,14 @@ function extractEcosystem(purl: string | undefined): string | null {
  *   - maven:  `groupId:artifactId` (colon, matches OSV.dev's Maven format)
  *   - other:  fall back to slash; revisit when those ecosystems land
  */
-function canonicalPackageName(c: CdxComponent, ecosystem: string | null): string {
+export function canonicalPackageName(c: CdxComponent, ecosystem: string | null): string {
   const name = c.name ?? "unknown";
   if (!c.group) return name;
   const sep = ecosystem === "maven" ? ":" : "/";
   return `${c.group}${sep}${name}`;
 }
 
-function extractLicenses(entries: CdxLicenseEntry[] | undefined): string[] {
+export function extractLicenses(entries: CdxLicenseEntry[] | undefined): string[] {
   if (!entries) return [];
   return entries
     .map((e) => e.license?.id ?? e.license?.name ?? e.expression ?? null)
@@ -113,7 +112,7 @@ function extractLicenses(entries: CdxLicenseEntry[] | undefined): string[] {
  * marker. A small fraction of dev-only packages will read as false. v1
  * accepts this; revisit if it bites.
  */
-function extractIsDevOnly(c: CdxComponent): boolean {
+export function extractIsDevOnly(c: CdxComponent): boolean {
   return c.properties?.some(
     (p) => p.name === "cdx:npm:package:development" && p.value === "true",
   ) ?? false;
@@ -685,141 +684,5 @@ export function extractCleanedComponents(doc: CycloneDxDocument): CdxComponent[]
   return postProcessComponents(doc.components ?? []);
 }
 
-/**
- * Persist a pre-augmented component list to the database.
- *
- * This is an alternative to `persistComponents` for when the caller has
- * already run Stage 1 and Stage 2 (LLM augmentation). Evidence from the LLM
- * pass is stored in the `llmEvidence` column. The raw SBOM and componentCount
- * are written to the ScanRun row by the caller before invoking this.
- *
- * `evidenceMap` is keyed by canonical component name (output of
- * canonicalPackageName). Components not in the map get null llmEvidence.
- */
-export async function persistAugmentedComponents(
-  scanRunId: string,
-  components: CdxComponent[],
-  evidenceMap: Map<string, { path: string; excerpt: string | null; llmReason: string }>,
-  client: Tx,
-  scopeDir = "",
-  scopePath = "/",
-  cpeMap?: Map<string, string>,
-  identityMap?: Map<string, { componentRoot: string | null; evidence: Array<{ path: string; line: number | null }> }>,
-): Promise<SbomComponent[]> {
-  const unique = new Map<string, CdxComponent>();
 
-  for (const c of components) {
-    // LLM-added components may not have a purl; synthesise one so dedup works.
-    const purl = c.purl ?? `pkg:generic/${encodeURIComponent(c.name ?? "unknown")}${c.version ? `@${encodeURIComponent(c.version)}` : ""}`;
-    if (!unique.has(purl)) unique.set(purl, { ...c, purl });
-  }
-
-  if (unique.size === 0) {
-    logger.warn({ scanRunId }, "[sbomService] augmented component list is empty");
-    return [];
-  }
-
-  // Pre-build per-component rows so occurrences can be enriched (async)
-  // with manifest line numbers before createMany.
-  type AugRow = {
-    scanRunId: string;
-    name: string;
-    version: string | null;
-    purl: string;
-    ecosystem: string | null;
-    licenses: string[];
-    componentType: string;
-    scope: string | null;
-    isDevOnly: boolean;
-    manifestFile: string | null;
-    discoveryMethod: string;
-    llmEvidence: Prisma.InputJsonValue | undefined;
-    occurrences: ComponentOccurrence[];
-    cpe?: string;
-    componentRoot?: string | null;
-    evidence?: Prisma.InputJsonValue;
-  };
-  const lockfileCache = new Map<string, string[] | null>();
-  const scopeIndex = scopeDir ? new ScopeFileIndex(scopeDir, scopePath) : undefined;
-  const augRows: AugRow[] = [];
-  for (const c of unique.values()) {
-    const ecosystem = extractEcosystem(c.purl);
-    const canonicalName = canonicalPackageName(c, ecosystem);
-    const evidence = evidenceMap.get(canonicalName) ?? null;
-    const sr = extractManifestFile(c, scopeDir);
-    const occurrences = extractOccurrences(c, evidence?.path ?? null, false, scopePath);
-    await resolveManifestLines(occurrences, canonicalName, scopeDir || null, scopePath, lockfileCache, scopeIndex);
-    const cpe = cpeMap?.get(canonicalName);
-    const identity = identityMap?.get(canonicalName);
-    const manifestFile = sr ? toRepoRelative(scopePath, sr) : null;
-
-    // Identity-shaped evidence (the small list rendered as "Evidence" in the
-    // detail panel). Two shapes by priority:
-    //   1. LLM-supplied identityMap with componentRoot (vendored library).
-    //      Use the LLM evidence directly — the prompt already prefers the
-    //      shallowest unique directory.
-    //   2. cdxgen-survivor with manifestFile → resolve the lockfile line +
-    //      ±3-line snippet so the panel can show a code preview.
-    //   3. Nothing — leave empty; falls back to component_root display
-    //      from the column for downstream consumers.
-    let identityEvidence: Array<{ path: string; line?: number | null; snippet?: string | null }> | undefined;
-    if (identity?.evidence && identity.evidence.length > 0) {
-      identityEvidence = identity.evidence.map((e) => ({
-        path: e.path,
-        ...(e.line != null ? { line: e.line } : {}),
-      }));
-    } else if (manifestFile && scopeDir) {
-      // Resolve relative to scopeDir; manifestFile is repo-relative (e.g.
-      // "GoWeb/GoMaxUI/package-lock.json"). toScopeRelative would normally
-      // strip the scope-path prefix, but the file is read by joining
-      // scopeDir + scope-relative path. We already have repo-relative —
-      // strip the leading scopePath when present.
-      const scopeRelative = manifestFile.startsWith(`${scopePath.replace(/^\//, "")}/`)
-        ? manifestFile.slice(scopePath.replace(/^\//, "").length + 1)
-        : manifestFile;
-      const ms = await readManifestSnippet(scopeDir, scopeRelative, canonicalName);
-      identityEvidence = [{
-        path: manifestFile,
-        line: ms.line,
-        snippet: ms.snippet,
-      }];
-    }
-
-    augRows.push({
-      scanRunId,
-      name: canonicalName,
-      version: c.version ?? null,
-      purl: c.purl!,
-      ecosystem,
-      licenses: extractLicenses(c.licenses),
-      componentType: c.type ?? "library",
-      scope: c.scope ?? null,
-      isDevOnly: extractIsDevOnly(c),
-      manifestFile,
-      // M6p Stage 2: discoveryMethod is "llm_augmentation" for LLM-added
-      // components, "manifest" for cdxgen-sourced ones that survived.
-      discoveryMethod: (c as CdxComponent & { discoveryMethod?: string }).discoveryMethod ?? "manifest",
-      llmEvidence: evidence ? (evidence as unknown as Prisma.InputJsonValue) : undefined,
-      occurrences,
-      ...(cpe ? { cpe } : {}),
-      // M7: stable identity primitive for vendored libraries — also the dedup
-      // key in the componentMatch chain.
-      ...(identity?.componentRoot ? { componentRoot: identity.componentRoot } : {}),
-      // Identity-shaped evidence (small; renders as "Evidence" in the UI).
-      ...(identityEvidence ? { evidence: identityEvidence as unknown as Prisma.InputJsonValue } : {}),
-    });
-  }
-
-  await (client as PrismaClient).sbomComponent.createMany({
-    data: augRows.map((r) => ({
-      ...r,
-      occurrences: r.occurrences as unknown as Prisma.InputJsonValue,
-    })),
-    skipDuplicates: true,
-  });
-
-  return (client as PrismaClient).sbomComponent.findMany({
-    where: { scanRunId },
-  });
-}
 

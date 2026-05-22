@@ -4,6 +4,36 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## M9 Stream E1 — SBOM file-first pipeline — v0.9.0 (2026-05-22)
+
+Architectural refactor that makes the per-scan SBOM artifact file the canonical record of what each scan directly observed. After this commit, `sbom_components` rows are derived from the file, not the other way around. Dissolves Issues 1 and 5 in `docs/M9_POST_B_FOLLOWUPS.md`.
+
+### What shipped
+
+- **New `buildAugmentationSbom` in `sbomCurated.ts`.** Builds the CycloneDX 1.7 document from the in-memory post-augmentation component list WITHOUT touching the DB. Includes all `sastbot:*` round-trip properties so `ingestSbomFromArtifact` can reconstruct every typed column. Called by the worker's `sbom_emit` phase instead of the old DB-read path.
+
+- **Rewrote `sbomIngest.ts`.** `ingestSbomFromArtifact` now loads the artifact file, parses every `sastbot:*` property to reconstruct typed fields, and in a single transaction: deletes existing rows, inserts fresh `sbom_components`, and writes `scan_runs.componentCount = doc.components.length`. Idempotent by design — re-running on the same file yields the same row set. Shared by both `source='cdxgen'` and future `source='upload'` flows.
+
+- **Worker SBOM phase block reordered.** New order: `sbom_emit` (buildAugmentationSbom → write file) → `sbom_ingest` (read file → populate DB) → `persistScanComponentsToScopeState` (scope-level) → `llm_sbom_recheck` (scope-only) → OSV/NVD. The old `persistAugmentedComponents` transaction and the end-of-block `emitSbomArtifact` call are gone.
+
+- **`materializeRecoveredComponents` refactored (scope-only).** No longer inserts `sbom_components` rows. Instead updates `scope_components.lastSeenScanRunId = scanRunId` for each recovered component. The per-scan audit table is immutable post-ingest.
+
+- **`rebuildComponentsFromScopeState` deleted.** This function inserted `sbom_components` rows after recheck merges. After E1 the per-scan table is frozen; scope merges happen only in `scope_components`. The downstream OSV/NVD phases run against direct-observation components only.
+
+- **`persistAugmentedComponents` deleted from `sbomService.ts`.** All four previously-private helpers (`extractEcosystem`, `canonicalPackageName`, `extractLicenses`, `extractIsDevOnly`) are now exported for use by `buildAugmentationSbom`.
+
+- **Tests.** New `backend/tests/sbomFileFirst.test.ts` — 17 tests covering: CycloneDX doc shape, D4 property sort invariant, discoveryMethod round-trip (manifest + llm_augmentation), isDevOnly round-trip, componentCount from file, idempotency, no recheck_recovery rows in pipeline output, CPE + LLM evidence round-trip, error handling. Rewrote `sbomIngest.test.ts` (was testing the old throwing skeleton; now a smoke test pointing at the real implementation).
+
+- **Version bumped 0.8.1 → 0.9.0** (MINOR — per-scan SBOM endpoint's content changes: recheck_recovery rows disappear) in all four version surfaces.
+
+### What we learned
+
+- **File-first = single write path = immutable audit.** The core benefit: `sbom_components` now has exactly one writer (`ingestSbomFromArtifact`). All the denorm-staleness and scan-vs-scope divergence bugs were downstream effects of multiple writer paths.
+- **`vi.restoreAllMocks()` destroys mock implementations across tests.** Use `vi.clearAllMocks()` in `afterEach` when you need to preserve mock implementation state across test runs in the same file.
+- **`txProxy` mock pattern.** Mocking `$transaction` by passing a fake tx object to the callback is the cleanest approach for unit-testing Prisma-transactional code without a real DB.
+
+---
+
 ## M9 Stream B5+B6 (Deploy 3) — drop JSONB columns; endpoint switch — v0.8.0 (2026-05-22)
 
 The third and final artifact-pipeline deploy. Drops the two JSONB columns that held per-scan SBOM and SARIF data, switches the scan-page endpoints to read from artifact files instead, and deletes three now-obsolete boot backfills. No backfill — locked posture: legacy scans (run before Deploy 2) have no artifact file and the endpoints return 404 with a "re-run to produce artifact" message. The UI renders this as a friendly inline state rather than an error toast.

@@ -15,6 +15,17 @@
 
 import { prisma } from "../db.js";
 import { sbomPathFor, writeArtifact } from "./artifactStore.js";
+import {
+  type CdxComponent,
+  canonicalPackageName,
+  extractEcosystem,
+  extractIsDevOnly,
+  extractLicenses,
+  extractManifestFile,
+} from "./sbomService.js";
+import { extractOccurrences, resolveManifestLines, ScopeFileIndex } from "./sbomOccurrences.js";
+import { readManifestSnippet } from "./manifestSnippet.js";
+import { toRepoRelative } from "./scopePath.js";
 
 // ---------------------------------------------------------------------------
 // D5 — Key-stable JSON serializer
@@ -448,3 +459,223 @@ export async function buildCuratedSbomJsonForScope(
     components,
   };
 }
+
+// ---------------------------------------------------------------------------
+// E1: Build the canonical CycloneDX 1.7 document from the in-memory
+// post-augmentation component list, WITHOUT touching the DB.
+// ---------------------------------------------------------------------------
+
+interface LlmEvidenceInput {
+  path: string;
+  excerpt: string | null;
+  llmReason: string;
+}
+
+interface IdentityMetadata {
+  componentRoot: string | null;
+  evidence: Array<{ path: string; line: number | null }>;
+}
+
+/**
+ * Build a CycloneDX 1.7 document from the in-memory post-augmentation
+ * component list (the worker's `finalComponents`), WITHOUT touching the DB.
+ *
+ * Output includes `sastbot:*` properties that round-trip every typed column
+ * so `ingestSbomFromArtifact` can reconstruct the DB rows from the file.
+ * Only "manifest" and "llm_augmentation" appear as discoveryMethod at this
+ * point — "recheck_recovery" is scope-level and never enters this path.
+ */
+export async function buildAugmentationSbom(input: {
+  scanRunId: string;
+  scopeId: string;
+  scopePath: string;
+  scanDir: string;
+  components: CdxComponent[];
+  sbomEvidenceMap: Map<string, LlmEvidenceInput>;
+  sbomCpeMap: Map<string, string>;
+  sbomIdentityMap: Map<string, IdentityMetadata>;
+  startedAt?: Date | null;
+  finishedAt?: Date | null;
+  repoName: string;
+  repoDefaultBranch: string | null;
+}): Promise<CuratedSbomDoc> {
+  const {
+    scanRunId, scopePath, scanDir,
+    components: rawComponents,
+    sbomEvidenceMap, sbomCpeMap, sbomIdentityMap,
+    startedAt, finishedAt,
+    repoName, repoDefaultBranch,
+  } = input;
+
+  // D2 comparator: sort occurrences by (path asc, line asc nulls-first).
+  function sortOccurrences(arr: ComponentOccurrence[]): ComponentOccurrence[] {
+    return [...arr].sort((a, b) => {
+      const pathCmp = a.path.localeCompare(b.path);
+      if (pathCmp !== 0) return pathCmp;
+      return (a.line ?? -Infinity) - (b.line ?? -Infinity);
+    });
+  }
+
+  // Dedup by purl (same logic as persistAugmentedComponents).
+  const unique = new Map<string, CdxComponent>();
+  for (const c of rawComponents) {
+    const purl = c.purl ?? `pkg:generic/${encodeURIComponent(c.name ?? "unknown")}${c.version ? `@${encodeURIComponent(c.version)}` : ""}`;
+    if (!unique.has(purl)) unique.set(purl, { ...c, purl });
+  }
+
+  const lockfileCache = new Map<string, string[] | null>();
+  const scopeIndex = scanDir ? new ScopeFileIndex(scanDir, scopePath) : undefined;
+  const cdxComponents: CycloneDxComponent[] = [];
+
+  for (const c of unique.values()) {
+    const ecosystem = extractEcosystem(c.purl);
+    const canonicalName = canonicalPackageName(c, ecosystem);
+    const evidence = sbomEvidenceMap.get(canonicalName) ?? null;
+    const identity = sbomIdentityMap.get(canonicalName) ?? null;
+    const cpe = sbomCpeMap.get(canonicalName);
+    const sr = extractManifestFile(c, scanDir);
+    const manifestFile = sr ? toRepoRelative(scopePath, sr) : null;
+
+    // Occurrences: same logic as persistAugmentedComponents.
+    const occurrences = extractOccurrences(c, evidence?.path ?? null, false, scopePath);
+    await resolveManifestLines(occurrences, canonicalName, scanDir || null, scopePath, lockfileCache, scopeIndex);
+
+    // Identity-shaped evidence (same priority chain as persistAugmentedComponents).
+    let identityEvidence: Array<{ path: string; line?: number | null; snippet?: string | null }> | undefined;
+    if (identity?.evidence && identity.evidence.length > 0) {
+      identityEvidence = identity.evidence.map((e) => ({
+        path: e.path,
+        ...(e.line != null ? { line: e.line } : {}),
+      }));
+    } else if (manifestFile && scanDir) {
+      const scopeRelative = manifestFile.startsWith(`${scopePath.replace(/^\//, "")}/`)
+        ? manifestFile.slice(scopePath.replace(/^\//, "").length + 1)
+        : manifestFile;
+      const ms = await readManifestSnippet(scanDir, scopeRelative, canonicalName);
+      identityEvidence = [{ path: manifestFile, line: ms.line, snippet: ms.snippet }];
+    }
+
+    const discoveryMethod = (c as CdxComponent & { discoveryMethod?: string }).discoveryMethod ?? "manifest";
+    const isDevOnly = extractIsDevOnly(c);
+    const licenses = extractLicenses(c.licenses);
+
+    // Build CycloneDX component.
+    const cdxComp: CycloneDxComponent = {
+      type: c.type ?? "library",
+      name: canonicalName,
+      purl: c.purl!,
+      "bom-ref": c.purl!,
+    };
+    if (c.version) cdxComp.version = c.version;
+    if (c.scope) cdxComp.scope = c.scope;
+
+    // D3: sort licenses lexicographically.
+    if (licenses.length > 0) {
+      cdxComp.licenses = [...licenses].sort().map((id) => ({ license: { id } }));
+    }
+
+    // Evidence: identity block (manifest or componentRoot) + occurrences.
+    const cdxEvidence: CycloneDxEvidence = {};
+    if (identity?.componentRoot) {
+      cdxEvidence.identity = [{
+        field: "purl",
+        concludedValue: identity.componentRoot,
+        methods: [{ technique: "filename", value: identity.componentRoot, confidence: 0.9 }],
+        confidence: 0.9,
+      }];
+    } else if (manifestFile) {
+      cdxEvidence.identity = [{
+        field: "purl",
+        concludedValue: manifestFile,
+        methods: [{ technique: "manifest-analysis", value: manifestFile, confidence: 0.8 }],
+        confidence: 0.8,
+      }];
+    }
+    const sortedOccurrences = sortOccurrences(occurrences);
+    if (sortedOccurrences.length > 0) {
+      cdxEvidence.occurrences = sortedOccurrences.map((o) => ({
+        location: o.line != null ? `${o.path}#${o.line}` : o.path,
+      }));
+    }
+    if (cdxEvidence.identity || cdxEvidence.occurrences) cdxComp.evidence = cdxEvidence;
+
+    // Properties — all the sastbot:* round-trip properties.
+    const properties: Array<{ name: string; value: string }> = [];
+
+    properties.push({ name: "sastbot:discovery_method", value: discoveryMethod });
+    if (identity?.componentRoot) {
+      properties.push({ name: "sastbot:component_root", value: identity.componentRoot });
+    }
+    if (cpe) {
+      properties.push({ name: "sastbot:cpe", value: cpe });
+    }
+    if (ecosystem) {
+      properties.push({ name: "sastbot:ecosystem", value: ecosystem });
+    }
+    if (identityEvidence && identityEvidence.length > 0) {
+      properties.push({ name: "sastbot:identity_evidence", value: JSON.stringify(identityEvidence) });
+    }
+    if (evidence) {
+      properties.push({ name: "sastbot:llm_evidence", value: JSON.stringify({
+        path: evidence.path,
+        excerpt: evidence.excerpt,
+        llmReason: evidence.llmReason,
+      })});
+    }
+    if (manifestFile) {
+      properties.push({ name: "sastbot:manifest_file", value: manifestFile });
+    }
+    if (occurrences.length > 0) {
+      properties.push({ name: "sastbot:occurrences", value: JSON.stringify(occurrences) });
+    }
+    if (c.scope) {
+      properties.push({ name: "sastbot:scope", value: c.scope });
+    }
+    if (c.type) {
+      properties.push({ name: "sastbot:component_type", value: c.type });
+    }
+    if (isDevOnly) {
+      properties.push({ name: "cdx:npm:package:development", value: "true" });
+    }
+
+    // D4: sort properties lexicographically.
+    properties.sort((a, b) => {
+      const nameCmp = a.name.localeCompare(b.name);
+      return nameCmp !== 0 ? nameCmp : a.value.localeCompare(b.value);
+    });
+    if (properties.length > 0) cdxComp.properties = properties;
+
+    cdxComponents.push(cdxComp);
+  }
+
+  // Sort components by (ecosystem, name, purl) — D1 tiebreaker.
+  cdxComponents.sort((a, b) => {
+    const ecoA = a.properties?.find((p) => p.name === "sastbot:ecosystem")?.value ?? "";
+    const ecoB = b.properties?.find((p) => p.name === "sastbot:ecosystem")?.value ?? "";
+    const ecoCmp = ecoA.localeCompare(ecoB);
+    if (ecoCmp !== 0) return ecoCmp;
+    const nameCmp = a.name.localeCompare(b.name);
+    if (nameCmp !== 0) return nameCmp;
+    return a.purl.localeCompare(b.purl);
+  });
+
+  const timestamp = (finishedAt ?? startedAt ?? new Date()).toISOString();
+
+  return {
+    bomFormat: "CycloneDX",
+    specVersion: "1.7",
+    serialNumber: `urn:uuid:${scanRunId}`,
+    version: 1,
+    metadata: {
+      timestamp,
+      tools: { components: SBOM_TOOLS_COMPONENTS },
+      component: {
+        type: "application",
+        name: `${repoName}${scopePath === "/" ? "" : scopePath}`,
+        version: repoDefaultBranch ?? undefined,
+      },
+    },
+    components: cdxComponents,
+  };
+}
+

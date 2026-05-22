@@ -13,8 +13,6 @@ import { cloneOrRefresh, RemoteUnreachableError } from "./services/repoCache.js"
 import { GitCloneError } from "./services/gitClone.js";
 import {
   extractCleanedComponents,
-  persistAugmentedComponents,
-  persistComponents,
   runCdxgen,
 } from "./services/sbomService.js";
 import { queryAndPersistFindings, backfillCvssScores, backfillManifestOrigin } from "./services/osvService.js";
@@ -24,9 +22,9 @@ import { backfillReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
 import { toRepoRelative } from "./services/scopePath.js";
 import { buildSarifFromIssues } from "./services/sarifService.js";
-import { emitSbomArtifact } from "./services/sbomCurated.js";
+import { buildAugmentationSbom, stableStringify } from "./services/sbomCurated.js";
 import { ingestSbomFromArtifact } from "./services/sbomIngest.js";
-import { sarifPathFor, writeArtifact } from "./services/artifactStore.js";
+import { sarifPathFor, sbomPathFor, writeArtifact } from "./services/artifactStore.js";
 import {
   applyRecheckVerdicts,
   cleanupTmp as cleanupLlmTmp,
@@ -42,7 +40,7 @@ import {
   cleanupSbomTmp,
   runSbomAugmentation,
 } from "./services/llmSbomService.js";
-import { persistScanComponentsToScopeState, materializeRecoveredComponents, rebuildComponentsFromScopeState } from "./services/scopeComponentService.js";
+import { persistScanComponentsToScopeState, materializeRecoveredComponents } from "./services/scopeComponentService.js";
 import { runSbomRecheck } from "./services/llmSbomRecheckService.js";
 import type { ScanWarning } from "./schemas.js";
 import { Prisma } from "@prisma/client";
@@ -1330,41 +1328,67 @@ const worker = new Worker<ScanJobData>(
         await cleanupSbomTmp(scanRunId);
       }
 
-      // ── Step 3.9: persist augmented components ───────────────────────────
-      let components = await prisma.$transaction(async (tx) => {
-        // Update the component count on the run row.
-        await tx.scanRun.update({
-          where: { id: scanRunId },
-          data: {
-            componentCount: finalComponents.length,
-          },
-        });
-        return persistAugmentedComponents(
+      // ── Step 3.9: emit canonical SBOM artifact (file-first, E1) ─────────────
+      // Build the CycloneDX 1.7 document in memory from the post-augmentation
+      // component list, then write it to disk. This is the canonical source of
+      // truth for what this scan directly observed (manifest + llm_augmentation).
+      // No recheck-recovery rows appear at this point — those are scope-level only.
+      await setPhase(scanRunId, "sbom_emit");
+      try {
+        const sbomEmitDoc = await buildAugmentationSbom({
           scanRunId,
-          finalComponents,
-          sbomEvidenceMap,
-          tx,
-          scanDir,
+          scopeId: run.scopeId,
           scopePath,
+          scanDir,
+          components: finalComponents,
+          sbomEvidenceMap,
           sbomCpeMap,
           sbomIdentityMap,
-        );
-      });
-      log.info({ inserted: components.length }, "[worker] augmented components persisted");
+          startedAt: run.startedAt ?? null,
+          finishedAt: null, // not finished yet
+          repoName: repo.name,
+          repoDefaultBranch: repo.defaultBranch,
+        });
+        await writeArtifact(sbomPathFor(scanRunId), stableStringify(sbomEmitDoc, 2));
+        log.info({ components: sbomEmitDoc.components.length }, "[worker] SBOM artifact written");
+      } catch (err) {
+        log.error({ err: (err as Error).message }, "[worker] sbom_emit failed");
+        await appendWarning(scanRunId, {
+          code: "sbom_emit_failed",
+          severity: "error",
+          message: `Failed to write SBOM artifact: ${(err as Error).message}`,
+        });
+      }
+
+      // ── Step 3.92: ingest SBOM from artifact file ─────────────────────────
+      // Reads the just-written file and populates sbom_components + componentCount.
+      // After this, sbom_components is the immutable direct-observation record
+      // for this scan. All subsequent phases read from it; none write to it.
+      await setPhase(scanRunId, "sbom_ingest");
+      try {
+        await ingestSbomFromArtifact(scanRunId);
+        log.info("[worker] sbom_components populated from artifact file");
+      } catch (err) {
+        log.error({ err: (err as Error).message }, "[worker] sbom_ingest failed");
+        await appendWarning(scanRunId, {
+          code: "sbom_ingest_failed",
+          severity: "error",
+          message: `Failed to ingest SBOM artifact: ${(err as Error).message}`,
+        });
+      }
 
       // ── Step 3.95: persist components into scope-level state ─────────────
-      // This upserts scope_components rows and inserts scan_run_components join
-      // rows for every component surfaced by the augmentation pass. Must happen
-      // before the recheck phase so the candidate set (active rows NOT in this
-      // run's join table) is correctly populated.
+      // Reads the now-populated sbom_components rows for this scan and upserts
+      // scope_components + scan_run_components join rows. Must happen before the
+      // recheck phase so the candidate set (active rows NOT in this run's join
+      // table) is correctly populated.
       //
-      // Gated on augmentation success: when augmentation fails, `components` is
-      // the Stage-1 cdxgen-cleaned output, which for most repos is dominated by
-      // CMake probe noise (Eigen find_package() targets, etc.). Persisting that
-      // noise into scope_components pollutes the durable truth set with rows
-      // that aren't real components. The recheck phase below will still run
-      // and use existing scope_components as its truth set, so prior-run
-      // recovery still works.
+      // Gated on augmentation success: when augmentation fails, finalComponents
+      // is the Stage-1 cdxgen-cleaned output, which for most repos is dominated
+      // by CMake probe noise. Persisting that noise into scope_components would
+      // pollute the durable truth set.
+      let components = await prisma.sbomComponent.findMany({ where: { scanRunId } });
+
       if (!augmentationFailed) {
         try {
           const scopeState = await persistScanComponentsToScopeState(
@@ -1386,11 +1410,12 @@ const worker = new Worker<ScanJobData>(
         );
       }
 
-      // ── Step 3.97: LLM SBOM component recheck ───────────────────────────
+      // ── Step 3.97: LLM SBOM component recheck (scope-only) ───────────────
       // Compares scope-level truth set (active components not seen this run)
-      // against the filesystem and LLM. Components confirmed present are
-      // recovered into this run's scan_run_components join table so downstream
-      // OSV / NVD / detection passes can pick them up.
+      // against the filesystem and LLM. Confirmed-present components are
+      // recovered into scope_components (lastSeenScanRunId bumped). The
+      // per-scan sbom_components table is NOT modified — it stays immutable
+      // post-ingest and contains direct observations only.
       try {
         const sbomRecheckTokenBudget = repo.llmSbomRecheckTokenBudget ?? DEFAULT_LLM_SBOM_RECHECK_TOKEN_BUDGET;
         const recheckEffort = repo.llmSbomRecheckEffort ?? "medium";
@@ -1426,48 +1451,24 @@ const worker = new Worker<ScanJobData>(
           "[worker] SBOM component recheck finished",
         );
 
-        // Materialize recovered components into sbom_components rows for this
-        // scan_run AND extend the in-memory `components` array. Without this
-        // step the downstream OSV / NVD / detection passes would skip the
-        // recovered components and only re-issue stale vuln data from prior
-        // scans, defeating the point of the recheck.
+        // E1: scope-only recovery — bump scope_components.lastSeenScanRunId
+        // only. No sbom_components writes; no in-memory list extension.
+        // OSV / NVD phases run against direct-observation components only
+        // (what this scan actually found via cdxgen + LLM augmentation).
         if (recheckResult.recovered.length > 0) {
           try {
-            const recovered = await materializeRecoveredComponents(
+            const { updated } = await materializeRecoveredComponents(
               recheckResult.recovered,
               scanRunId,
             );
-            components.push(...recovered);
             log.info(
-              { materialized: recovered.length, totalComponents: components.length },
-              "[worker] recovered components materialized into in-memory set",
+              { updated },
+              "[worker] recovered components: scope_components.lastSeenScanRunId bumped (scope-only)",
             );
           } catch (err) {
             log.error(
               { err: (err as Error).message },
-              "[worker] failed to materialize recovered components — recheck verdicts applied but downstream passes will miss them this run",
-            );
-          }
-        }
-
-        // After all recheck verdicts (present/removed/merge) have been applied,
-        // rebuild the in-memory components array from the post-recheck DB state.
-        // This ensures OSV/NVD/detection see the canonical scope-state names,
-        // not whatever labels the LLM emitted this run that may now be merged
-        // away. Only necessary when merges occurred (otherwise the array is
-        // already accurate), but safe to run unconditionally.
-        if (recheckResult.mergedRowsRemoved > 0) {
-          try {
-            const rebuilt = await rebuildComponentsFromScopeState(scanRunId, run.scopeId);
-            components = rebuilt;
-            log.info(
-              { rebuilt: rebuilt.length, mergedRowsRemoved: recheckResult.mergedRowsRemoved },
-              "[worker] in-memory components rebuilt from scope state after dedup",
-            );
-          } catch (err) {
-            log.error(
-              { err: (err as Error).message },
-              "[worker] failed to rebuild components from scope state — using pre-merge in-memory list",
+              "[worker] failed to bump lastSeenScanRunId on recovered components",
             );
           }
         }
@@ -1518,42 +1519,6 @@ const worker = new Worker<ScanJobData>(
           message: `SBOM component recheck failed: ${(err as Error).message}. Components from prior runs remain active.`,
         });
       }
-
-      // ── Step 3.99: emit canonical SBOM artifact (B1) ─────────────────────
-      // sbom_components is now in its final post-recheck state. Serialize it
-      // to ${ARTIFACT_DIR}/sbom/${scanRunId}.json as the canonical CycloneDX
-      // 1.7 artifact. Failure is an error-severity warning (gates remediation).
-      await setPhase(scanRunId, "sbom_emit");
-      const sbomEmitResult = await emitSbomArtifact(scanRunId).catch((err) => {
-        log.error({ err: (err as Error).message }, "[worker] sbom_emit failed");
-        return null;
-      });
-      if (!sbomEmitResult?.written) {
-        await appendWarning(scanRunId, {
-          code: "sbom_emit_failed",
-          severity: "error",
-          message: `Failed to write canonical SBOM artifact${
-            sbomEmitResult === null ? " (write threw)" : " (no components to emit)"
-          }.`,
-        });
-      }
-
-      // ── Step 3.995: sbom_ingest (B2) — no-op for cdxgen flow ─────────────
-      // For source='cdxgen', sbom_components is already fully populated by
-      // persistAugmentedComponents + recheck — no ingestion needed.
-      // For source='upload' (future B7), we'd read the artifact back in and
-      // upsert sbom_components from the CycloneDX doc. That path is a skeleton
-      // in sbomIngest.ts; this phase fires so the UI sees the tick.
-      await setPhase(scanRunId, "sbom_ingest");
-      const runForIngest = await prisma.scanRun.findUnique({
-        where: { id: scanRunId },
-        select: { source: true },
-      });
-      if (runForIngest?.source === "upload") {
-        await ingestSbomFromArtifact(scanRunId);
-      }
-      // For source='cdxgen' (the only flow today), sbom_components is already
-      // populated — nothing to do.
 
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");

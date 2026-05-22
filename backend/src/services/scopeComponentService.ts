@@ -7,9 +7,10 @@
  *     componentMatch chain to match each emitted sbom_component against
  *     existing scope_components, updating identity fields on match and
  *     inserting on miss.
- *   - `materializeRecoveredComponents` / `rebuildComponentsFromScopeState`:
- *     consumed by the SBOM recheck phase to keep the worker's in-memory list
- *     in sync with the scope-level truth.
+ *   - `materializeRecoveredComponents`: scope-only; bumps lastSeenScanRunId
+ *     on the scope_components rows that the recheck marked "still_present".
+ *     After E1, this function no longer writes to sbom_components — the
+ *     per-scan audit table is immutable post-ingest.
  *
  * The bootstrap backfill that previously ran on every worker boot
  * (backfillScopeComponentsFromLatestScans) was removed: it predated the
@@ -381,185 +382,36 @@ export async function persistScanComponentsToScopeState(
 }
 
 // ---------------------------------------------------------------------------
-// Rebuild the in-memory components array from scope_components post-recheck.
+// E1: Scope-only recovery — bump lastSeenScanRunId on recovered components.
 // ---------------------------------------------------------------------------
 
 /**
- * After all recheck verdicts (present/removed/merge) have been applied,
- * rebuild the in-memory components array from `scope_components` active rows
- * that have a `scan_run_components` join for this scan_run.
+ * After llmSbomRecheckService marks components as "still_present" (recovered),
+ * update scope_components.lastSeenScanRunId = scanRunId for each recovered row.
  *
- * This ensures OSV/NVD/detection see the canonical scope-state names, not
- * whatever labels the LLM emitted this run that may now be merged away.
- *
- * For each returned row, also ensures a corresponding `sbom_components` row
- * exists for this scan_run (insert if missing). This keeps the curated SBOM
- * endpoint consistent with the in-memory list.
- */
-export async function rebuildComponentsFromScopeState(
-  scanRunId: string,
-  scopeId: string,
-): Promise<SbomComponent[]> {
-  // Fetch all scope_components that have a join row for this scan_run and
-  // are still active (merges delete scope_components rows, so removed/dropped
-  // ones will naturally be absent here).
-  const scopeRows = await prisma.$queryRawUnsafe<Array<{
-    id: string;
-    name: string;
-    version: string | null;
-    purl: string;
-    ecosystem: string | null;
-    licenses: string[];
-    component_type: string;
-    scope: string | null;
-    is_dev_only: boolean;
-    manifest_file: string | null;
-    discovery_method: string | null;
-    evidence_line: number | null;
-    evidence_path: string | null;
-    llm_evidence: unknown;
-    cpe: string | null;
-  }>>(
-    `SELECT
-       sc.id, sc.name, sc.version, sc.purl, sc.ecosystem,
-       sc.licenses, sc.component_type, sc.scope, sc.is_dev_only,
-       sc.manifest_file, sc.discovery_method, sc.evidence_line,
-       sc.evidence_path, sc.llm_evidence, sc.cpe
-     FROM scope_components sc
-     INNER JOIN scan_run_components src ON src.scope_component_id = sc.id
-       AND src.scan_run_id = $1::uuid
-     WHERE sc.scope_id = $2::uuid
-       AND sc.dismissed_status = 'active'
-     ORDER BY sc.name ASC`,
-    scanRunId,
-    scopeId,
-  );
-
-  if (scopeRows.length === 0) {
-    logger.info({ scanRunId, scopeId }, "[scopeComponentService] rebuildComponentsFromScopeState: no rows");
-    return [];
-  }
-
-  const rebuilt: SbomComponent[] = [];
-
-  for (const sc of scopeRows) {
-    // Ensure a sbom_components row exists for this scan_run / component.
-    // Conflict target is (scan_run_id, purl): the unique index added in
-    // 20260515090000_dedup_sbom_components_by_purl. Without an explicit
-    // target this clause was a no-op (sbom_components has no other unique
-    // constraint), so every merge-followed-by-rebuild used to duplicate
-    // rows for every active scope_component. See migration comment.
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO sbom_components (
-         id,
-         scan_run_id, name, version, purl, ecosystem,
-         licenses, component_type, scope, is_dev_only,
-         manifest_file, discovery_method, evidence_line,
-         llm_evidence, cpe
-       )
-       SELECT
-         gen_random_uuid(),
-         $1::uuid, sc.name, sc.version, sc.purl, sc.ecosystem,
-         sc.licenses, sc.component_type, sc.scope, sc.is_dev_only,
-         sc.manifest_file,
-         COALESCE(src.discovery_method, sc.discovery_method, 'manifest'),
-         sc.evidence_line, sc.llm_evidence, sc.cpe
-       FROM scope_components sc
-       INNER JOIN scan_run_components src ON src.scope_component_id = sc.id
-         AND src.scan_run_id = $1::uuid
-       WHERE sc.id = $2::uuid
-       ON CONFLICT (scan_run_id, purl) DO NOTHING`,
-      scanRunId,
-      sc.id,
-    );
-
-    // Fetch the sbom_components row (the one we just ensured exists).
-    const sbomRow = await prisma.sbomComponent.findFirst({
-      where: { scanRunId, purl: sc.purl, name: sc.name },
-    });
-
-    if (sbomRow) {
-      rebuilt.push(sbomRow);
-    }
-  }
-
-  logger.info(
-    { scanRunId, scopeId, rebuilt: rebuilt.length, scopeRows: scopeRows.length },
-    "[scopeComponentService] rebuildComponentsFromScopeState complete",
-  );
-
-  return rebuilt;
-}
-
-// ---------------------------------------------------------------------------
-// Materialize recovered components into per-scan sbom_components rows.
-// ---------------------------------------------------------------------------
-
-/**
- * After llmSbomRecheckService recovers components into scope_components, this
- * writes a per-scan SbomComponent row for each recovered component so:
- *
- *   1. The scan's audit trail (sbom_components) reflects that the recovered
- *      component was part of this run's SBOM.
- *   2. The worker's in-memory `components` list can be extended so the
- *      downstream OSV / NVD / detection passes pick them up this run instead
- *      of only carrying forward stale prior-scan vuln data.
- *
- * Discovery method is set to "recheck_recovery" to distinguish these rows
- * from the augmentation pass output. Returns the new rows in Prisma's
- * canonical SbomComponent shape so the caller can append them directly.
+ * E1: this is now scope-only — no sbom_components writes. The per-scan audit
+ * table (sbom_components) is immutable after ingestSbomFromArtifact runs.
+ * Downstream OSV / NVD passes use the ingest-produced rows (direct observations
+ * only); recovered components carry forward via scope_components for future scans.
  */
 export async function materializeRecoveredComponents(
   recoveredScopeComponentIds: string[],
   scanRunId: string,
-): Promise<SbomComponent[]> {
-  if (recoveredScopeComponentIds.length === 0) return [];
+): Promise<{ updated: number }> {
+  if (recoveredScopeComponentIds.length === 0) return { updated: 0 };
 
-  const scopeRows = await prisma.scopeComponent.findMany({
+  await prisma.scopeComponent.updateMany({
     where: { id: { in: recoveredScopeComponentIds } },
-  });
-
-  // createMany + skipDuplicates leans on the (scan_run_id, purl) unique index
-  // added in 20260515090000. Two scope_components rows for the same purl
-  // (legitimate during the transition window before the LLM merge phase has
-  // collapsed naming/version variants) would otherwise produce a Prisma
-  // P2002 here and abort the entire recheck recovery. With skipDuplicates,
-  // the second create silently no-ops and the caller still gets all rows
-  // from the post-create findMany below.
-  await prisma.sbomComponent.createMany({
-    data: scopeRows.map((sc) => ({
-      scanRunId,
-      name: sc.name,
-      version: sc.version,
-      purl: sc.purl,
-      ecosystem: sc.ecosystem,
-      licenses: sc.licenses,
-      componentType: sc.componentType,
-      scope: sc.scope,
-      isDevOnly: sc.isDevOnly,
-      manifestFile: sc.manifestFile,
-      discoveryMethod: "recheck_recovery",
-      evidenceLine: sc.evidenceLine,
-      llmEvidence: sc.llmEvidence ?? undefined,
-      cpe: sc.cpe,
-    })),
-    skipDuplicates: true,
-  });
-
-  // Re-fetch by (scan_run_id, purl) so the caller gets the canonical rows —
-  // whether freshly created or already present from a sibling scope_component
-  // sharing the same purl.
-  const created = await prisma.sbomComponent.findMany({
-    where: {
-      scanRunId,
-      purl: { in: scopeRows.map((sc) => sc.purl) },
+    data: {
+      lastSeenScanRunId: scanRunId,
+      lastSeenAt: new Date(),
     },
   });
 
   logger.info(
-    { scanRunId, requested: scopeRows.length, materialized: created.length },
-    "[scopeComponentService] materializeRecoveredComponents complete",
+    { scanRunId, updated: recoveredScopeComponentIds.length },
+    "[scopeComponentService] materializeRecoveredComponents: scope_components.lastSeenScanRunId bumped",
   );
 
-  return created;
+  return { updated: recoveredScopeComponentIds.length };
 }
