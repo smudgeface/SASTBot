@@ -303,6 +303,7 @@ export type ScanPhase =
   | "llm_detection"
   | "llm_recheck"
   | "sarif_emit"
+  | "sast_ingest"
   | "sca_summaries"
   | "finalizing";
 
@@ -319,6 +320,7 @@ export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
   llm_detection: "LLM SAST detection",
   llm_recheck: "LLM SAST recheck",
   sarif_emit: "Writing SARIF artifact",
+  sast_ingest: "Indexing SAST findings",
   sca_summaries: "Generating summaries",
   finalizing: "Finalizing",
 };

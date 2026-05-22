@@ -21,19 +21,25 @@ import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { backfillReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
 import { toRepoRelative } from "./services/scopePath.js";
-import { buildSarifFromIssues } from "./services/sarifService.js";
+import { buildSastSarifFromDetection } from "./services/sarifService.js";
 import { buildAugmentationSbom, stableStringify } from "./services/sbomCurated.js";
 import { ingestSbomFromArtifact } from "./services/sbomIngest.js";
+import { ingestSastFromArtifact } from "./services/sastIngest.js";
 import { sarifPathFor, sbomPathFor, writeArtifact } from "./services/artifactStore.js";
 import {
   applyRecheckVerdicts,
   cleanupTmp as cleanupLlmTmp,
   persistDetection,
+  persistReachabilityRecords,
   type RecheckIssueInput,
   runDetection,
   runRecheck,
+  type SastRecord,
+  type SastAbsenceRecord,
+  type ReachabilityRecord,
   type ScaHintInput,
 } from "./services/llmSastService.js";
+import { readSourceSnippet } from "./services/sourceSnippet.js";
 import { mergeDuplicateSastIssues } from "./services/sastDedup.js";
 import {
   applySbomAugmentation,
@@ -133,7 +139,8 @@ type ScanPhase =
   | "eol"
   | "llm_detection"
   | "llm_recheck"
-  | "sarif_emit"     // B4: dual-write SARIF to disk + column
+  | "sarif_emit"     // B4: write SARIF artifact to disk from in-memory detection
+  | "sast_ingest"    // E2: ingest SARIF artifact into sast_issues
   | "sca_summaries"
   | "finalizing";
 
@@ -348,38 +355,104 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       });
     }
 
-    // 3. Persist detection records.
-    const persistResult = await persistDetection(prisma, {
-      scanRunId,
-      scopeId: run.scopeId,
-      scopeDir: scanDir,
-      scopePath,
-      orgId: run.orgId,
-      records: detection.records,
-      modelName: "claude-code-cli",
-    });
-    log.info(persistResult, "[worker] LLM detection persisted");
+    // 3. Partition records by kind for the file-first pipeline (Stream E2).
+    //    SAST + absence records go through sarif_emit → sast_ingest.
+    //    Reachability records update sca_issues directly (SARIF is SAST-only).
+    const sastRecords = detection.records.filter((r): r is SastRecord => r.kind === "sast");
+    const absenceRecords = detection.records.filter((r): r is SastAbsenceRecord => r.kind === "sast_absence");
+    const reachabilityRecords = detection.records.filter((r): r is ReachabilityRecord => r.kind === "reachability");
 
-    // 4. Stamp llm summary on every SastIssue from the detection records so
-    //    the scope page shows the LLM's one-liner instead of just rule_id.
-    //    SastIssue.latestFilePath is repo-rooted; translate the LLM's
-    //    scope-relative path before matching.
-    for (const r of detection.records) {
-      if (r.kind === "sast" || r.kind === "sast_absence") {
-        const scopeRelFile = r.kind === "sast" ? r.file_path : r.evidence_file;
-        await prisma.sastIssue.updateMany({
-          where: {
-            scopeId: run.scopeId,
-            lastSeenScanRunId: scanRunId,
-            latestFilePath: toRepoRelative(scopePath, scopeRelFile),
-            latestStartLine: r.kind === "sast" ? r.start_line : r.evidence_line,
-          },
-          data: { latestLlmSummary: r.summary, triageConfidence: r.confidence },
-        });
-      }
+    // 3a. Pre-read snippets from disk for each SAST record so the SARIF file
+    //     stores the canonical 7-line context window (M6k invariant). The
+    //     readSourceSnippet helper is safe to call from multiple records in
+    //     sequence — it does no DB I/O.
+    const sastRecordsForSarif: Array<{
+      cwe: string;
+      severity: string;
+      cvss_vector?: string;
+      file_path: string;
+      start_line: number;
+      end_line: number;
+      summary: string;
+      snippet?: string;
+      confidence: number;
+      reasoning?: string;
+    }> = [];
+    for (const r of sastRecords) {
+      const fileSnippet = await readSourceSnippet(scanDir, r.file_path, r.start_line, r.end_line);
+      sastRecordsForSarif.push({
+        cwe: r.cwe,
+        severity: r.severity,
+        cvss_vector: r.cvss_vector,
+        file_path: r.file_path,
+        start_line: r.start_line,
+        end_line: r.end_line,
+        summary: r.summary,
+        snippet: fileSnippet?.text ?? r.snippet ?? "",
+        confidence: r.confidence,
+        reasoning: r.reasoning,
+      });
     }
 
-    // 5. Recheck pass for any non-terminal SastIssue this detection didn't
+    // 4. sarif_emit phase — write SARIF from in-memory detection buffer.
+    await setPhase(scanRunId, "sarif_emit");
+    const sarifDoc = buildSastSarifFromDetection({
+      detection: { records: sastRecordsForSarif, absences: absenceRecords },
+      scanRunId,
+      scopeId: run.scopeId,
+      scopePath,
+      toolVersion: APP_VERSION,
+      modelName: "claude-code-cli",
+      startedAt: null,
+      endedAt: null,
+    });
+    try {
+      await writeArtifact(sarifPathFor(scanRunId), JSON.stringify(sarifDoc, null, 2));
+    } catch (err) {
+      log.error({ err: (err as Error).message }, "[worker] sarif_emit: disk write failed");
+      await appendWarning(scanRunId, {
+        code: "sarif_emit_failed",
+        severity: "error",
+        message: `Failed to write SARIF artifact: ${(err as Error).message}`,
+      });
+    }
+
+    // 5. sast_ingest phase — read SARIF file and upsert sast_issues.
+    await setPhase(scanRunId, "sast_ingest");
+    try {
+      const ingestResult = await ingestSastFromArtifact({
+        scanRunId,
+        scopeId: run.scopeId,
+        orgId: run.orgId,
+        scopeDir: scanDir,
+        scopePath,
+      });
+      log.info(ingestResult, "[worker] sast_ingest complete");
+    } catch (err) {
+      log.error({ err: (err as Error).message }, "[worker] sast_ingest failed");
+      await appendWarning(scanRunId, {
+        code: "sast_ingest_failed",
+        severity: "error",
+        message: `Failed to ingest SARIF artifact: ${(err as Error).message}`,
+      });
+    }
+
+    // 5a. Persist reachability records separately (they update sca_issues, not
+    //     sast_issues — SARIF is SAST-only per the file-first invariant).
+    if (reachabilityRecords.length > 0) {
+      const reachResult = await persistReachabilityRecords(prisma, {
+        scanRunId,
+        scopeId: run.scopeId,
+        scopeDir: scanDir,
+        scopePath,
+        orgId: run.orgId,
+        records: reachabilityRecords,
+        modelName: "claude-code-cli",
+      });
+      log.info(reachResult, "[worker] reachability records persisted");
+    }
+
+    // 6. Recheck pass for any non-terminal SastIssue this detection didn't
     //    re-emit. Includes "error" rows so they self-heal once the file is
     //    actually gone (per locked decision #7).
     const candidates = await prisma.sastIssue.findMany({
@@ -545,7 +618,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       }
     }
 
-    // 7. Update sastFindingCount denorm.
+    // 7. Update sastFindingCount denorm (post-ingest count from DB).
     const sastCount = await prisma.sastIssue.count({
       where: { scopeId: run.scopeId, lastSeenScanRunId: scanRunId },
     });
@@ -553,49 +626,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       where: { id: scanRunId },
       data: { sastFindingCount: sastCount },
     });
-
-    // 8. Generate the SARIF export from the issues observed in this run so
-    //    operators can hand the standard JSON to dashboards / CI gates /
-    //    compliance evidence collection. Cheap; idempotent.
-    // B4: set sarif_emit phase so the UI sees a live progress tick.
-    await setPhase(scanRunId, "sarif_emit");
-    await regenerateSastSarifForScan(scanRunId, run.scopeId, scopePath);
   } finally {
     await cleanupLlmTmp(scanRunId);
-  }
-}
-
-async function regenerateSastSarifForScan(
-  scanRunId: string,
-  scopeId: string,
-  scopePath: string,
-): Promise<void> {
-  const issues = await prisma.sastIssue.findMany({
-    where: { scopeId, lastSeenScanRunId: scanRunId },
-  });
-  const run = await prisma.scanRun.findUnique({
-    where: { id: scanRunId },
-    select: { startedAt: true, finishedAt: true },
-  });
-  const sarif = buildSarifFromIssues(issues, {
-    toolVersion: APP_VERSION,
-    modelName: "claude-code-cli",
-    scopePath,
-    startedAt: run?.startedAt ?? null,
-    endedAt: run?.finishedAt ?? null,
-  });
-
-  // Write to the artifact file — the only storage path for SARIF since Deploy 3.
-  const sarifBody = JSON.stringify(sarif, null, 2);
-  try {
-    await writeArtifact(sarifPathFor(scanRunId), sarifBody);
-  } catch (err) {
-    logger.error({ err: (err as Error).message, scanRunId }, "[worker] sarif_emit: disk write failed");
-    await appendWarning(scanRunId, {
-      code: "sarif_emit_failed",
-      severity: "error",
-      message: `Failed to write SARIF artifact: ${(err as Error).message}.`,
-    });
   }
 }
 

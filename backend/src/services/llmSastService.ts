@@ -1297,7 +1297,7 @@ async function readMatchLine(
  * file isn't readable (deleted, race, etc.) — that's still stable for the
  * absence/recheck pass that follows.
  */
-async function computeSastFingerprint(
+export async function computeSastFingerprint(
   scopeDir: string,
   filePath: string,
   startLine: number,
@@ -1308,7 +1308,7 @@ async function computeSastFingerprint(
   return createHash("sha256").update(normalizeSnippet(basis)).digest("hex").slice(0, 16);
 }
 
-function computeAbsenceFingerprint(cwe: string): string {
+export function computeAbsenceFingerprint(cwe: string): string {
   return createHash("sha256").update(`__absence__:${cwe}`).digest("hex").slice(0, 16);
 }
 
@@ -1418,6 +1418,85 @@ export async function persistDetection(
       result.reachabilityUpdated++;
     }
     // kind === "complete" — caller logs separately, no persistence.
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// persistReachabilityRecords — extracted from persistDetection (Stream E2)
+//
+// Handles the reachability branch of detection independently so the worker can
+// apply it after sast_ingest without re-running the full persistDetection path.
+// `persistDetection` is kept intact for the dry-run CLI.
+// ---------------------------------------------------------------------------
+
+export interface PersistReachabilityInput {
+  scanRunId: string;
+  scopeId: string;
+  scopeDir: string;
+  scopePath: string;
+  orgId: string | null;
+  records: ReachabilityRecord[];
+  modelName: string;
+}
+
+export interface PersistReachabilityResult {
+  reachabilityUpdated: number;
+  reachabilitySkipped: number;
+}
+
+export async function persistReachabilityRecords(
+  client: Tx,
+  input: PersistReachabilityInput,
+): Promise<PersistReachabilityResult> {
+  const db = client as PrismaClient;
+  const result: PersistReachabilityResult = {
+    reachabilityUpdated: 0,
+    reachabilitySkipped: 0,
+  };
+
+  for (const r of input.records) {
+    // Only update if the ScaIssue belongs to this scope (defense against the
+    // model fabricating an id from a different scope).
+    const scaIssue = await db.scaIssue.findFirst({
+      where: { id: r.sca_issue_id, scopeId: input.scopeId },
+      select: { id: true },
+    });
+    if (!scaIssue) {
+      result.reachabilitySkipped++;
+      logger.warn(
+        { sca_issue_id: r.sca_issue_id, scopeId: input.scopeId },
+        "[llmSastService] reachability record references unknown ScaIssue — skipped",
+      );
+      continue;
+    }
+    // M6k: build call-site snippets from disk so they match the canonical
+    // 7-line layout. The LLM-supplied snippet is fallback only.
+    const repoRootedSites = await Promise.all(
+      r.call_sites.map(async (s) => {
+        const fileSnippet = await readSourceSnippet(input.scopeDir, s.file_path, s.line);
+        return {
+          file: toRepoRelative(input.scopePath, s.file_path),
+          line: s.line,
+          snippet: fileSnippet?.text ?? s.snippet ?? "",
+        };
+      }),
+    );
+    await db.scaIssue.update({
+      where: { id: r.sca_issue_id },
+      data: {
+        confirmedReachable: r.reachable,
+        reachableConfidence: r.confidence,
+        reachableReasoning: r.reasoning,
+        reachableCallSites: repoRootedSites.length > 0
+          ? (repoRootedSites as unknown as Prisma.InputJsonValue)
+          : Prisma.DbNull,
+        reachableAssessedAt: new Date(),
+        reachableModel: input.modelName,
+      },
+    });
+    result.reachabilityUpdated++;
   }
 
   return result;

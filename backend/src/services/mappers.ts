@@ -43,7 +43,7 @@ type ScanPhase = NonNullable<ScanRunOut["current_phase"]>;
 
 const ALLOWED_PHASES: ReadonlyArray<ScanPhase> = [
   "cloning", "cdxgen", "osv", "eol",
-  "llm_detection", "llm_recheck", "sca_summaries", "finalizing",
+  "llm_detection", "llm_recheck", "sast_ingest", "sca_summaries", "finalizing",
 ];
 
 function toPhase(value: string | null): ScanPhase | null {

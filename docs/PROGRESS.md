@@ -4,6 +4,38 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## M9 Stream E2 — SAST file-first pipeline — v0.9.1 (2026-05-22)
+
+Architectural refactor that makes the per-scan SARIF artifact file the canonical record of SAST findings. After this commit, `sast_issues` rows are derived from the SARIF file, not written inline during streaming. Closes M9 Stream E (file-first scan artifact pipeline). Removes the 🏗 Stream E pin from CLAUDE.md.
+
+### What shipped
+
+- **New `buildSastSarifFromDetection` in `sarifService.ts`.** Builds a SARIF v2.1.0 document from in-memory `SastRecord[]` / `SastAbsenceRecord[]` WITHOUT touching the DB. Stores `sastbot:*` round-trip properties per result so `ingestSastFromArtifact` can reconstruct exact `sast_issues` rows (llm_summary, triage_confidence, scope-relative path for fingerprinting). Called by the worker's `sarif_emit` phase instead of the old post-recheck `regenerateSastSarifForScan` path.
+
+- **New `backend/src/services/sastIngest.ts`.** `ingestSastFromArtifact` reads the SARIF artifact, parses every `result` and its `sastbot:*` properties, recomputes fingerprints from disk, and upserts `sast_issues` rows via `upsertSastIssueFromDetection`. Idempotent. Sets `lastSeenScanRunId=scanRunId` on every matched issue. Returns `{inserted, updated}` counts.
+
+- **New `persistReachabilityRecords` exported from `llmSastService.ts`.** Extracts the reachability branch of `persistDetection` so it can run independently after `sast_ingest`. `persistDetection` itself is preserved for the dry-run CLI.
+
+- **Worker SAST phase block reordered (E2).** New order: `llm_detection` (buffer into memory) → `sarif_emit` (buildSastSarifFromDetection → write file) → `sast_ingest` (read file → upsert sast_issues) → reachability persist → `llm_recheck` (mutates triage status only) → apply verdicts → sastFindingCount denorm. The old inline `upsertSastIssueFromDetection` calls during streaming and the post-recheck `regenerateSastSarifForScan` call are gone.
+
+- **`regenerateSastSarifForScan` deleted.** SARIF is emitted exactly once per scan, immediately after `llm_detection`. Recheck verdicts mutate triage status on existing rows — they do not re-read or re-write the SARIF file.
+
+- **New phase `sast_ingest` added.** Added to: Zod enum in `backend/src/schemas.ts`, `ALLOWED_PHASES` in `backend/src/services/mappers.ts`, `ScanPhase` union + `SCAN_PHASE_LABELS` in `frontend/src/api/types.ts`, and local `ScanPhase` type in `worker.ts`. Label: `"Indexing SAST findings"`.
+
+- **`computeSastFingerprint` and `computeAbsenceFingerprint` exported** from `llmSastService.ts` for use by `sastIngest.ts`.
+
+- **Tests.** New `backend/tests/sastFileFirst.test.ts` — 20 tests covering: SARIF doc shape, SAST result properties (sastbot:* round-trip), absence records (no physicalLocation, evidence in properties), CWE taxonomy, property sort invariant, round-trip upsert counts, lastSeenScanRunId invariant, idempotency (first ingest=inserted, second=updated), error handling (no file, invalid JSON, no runs).
+
+- **Version bumped 0.9.0 → 0.9.1** (PATCH — internal refactor; SARIF endpoint content unchanged since it already reflected only this scan's findings) in all five version surfaces.
+
+### What we learned
+
+- **Same snippet = same fingerprint.** When the LLM falls back to snippet hashing (file not readable), two records with identical snippet text produce the same fingerprint even if their CWEs differ. Test fixtures must use distinct snippets per record to avoid silent collision.
+- **SARIF stores round-trip metadata cleanly.** The `result.properties["sastbot:*"]` pattern is the right place for non-standard fields: they survive standard SARIF tooling that ignores unknown properties, and they let ingest reconstruct DB rows without re-running LLM logic.
+- **Recheck is pure lifecycle mutation.** Separating recheck from ingest clarifies the phases: ingest = canonical observation, recheck = scope-level verdict on what changed. These are fundamentally different operations and should never share a code path.
+
+---
+
 ## M9 Stream E1 — SBOM file-first pipeline — v0.9.0 (2026-05-22)
 
 Architectural refactor that makes the per-scan SBOM artifact file the canonical record of what each scan directly observed. After this commit, `sbom_components` rows are derived from the file, not the other way around. Dissolves Issues 1 and 5 in `docs/M9_POST_B_FOLLOWUPS.md`.

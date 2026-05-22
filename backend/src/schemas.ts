@@ -431,7 +431,7 @@ export const ScanRunOutSchema = z.object({
     "cloning", "cdxgen", "llm_sbom", "llm_sbom_recheck",
     "sbom_emit", "sbom_ingest",
     "osv", "nvd", "eol",
-    "llm_detection", "llm_recheck", "sarif_emit",
+    "llm_detection", "llm_recheck", "sarif_emit", "sast_ingest",
     "sca_summaries", "finalizing",
   ]).nullable(),
   phase_progress: z.object({
