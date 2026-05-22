@@ -6,11 +6,11 @@
  * "Download SBOM" — the post-augmentation, path-cleaned, dev-tree-aware
  * artifact that matches the Components tab.
  *
- * The raw cdxgen output stays in `scan_runs.sbom_json` for audit/debug,
- * but is no longer the user-facing surface. It's full of CMake
- * `find_package` probes (StandardMathLibrary, GoogleHash, ...) and
- * absolute "Filename /app/clones/<uuid>/..." paths that cdxgen's CMake
- * parser emits regardless of the process CWD.
+ * The curated SBOM is written to the artifact store (`${ARTIFACT_DIR}/sbom/<scanRunId>.json`)
+ * by the `sbom_emit` worker phase (M9 Stream B1) and served by
+ * `GET /scans/:id/sbom`. The raw cdxgen output is no longer stored — legacy
+ * scans (run before M9 Stream B) have no artifact file and that endpoint
+ * returns 404 with a re-run hint.
  */
 
 import { prisma } from "../db.js";

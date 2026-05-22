@@ -5,6 +5,7 @@ import { ArrowLeft, Download, Loader2 } from "lucide-react";
 import { useSbomJson, useScanDetail } from "@/api/queries/scans";
 import { useRepos } from "@/api/queries/repos";
 import { Button } from "@/components/ui/button";
+import { ApiError } from "@/api/client";
 
 function downloadBlob(text: string, filename: string) {
   const blob = new Blob([text], { type: "application/json" });
@@ -38,9 +39,9 @@ export default function SbomViewerPage() {
             {repoName}
           </Link>
           <span className="text-muted-foreground">/</span>
-          <span className="text-sm font-medium">Raw SBOM</span>
-          <span className="text-[10px] text-muted-foreground" title="cdxgen output as produced by this scan run, before Stage-1 cleanup and Stage-2 LLM augmentation. For the curated CRA SBOM, use the scope page.">
-            cdxgen output · pre-curation
+          <span className="text-sm font-medium">SBOM</span>
+          <span className="text-[10px] text-muted-foreground" title="Post-augmentation CycloneDX 1.7 artifact for this scan run. For the scope-level view reflecting operator edits, use the scope page.">
+            CycloneDX 1.7 · curated
           </span>
           <span className="text-xs text-muted-foreground font-mono">{filename}</span>
         </div>
@@ -65,8 +66,10 @@ export default function SbomViewerPage() {
             Loading SBOM…
           </div>
         ) : sbom.isError ? (
-          <div className="flex items-center justify-center h-full text-sm text-destructive">
-            Failed to load SBOM.
+          <div className="flex items-center justify-center h-full text-sm text-muted-foreground px-8 text-center">
+            {sbom.error instanceof ApiError && sbom.error.status === 404
+              ? (sbom.error.message || "SBOM artifact not available for this scan. To produce one, re-trigger the scan from the repo page.")
+              : "Failed to load SBOM."}
           </div>
         ) : (
           <Editor

@@ -436,9 +436,9 @@ export async function backfillCvssScores(db: PrismaClient): Promise<void> {
 // ---------------------------------------------------------------------------
 // Backfill manifest origin (file + line + snippet) for existing SCA issues.
 //
-// Reads the latest scan run's stored sbom_json to find each issue's component
-// and its manifestFile (cdxgen evidence), then reads the snippet from the
-// retained clone. Skips scopes whose repo isn't retained.
+// Reads sbom_components rows keyed on the scope's lastScanRunId to find each
+// issue's component and its manifestFile (cdxgen evidence), then reads the
+// snippet from the retained clone. Skips scopes whose repo isn't retained.
 // ---------------------------------------------------------------------------
 
 export async function backfillManifestOrigin(db: PrismaClient): Promise<void> {
@@ -460,12 +460,11 @@ export async function backfillManifestOrigin(db: PrismaClient): Promise<void> {
 
     // Read sbom_components directly — its `name` column is the canonical
     // package name (group:artifact for maven, group/name for npm-scoped),
-    // which matches sca_issues.package_name. The previous version of this
-    // backfill re-parsed sbom_json and keyed by cdxgen's raw `c.name`,
+    // which matches sca_issues.package_name. An older version of this
+    // backfill re-parsed the raw cdxgen SBOM and keyed by cdxgen's raw `c.name`,
     // missing maven rows whose canonical name has a group prefix.
-    // Its `manifest_file` column is already the repo-rooted path
-    // (post-backfillSbomManifestFiles), so we strip the scope prefix
-    // back off for the snippet read.
+    // Its `manifest_file` column is already the repo-rooted path,
+    // so we strip the scope prefix back off for the snippet read.
     const sbomRows = await db.sbomComponent.findMany({
       where: { scanRunId: scope.lastScanRunId },
       select: { name: true, manifestFile: true },

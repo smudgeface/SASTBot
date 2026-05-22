@@ -5,6 +5,7 @@ import { ArrowLeft, Download, Loader2 } from "lucide-react";
 import { useSastSarif, useScanDetail } from "@/api/queries/scans";
 import { useRepos } from "@/api/queries/repos";
 import { Button } from "@/components/ui/button";
+import { ApiError } from "@/api/client";
 
 function downloadBlob(text: string, filename: string) {
   const blob = new Blob([text], { type: "application/json" });
@@ -60,8 +61,10 @@ export default function SastSarifViewerPage() {
             Loading SARIF…
           </div>
         ) : sarif.isError ? (
-          <div className="flex items-center justify-center h-full text-sm text-destructive">
-            Failed to load SARIF.
+          <div className="flex items-center justify-center h-full text-sm text-muted-foreground px-8 text-center">
+            {sarif.error instanceof ApiError && sarif.error.status === 404
+              ? (sarif.error.message || "SARIF artifact not available for this scan. To produce one, re-trigger the scan from the repo page.")
+              : "Failed to load SARIF."}
           </div>
         ) : (
           <Editor

@@ -499,8 +499,8 @@ export async function rebuildComponentsFromScopeState(
  * After llmSbomRecheckService recovers components into scope_components, this
  * writes a per-scan SbomComponent row for each recovered component so:
  *
- *   1. The scan's audit trail (sbom_components, scan_runs.sbom_json consumers)
- *      reflects that the recovered component was part of this run's SBOM.
+ *   1. The scan's audit trail (sbom_components) reflects that the recovered
+ *      component was part of this run's SBOM.
  *   2. The worker's in-memory `components` list can be extended so the
  *      downstream OSV / NVD / detection passes pick them up this run instead
  *      of only carrying forward stale prior-scan vuln data.

@@ -225,13 +225,6 @@ model ScanRun {
   highCount               Int       @default(0) @map("high_count")
   mediumCount             Int       @default(0) @map("medium_count")
   lowCount                Int       @default(0) @map("low_count")
-  sbomJson                Json?     @map("sbom_json")
-  // SARIF v2.1.0 document derived from the SAST issues observed in this run
-  // (sast_issues where lastSeenScanRunId = this run). Populated by the worker
-  // post-detection so operators can export/review the same shape Opengrep
-  // used to produce. Regenerated on every scan; backfilled on worker boot
-  // for runs that pre-date the column.
-  sastSarif               Json?     @map("sast_sarif")
   warnings                Json      @default("[]")
   llmInputTokens          Int       @default(0) @map("llm_input_tokens")
   llmOutputTokens         Int       @default(0) @map("llm_output_tokens")

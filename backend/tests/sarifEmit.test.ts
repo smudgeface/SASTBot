@@ -9,9 +9,8 @@
  *  - Test 2: locked directory path — simulate a disk write failure, assert it
  *    throws (which worker.ts catches and converts to a sarif_emit_failed warning).
  *
- * The column-write portion (`prisma.scanRun.update` with sastSarif) is tested
- * implicitly through the worker integration; a unit test for it would just be
- * testing Prisma's mock, which adds no value here. The key invariant tested is:
+ * The column write was removed in Deploy 3 (B5+B6) — SARIF is now stored only
+ * on disk. The key invariant tested is:
  * "the SARIF file ends up on disk with valid content when a write is possible."
  */
 

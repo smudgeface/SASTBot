@@ -587,8 +587,7 @@ async function regenerateSastSarifForScan(
     endedAt: run?.finishedAt ?? null,
   });
 
-  // B4: dual-write — disk artifact AND the column. The column write goes away
-  // in Deploy 3 when scan-page endpoints are migrated to read from the file.
+  // Write to the artifact file — the only storage path for SARIF since Deploy 3.
   const sarifBody = JSON.stringify(sarif, null, 2);
   try {
     await writeArtifact(sarifPathFor(scanRunId), sarifBody);
@@ -600,11 +599,6 @@ async function regenerateSastSarifForScan(
       message: `Failed to write SARIF artifact: ${(err as Error).message}.`,
     });
   }
-
-  await prisma.scanRun.update({
-    where: { id: scanRunId },
-    data: { sastSarif: sarif as Prisma.InputJsonValue },
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -901,52 +895,6 @@ backfillManifestPathPrefixes().catch((err) => {
   logger.warn({ err }, "[worker] manifest-path-prefix backfill failed");
 });
 
-// Generate sast_sarif for runs that pre-date the column (M6j cutover).
-// Idempotent — only fills NULL rows. Goes one scan at a time so a partial
-// failure doesn't take down the whole boot.
-//
-// B4 (Deploy 2): this backfill still only writes to the column. Disk
-// emission for legacy rows is intentionally deferred to Deploy 3, which will
-// rewrite this hook to write to ${ARTIFACT_DIR}/sarif/<scanRunId>.sarif.json
-// and then drop the column write. Don't add disk writes here now — they'd be
-// removed again in the very next PR.
-async function backfillSastSarif(): Promise<void> {
-  const runs = await prisma.scanRun.findMany({
-    where: { sastSarif: { equals: Prisma.DbNull }, sastFindingCount: { gt: 0 } },
-    select: { id: true, scopeId: true, startedAt: true, finishedAt: true, scope: { select: { path: true } } },
-  });
-  if (runs.length === 0) return;
-  let filled = 0;
-  for (const r of runs) {
-    try {
-      const issues = await prisma.sastIssue.findMany({
-        where: { scopeId: r.scopeId, lastSeenScanRunId: r.id },
-      });
-      const sarif = buildSarifFromIssues(issues, {
-        toolVersion: APP_VERSION,
-        modelName: "claude-code-cli",
-        scopePath: r.scope.path,
-        startedAt: r.startedAt,
-        endedAt: r.finishedAt,
-      });
-      await prisma.scanRun.update({
-        where: { id: r.id },
-        data: { sastSarif: sarif as Prisma.InputJsonValue },
-      });
-      filled++;
-    } catch (err) {
-      logger.warn({ err, scanRunId: r.id }, "[worker] sast-sarif backfill: skipping run");
-    }
-  }
-  if (filled > 0) {
-    logger.info({ filled, total: runs.length }, "[worker] backfilled sast_sarif");
-  }
-}
-
-backfillSastSarif().catch((err) => {
-  logger.warn({ err }, "[worker] sast-sarif backfill failed");
-});
-
 // M6k: re-extract SAST snippets from disk so they all conform to the
 // canonical 3-lines-before / problem / 3-lines-after layout. Old snippets
 // were the raw LLM output and varied wildly in length, forcing the
@@ -1014,11 +962,6 @@ backfillReachability(prisma).catch((err) => {
   logger.warn({ err }, "[worker] reachability backfill failed");
 });
 
-// backfillManifestOrigin reads from sbom_components.manifest_file, which is
-// itself repaired by backfillSbomManifestFiles below. Chain them so the
-// SCA-issue path inherits the latest correction (e.g. cdxgen jar-deps
-// basenames resolved to their on-disk location via ScopeFileIndex).
-
 // M6n: suppress dev-only SCA issues for repos that have opted out of dev deps.
 // Idempotent — filters on dismissedStatus not already terminal. Safe to re-run.
 async function backfillDevOnlyScaIssues(): Promise<void> {
@@ -1053,25 +996,10 @@ backfillDevOnlyScaIssues().catch((err) => {
   logger.warn({ err }, "[worker] dev-only SCA backfill failed");
 });
 
-// M6q: populate sbom_components.occurrences for rows that pre-date the column.
-import { backfillSbomOccurrences } from "./services/sbomOccurrences.js";
-backfillSbomOccurrences().catch((err) => {
-  logger.warn({ err }, "[worker] sbom-occurrences backfill failed");
+// Repair SCA-issue manifest origins (file + line + snippet) from sbom_components.
+backfillManifestOrigin(prisma).catch((err) => {
+  logger.warn({ err }, "[worker] manifest-origin backfill failed");
 });
-
-// M6q follow-up: repair sbom_components.manifest_file values that were
-// truncated to basename by the old normalizeManifestPath fallback (cdxgen
-// emitted relative paths post-M6q, but the basename fallback dropped the
-// subdirectory before toRepoRelative tacked the scope prefix on).
-// Then re-run backfillManifestOrigin so the SCA-issue paths pick up the
-// corrected sbom_components values (e.g. jar-deps basenames resolved to
-// the real on-disk path via ScopeFileIndex).
-import { backfillSbomManifestFiles } from "./services/sbomService.js";
-backfillSbomManifestFiles()
-  .then(() => backfillManifestOrigin(prisma))
-  .catch((err) => {
-    logger.warn({ err }, "[worker] sbom manifest_file → SCA origin backfill chain failed");
-  });
 
 // Split evidence/usage refactor: fill in line + snippet on scope_components
 // rows whose evidence was written as path-only by the split-evidence-usage
@@ -1402,14 +1330,12 @@ const worker = new Worker<ScanJobData>(
         await cleanupSbomTmp(scanRunId);
       }
 
-      // ── Step 3.9: persist augmented components + raw SBOM ────────────────
+      // ── Step 3.9: persist augmented components ───────────────────────────
       let components = await prisma.$transaction(async (tx) => {
-        // Store the raw SBOM and the augmented component count on the run row
-        // now so partial failures still leave the SBOM downloadable.
+        // Update the component count on the run row.
         await tx.scanRun.update({
           where: { id: scanRunId },
           data: {
-            sbomJson: sbomDoc as object,
             componentCount: finalComponents.length,
           },
         });

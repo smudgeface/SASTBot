@@ -701,7 +701,7 @@ Standard Zod-typed endpoint in `routes/scans.ts`. 204 on success; 409 (ScanIsCur
 |---|---|---|---|
 | 1 | `m9-stream-a6-backup-restore-artifacts` | 0.5.1 → 0.6.0 | adminBackup, adminRestore, restoreService, backupMetadata, version, **3-file version bump** |
 | 2 | `m9-stream-b1-b4-emit-ingest` | 0.6.0 → 0.7.0 | worker, sbomCurated, sarifService, sbomIngest (new), schemas, frontend types, **3-file version bump** |
-| 3 | `m9-stream-b5-b6-drop-jsonb` | 0.7.0 → 0.8.0 | prisma schema + migration (drop 2 columns), worker (delete JSONB writes + 3 dead boot backfills), scans routes (404 for legacy), frontend friendly 404 state, **3-file version bump**. **No backfill** — locked posture, see §9. |
+| 3 ✅ | `main` (commit TBD — see PROGRESS.md) | 0.7.0 → 0.8.0 | prisma schema + migration (drop 2 columns), worker (delete JSONB writes + 3 dead boot backfills), scans routes (404 for legacy), frontend friendly 404 state, **4-file version bump** (backend/package.json, frontend/package.json, frontend/package-lock.json, APP_VERSION). **No backfill** — locked posture, see §9. |
 | Side | `m9-side-delete-scan` | bundle with any of the above | scans routes, scanService, tests |
 
 Each deploy is its own PR-shaped commit cluster, with one or more commits per deploy. `docs/PROGRESS.md` gets an entry per deploy.

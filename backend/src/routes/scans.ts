@@ -19,6 +19,7 @@ import {
 import { scanFindingToOut, scanRunToOut, sastIssueToOut, sbomComponentToOut } from "../services/mappers.js";
 import { cancelScanRun, ScanRunNotFoundError } from "../services/scanService.js";
 import { bySeverity, byStatus, cmpNum, cmpStr, dirSign } from "../services/issueSort.js";
+import { sbomPathFor, sarifPathFor, tryReadArtifact } from "../services/artifactStore.js";
 
 const scansRoutes: FastifyPluginAsync = async (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
@@ -229,11 +230,18 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  // Raw cdxgen output for this scan. The scan page is the audit-trail
-  // surface — it shows what cdxgen actually produced before Stage-1
-  // cleanup and Stage-2 LLM augmentation. Operators looking for the
-  // curated, ship-this-to-the-customer SBOM use the scope-level endpoint
-  // (/api/scopes/:id/sbom-json) instead. (M6q review #15.)
+  // Post-augmentation canonical CycloneDX 1.7 SBOM for this scan run, served
+  // from the artifact file at ${ARTIFACT_DIR}/sbom/${scanRunId}.json. Written
+  // by the worker's sbom_emit phase using stableStringify so two reads of an
+  // unchanged scan return byte-identical output (ETag stable).
+  //
+  // Legacy scans (run before M9 Stream B) have no artifact file and return 404
+  // with a re-run-the-scan hint. The user-facing UI should render this as a
+  // friendly "no SBOM for this old scan" message.
+  //
+  // This is the scan-level (per-run) artifact. For the scope-level view that
+  // reflects operator edits to scope_components, use
+  // GET /api/scopes/:id/sbom-json.
   app.get(
     "/scans/:id/sbom",
     {
@@ -245,25 +253,31 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
 
       const run = await prisma.scanRun.findFirst({
         where: { id: params.id, orgId: orgId ?? null },
-        select: { id: true, sbomJson: true, repo: { select: { name: true } } },
+        select: { id: true, repo: { select: { name: true } } },
       });
       if (!run) {
         return reply.code(404).send({ detail: "Scan run not found" });
       }
-      if (!run.sbomJson) {
-        return reply.code(404).send({ detail: "SBOM not yet available for this scan" });
+
+      const body = await tryReadArtifact(sbomPathFor(run.id));
+      if (!body) {
+        return reply.code(404).send({
+          detail:
+            `SBOM artifact not available for this scan. This is expected if: ` +
+            `(a) the scan is still running, ` +
+            `(b) the scan completed before the artifact-file pipeline shipped (M9 Stream B), ` +
+            `(c) the worker recorded an sbom_emit_failed warning during this scan. ` +
+            `To produce a downloadable SBOM, re-trigger the scan from the repo page.`,
+        });
       }
 
-      const filename = `sbom-raw-${(run.repo as { name: string }).name}-${params.id.slice(0, 8)}.cdx.json`;
-      // D5: key-stable serializer ensures deterministic byte output.
-      const { stableStringify } = await import("../services/sbomCurated.js");
-      const pretty = stableStringify(run.sbomJson, 2);
-      // D7: ETag = first 16 bytes of SHA-256(body), hex-encoded (32 chars).
+      const pretty = body.toString("utf8");
       const etag = `"${createHash("sha256").update(pretty).digest("hex").slice(0, 32)}"`;
       const ifNoneMatch = (req.headers as Record<string, string | undefined>)["if-none-match"];
       if (ifNoneMatch === etag) {
         return reply.code(304).send();
       }
+      const filename = `sbom-${(run.repo as { name: string }).name}-${params.id.slice(0, 8)}.cdx.json`;
       return reply
         .header("Content-Type", "application/json; charset=utf-8")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
@@ -273,9 +287,9 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
   );
 
   // SARIF v2.1.0 export of the LLM SAST findings observed in this run.
-  // Mirrors the SBOM endpoint: pretty-printed JSON with an attachment
-  // disposition so browsers offer "save as" by default. Operators can
-  // hand the file off to dashboards / CI gates / compliance evidence.
+  // Served from the artifact file at ${ARTIFACT_DIR}/sarif/${scanRunId}.sarif.json.
+  // Written by the worker's sarif_emit phase. Legacy scans (run before M9 Stream B)
+  // have no artifact file and return 404 with a re-run hint.
   app.get(
     "/scans/:id/sast-sarif",
     {
@@ -287,22 +301,35 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
 
       const run = await prisma.scanRun.findFirst({
         where: { id: params.id, orgId: orgId ?? null },
-        select: { id: true, sastSarif: true, repo: { select: { name: true } } },
+        select: { id: true, repo: { select: { name: true } } },
       });
       if (!run) {
         return reply.code(404).send({ detail: "Scan run not found" });
       }
-      if (!run.sastSarif) {
-        return reply
-          .code(404)
-          .send({ detail: "SARIF not yet available for this scan" });
+
+      const body = await tryReadArtifact(sarifPathFor(run.id));
+      if (!body) {
+        return reply.code(404).send({
+          detail:
+            `SARIF artifact not available for this scan. This is expected if: ` +
+            `(a) the scan is still running, ` +
+            `(b) the scan completed before the artifact-file pipeline shipped (M9 Stream B), ` +
+            `(c) the worker recorded a sarif_emit_failed warning during this scan. ` +
+            `To produce a downloadable SARIF, re-trigger the scan from the repo page.`,
+        });
       }
 
+      const pretty = body.toString("utf8");
+      const etag = `"${createHash("sha256").update(pretty).digest("hex").slice(0, 32)}"`;
+      const ifNoneMatch = (req.headers as Record<string, string | undefined>)["if-none-match"];
+      if (ifNoneMatch === etag) {
+        return reply.code(304).send();
+      }
       const filename = `sast-${(run.repo as { name: string }).name}-${params.id.slice(0, 8)}.sarif.json`;
-      const pretty = JSON.stringify(run.sastSarif, null, 2);
       return reply
         .header("Content-Type", "application/json; charset=utf-8")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
+        .header("ETag", etag)
         .send(pretty);
     },
   );

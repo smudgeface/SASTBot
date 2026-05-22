@@ -4,6 +4,34 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## M9 Stream B5+B6 (Deploy 3) — drop JSONB columns; endpoint switch — v0.8.0 (2026-05-22)
+
+The third and final artifact-pipeline deploy. Drops the two JSONB columns that held per-scan SBOM and SARIF data, switches the scan-page endpoints to read from artifact files instead, and deletes three now-obsolete boot backfills. No backfill — locked posture: legacy scans (run before Deploy 2) have no artifact file and the endpoints return 404 with a "re-run to produce artifact" message. The UI renders this as a friendly inline state rather than an error toast.
+
+### What shipped
+
+- **Migration `20260522110000_drop_scan_run_sbom_sast_jsonb`.** `ALTER TABLE scan_runs DROP COLUMN sbom_json; DROP COLUMN sast_sarif;`. Two statements. No backfill — by design. Legacy scan rows simply lose the columns; operators re-trigger any scan they need an artifact for.
+
+- **Endpoint switch — `GET /scans/:id/sbom` and `GET /scans/:id/sast-sarif`.** Both now read from `${ARTIFACT_DIR}/sbom/<id>.json` and `${ARTIFACT_DIR}/sarif/<id>.sarif.json` via `tryReadArtifact`. Missing file → 404 with a specific "re-run to produce artifact" hint covering three root causes: still running, pre-M9-Stream-B, or `*_emit_failed` warning. Both endpoints now set an ETag (SARIF newly added for parity). Filename changed from `sbom-raw-*` to `sbom-*` (no longer raw cdxgen). New doc-comment per locked decision B-Q1: `/scans/:id/sbom` now serves the post-augmentation curated doc, not raw cdxgen.
+
+- **Three boot backfills deleted.** `backfillSastSarif` (wrote `sast_sarif` column for legacy runs), `backfillSbomManifestFiles` (repaired `sbom_components.manifest_file` from `scan_runs.sbom_json`), `backfillSbomOccurrences` (extracted occurrence data from `scan_runs.sbom_json`). All three read from the now-dropped JSONB columns. `backfillManifestOrigin` — which was chained after `backfillSbomManifestFiles` — is preserved and promoted to a standalone boot call.
+
+- **Worker JSONB writes deleted.** `regenerateSastSarifForScan` no longer updates `scan_runs.sast_sarif`. The augmentation transaction no longer writes `sbomJson` to the `scan_runs` row (only `componentCount` remains).
+
+- **Frontend friendly 404 state.** `SbomViewerPage` and `SastSarifViewerPage` detect `ApiError.status === 404` and render a centered `text-muted-foreground` message with the API's `detail` text instead of a red "Failed to load" error. Non-404 errors still show the generic error text. Viewer subtitle updated from "cdxgen output · pre-curation" to "CycloneDX 1.7 · curated".
+
+- **App version bumped 0.7.0 → 0.8.0** (MINOR — two operator-visible endpoint behaviour changes + column drop) in all four version surfaces: `backend/package.json`, `frontend/package.json`, `frontend/package-lock.json`, and `APP_VERSION` in `backend/src/routes/version.ts`.
+
+- **Tests.** New `backend/tests/scansSbomEndpoint.test.ts` — asserts 404 body contains the legacy-scan hint (covering both SBOM and SARIF), asserts ETag computation is correct, asserts ETag stability. Updated `sarifEmit.test.ts` comment (column-write reference removed). No prior tests referenced the JSONB fields.
+
+### What we learned
+
+- **No-backfill posture dissolves the metadata.timestamp drift issue.** The artifact file is now written exactly once by `sbom_emit` at scan time. There is no re-derivation path, so the drift identified before Deploy 3 can't happen.
+
+- **The three deleted backfills were all reading `sbom_json`.** Their deletion cleans up the module graph: `backfillSbomOccurrences` is gone from `sbomOccurrences.ts`, `backfillSbomManifestFiles` is gone from `sbomService.ts`, and `backfillSastSarif` is gone from `worker.ts`. The `extractManifestFilesFromSbomJson` private helper (spec item) didn't exist by that name — the spec was referring to `extractOccurrenceMap` used inside the backfill; it was also deleted. Verified: `rg "sbomJson|sastSarif|sbom_json|sast_sarif" backend/src` returns zero hits post-cleanup.
+
+---
+
 ## M9 Stream B Deploy 2 — emit + ingest + sarif_emit (2026-05-22)
 
 ### What shipped
