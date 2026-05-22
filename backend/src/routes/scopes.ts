@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { prisma } from "../db.js";
@@ -1010,7 +1011,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       // ensures operator edits — renames, manual evidence, deduplications —
       // are reflected in the download. The scan-detail page still uses
       // buildCuratedSbomJson (sbom_components) for its audit-trail view.
-      const { buildCuratedSbomJsonForScope } = await import("../services/sbomCurated.js");
+      const { buildCuratedSbomJsonForScope, stableStringify } = await import("../services/sbomCurated.js");
       const doc = await buildCuratedSbomJsonForScope(scope.id);
       if (!doc) return reply.code(404).send({ detail: "SBOM not yet available for this scope" });
 
@@ -1018,10 +1019,22 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       // Build a slug from the scope path: "/" → "root", "/GoWeb" → "GoWeb"
       const scopeSlug = scope.path === "/" ? "root" : scope.path.replace(/^\//, "").replace(/\//g, "-");
       const filename = `sbom-${repoName}-${scopeSlug}.cdx.json`;
-      const pretty = JSON.stringify(doc, null, 2);
+      // D5: use key-stable serializer so byte output is deterministic across
+      // JS runtimes and refactors that reorder object properties.
+      const pretty = stableStringify(doc, 2);
+
+      // D7: ETag = first 16 bytes of SHA-256(body), hex-encoded (32 chars).
+      // Allows clients to detect changes without downloading the full body.
+      const etag = `"${createHash("sha256").update(pretty).digest("hex").slice(0, 32)}"`;
+      const ifNoneMatch = (req.headers as Record<string, string | undefined>)["if-none-match"];
+      if (ifNoneMatch === etag) {
+        return reply.code(304).send();
+      }
+
       return reply
         .header("Content-Type", "application/json; charset=utf-8")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
+        .header("ETag", etag)
         .send(pretty);
     },
   );

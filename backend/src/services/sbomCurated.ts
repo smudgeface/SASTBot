@@ -15,6 +15,69 @@
 
 import { prisma } from "../db.js";
 
+// ---------------------------------------------------------------------------
+// D5 — Key-stable JSON serializer
+//
+// Produces output byte-for-byte identical to JSON.stringify(value, null, indent)
+// except that object keys are emitted in ascending lexicographic order at
+// every depth. Arrays preserve their element order (callers are responsible
+// for sorting arrays before passing them in).
+//
+// Edge cases:
+//   undefined values → omitted from objects (same as JSON.stringify)
+//   NaN / Infinity  → serialised as null (same as JSON.stringify)
+//   Date objects    → serialised as ISO string via .toJSON() (same as
+//                     JSON.stringify, which calls toJSON on objects that
+//                     expose it)
+//   Circular refs   → throws (same as JSON.stringify)
+// ---------------------------------------------------------------------------
+export function stableStringify(value: unknown, indent?: number): string {
+  return _stableNode(value, indent ?? 0, 0);
+}
+
+function _stableNode(value: unknown, indent: number, depth: number): string {
+  // Let JSON.stringify handle primitives, null, and toJSON() protocol.
+  if (value === null) return "null";
+  if (typeof value === "boolean" || typeof value === "number") {
+    // NaN / Infinity → null, matching JSON.stringify behaviour.
+    return JSON.stringify(value);
+  }
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "undefined" || typeof value === "function" || typeof value === "symbol") {
+    // At the top level JSON.stringify returns undefined (not a string).
+    // Inside arrays it returns "null". Inside objects the key is omitted.
+    // The caller never hits top-level undefined in our routes, so returning
+    // "null" is the safest default (matches array behaviour).
+    return "null";
+  }
+  // Objects with a toJSON method (e.g. Date) — delegate, then recurse.
+  if (typeof value === "object" && value !== null && typeof (value as Record<string, unknown>).toJSON === "function") {
+    return _stableNode((value as { toJSON(): unknown }).toJSON(), indent, depth);
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    const gap = indent > 0 ? " ".repeat(indent * (depth + 1)) : "";
+    const closingGap = indent > 0 ? " ".repeat(indent * depth) : "";
+    const sep = indent > 0 ? "\n" : "";
+    const itemSep = indent > 0 ? ",\n" : ",";
+    const items = value.map((item) => `${sep}${gap}${_stableNode(item, indent, depth + 1)}`);
+    return `[${items.join(itemSep)}${sep}${closingGap}]`;
+  }
+  // Plain object — sort keys lexicographically.
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  const definedKeys = keys.filter((k) => obj[k] !== undefined && typeof obj[k] !== "function" && typeof obj[k] !== "symbol");
+  if (definedKeys.length === 0) return "{}";
+  const gap = indent > 0 ? " ".repeat(indent * (depth + 1)) : "";
+  const closingGap = indent > 0 ? " ".repeat(indent * depth) : "";
+  const sep = indent > 0 ? "\n" : "";
+  const itemSep = indent > 0 ? ",\n" : ",";
+  const pairs = definedKeys.map(
+    (k) => `${sep}${gap}${JSON.stringify(k)}: ${_stableNode(obj[k], indent, depth + 1)}`,
+  );
+  return `{${pairs.join(itemSep)}${sep}${closingGap}}`;
+}
+
 interface ComponentOccurrence {
   path: string;
   line: number | null;
@@ -99,9 +162,20 @@ export async function buildCuratedSbomJson(
 
   const rows = await prisma.sbomComponent.findMany({
     where: { scanRunId },
-    orderBy: [{ ecosystem: "asc" }, { name: "asc" }],
+    // D1: full tiebreaker chain — (ecosystem, name, purl, id) — ensures a
+    // deterministic row order even when two components share name + ecosystem.
+    orderBy: [{ ecosystem: "asc" }, { name: "asc" }, { purl: "asc" }, { id: "asc" }],
   });
   if (rows.length === 0) return null;
+
+  // D2 comparator: sort occurrences by (path asc, line asc nulls-first).
+  function sortOccurrences(arr: ComponentOccurrence[]): ComponentOccurrence[] {
+    return [...arr].sort((a, b) => {
+      const pathCmp = a.path.localeCompare(b.path);
+      if (pathCmp !== 0) return pathCmp;
+      return (a.line ?? -Infinity) - (b.line ?? -Infinity);
+    });
+  }
 
   const components: CycloneDxComponent[] = rows.map((r) => {
     const c: CycloneDxComponent = {
@@ -112,8 +186,9 @@ export async function buildCuratedSbomJson(
     };
     if (r.version) c.version = r.version;
     if (r.scope) c.scope = r.scope;
+    // D3: sort licenses lexicographically before mapping.
     if (r.licenses && r.licenses.length > 0) {
-      c.licenses = r.licenses.map((id) => ({ license: { id } }));
+      c.licenses = [...r.licenses].sort().map((id) => ({ license: { id } }));
     }
 
     // Evidence: identity (manifest) + occurrences (where used).
@@ -132,7 +207,8 @@ export async function buildCuratedSbomJson(
     }
     const occurrences = (r.occurrences ?? []) as unknown as ComponentOccurrence[];
     if (Array.isArray(occurrences) && occurrences.length > 0) {
-      evidence.occurrences = occurrences.map((o) => ({
+      // D2: sort occurrences deterministically.
+      evidence.occurrences = sortOccurrences(occurrences).map((o) => ({
         location: o.line != null ? `${o.path}#${o.line}` : o.path,
       }));
     }
@@ -153,7 +229,15 @@ export async function buildCuratedSbomJson(
         properties.push({ name: "sastbot:llm_evidence_path", value: evidenceBlob.path });
       }
     }
-    if (properties.length > 0) c.properties = properties;
+    // D4: sort properties by (name asc, value asc) — eliminates "stable by
+    // source-code accident" fragility without reorganising the conditional blocks.
+    if (properties.length > 0) {
+      properties.sort((a, b) => {
+        const nameCmp = a.name.localeCompare(b.name);
+        return nameCmp !== 0 ? nameCmp : a.value.localeCompare(b.value);
+      });
+      c.properties = properties;
+    }
 
     return c;
   });
@@ -210,7 +294,8 @@ export async function buildCuratedSbomJsonForScope(
 
   const scopeComponents = await prisma.scopeComponent.findMany({
     where: { scopeId, dismissedStatus: "active" },
-    orderBy: [{ ecosystem: "asc" }, { name: "asc" }],
+    // D1: full tiebreaker chain — (ecosystem, name, purl, id).
+    orderBy: [{ ecosystem: "asc" }, { name: "asc" }, { purl: "asc" }, { id: "asc" }],
   });
   if (scopeComponents.length === 0) return null;
 
@@ -223,6 +308,16 @@ export async function buildCuratedSbomJsonForScope(
   }, fallbackDate);
   const timestamp = maxUpdatedAt.toISOString();
 
+  // D2 comparator (shared with scan-level builder): sort occurrences by
+  // (path asc, line asc nulls-first).
+  function sortOccurrencesScope(arr: Array<{ path: string; line?: number | null }>): typeof arr {
+    return [...arr].sort((a, b) => {
+      const pathCmp = a.path.localeCompare(b.path);
+      if (pathCmp !== 0) return pathCmp;
+      return ((a.line ?? -Infinity) as number) - ((b.line ?? -Infinity) as number);
+    });
+  }
+
   const components: CycloneDxComponent[] = scopeComponents.map((sc) => {
     const c: CycloneDxComponent = {
       type: sc.latestComponentType ?? sc.componentType ?? "library",
@@ -233,9 +328,10 @@ export async function buildCuratedSbomJsonForScope(
     if (sc.version) c.version = sc.version;
     if (sc.scope) c.scope = sc.scope;
 
+    // D3: sort latestLicenses (or fallback licenses) lexicographically.
     const licenses = sc.latestLicenses.length > 0 ? sc.latestLicenses : sc.licenses;
     if (licenses && licenses.length > 0) {
-      c.licenses = licenses.map((id) => ({ license: { id } }));
+      c.licenses = [...licenses].sort().map((id) => ({ license: { id } }));
     }
 
     // Evidence: identity (componentRoot or manifest) + occurrences (usage).
@@ -267,17 +363,17 @@ export async function buildCuratedSbomJsonForScope(
       }];
     }
 
-    // occurrences: use the operator-curated evidence[] array (identity
-    // evidence), then usage[] for usage locations.
+    // occurrences: combine evidence entries (identity) + usage locations, then
+    // D2-sort before mapping to CycloneDX location strings.
     const evidenceArr = (sc.evidence ?? []) as unknown as Array<{ path: string; line?: number | null }>;
     const usageArr = (sc.usage ?? []) as unknown as ComponentOccurrence[];
-    // Combine: evidence entries first (identity), then usage locations.
     const allOccurrences: Array<{ path: string; line?: number | null }> = [
       ...evidenceArr,
       ...usageArr,
     ];
     if (allOccurrences.length > 0) {
-      evidence.occurrences = allOccurrences.map((o) => ({
+      // D2: sort before mapping so output is independent of insertion order.
+      evidence.occurrences = sortOccurrencesScope(allOccurrences).map((o) => ({
         location: o.line != null ? `${o.path}#${o.line}` : o.path,
       }));
     }
@@ -300,7 +396,15 @@ export async function buildCuratedSbomJsonForScope(
         properties.push({ name: "sastbot:llm_evidence_path", value: llmEvidenceBlob.path });
       }
     }
-    if (properties.length > 0) c.properties = properties;
+    // D4: sort properties by (name asc, value asc) — eliminates "stable by
+    // source-code accident" fragility without reorganising the conditional blocks.
+    if (properties.length > 0) {
+      properties.sort((a, b) => {
+        const nameCmp = a.name.localeCompare(b.name);
+        return nameCmp !== 0 ? nameCmp : a.value.localeCompare(b.value);
+      });
+      c.properties = properties;
+    }
 
     return c;
   });

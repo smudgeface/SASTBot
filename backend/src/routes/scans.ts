@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { prisma } from "../db.js";
@@ -254,10 +255,19 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const filename = `sbom-raw-${(run.repo as { name: string }).name}-${params.id.slice(0, 8)}.cdx.json`;
-      const pretty = JSON.stringify(run.sbomJson, null, 2);
+      // D5: key-stable serializer ensures deterministic byte output.
+      const { stableStringify } = await import("../services/sbomCurated.js");
+      const pretty = stableStringify(run.sbomJson, 2);
+      // D7: ETag = first 16 bytes of SHA-256(body), hex-encoded (32 chars).
+      const etag = `"${createHash("sha256").update(pretty).digest("hex").slice(0, 32)}"`;
+      const ifNoneMatch = (req.headers as Record<string, string | undefined>)["if-none-match"];
+      if (ifNoneMatch === etag) {
+        return reply.code(304).send();
+      }
       return reply
         .header("Content-Type", "application/json; charset=utf-8")
         .header("Content-Disposition", `attachment; filename="${filename}"`)
+        .header("ETag", etag)
         .send(pretty);
     },
   );
