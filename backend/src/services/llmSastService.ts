@@ -9,6 +9,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { appendFileSync as fsAppendSync } from "node:fs";
 import path from "node:path";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { pino } from "pino";
@@ -348,6 +349,58 @@ function killWithGrace(proc: ReturnType<typeof spawn>, onExited: Promise<void>):
   void onExited.then(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
 }
 
+/**
+ * Robust streaming extractor for top-level JSON objects.
+ *
+ * The LLM emits findings as JSONL but in practice Opus-class models sometimes
+ * concatenate multiple objects on a single line — `{...}{...}` with no
+ * separator — or wrap them in incidental prose. A naive split-by-newline
+ * parser silently drops every same-line concatenation as "unexpected
+ * non-whitespace character after JSON" (5 of 16 lost records on the
+ * 2026-05-22 FSS scan were real SAST findings dropped this way).
+ *
+ * This walks the buffer once, tracking string state and brace depth, and
+ * yields each balanced `{...}` substring. Any partial trailing object is
+ * returned as `rest` so the caller can prepend it to the next chunk. Prose
+ * outside object boundaries is silently discarded — same semantic as the
+ * old startsWith("{") guard, but applied at object granularity.
+ */
+export function extractJsonObjects(buf: string): { objects: string[]; rest: string } {
+  const objects: string[] = [];
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let start = -1;
+  for (let i = 0; i < buf.length; i++) {
+    const c = buf[i];
+    if (escape) { escape = false; continue; }
+    if (inString) {
+      if (c === "\\") escape = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      if (depth === 0) continue; // string outside any object — junk, skip
+      inString = true;
+    } else if (c === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (c === "}") {
+      if (depth === 0) continue; // stray } outside any object — junk, skip
+      depth--;
+      if (depth === 0 && start !== -1) {
+        objects.push(buf.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  // Carry forward only the partial unfinished object; pre-object prose is
+  // dropped on the floor (matches the prior behaviour where lines that
+  // didn't start with "{" were ignored).
+  const rest = depth > 0 && start !== -1 ? buf.slice(start) : "";
+  return { objects, rest };
+}
+
 async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaudeResult> {
   const args = [
     "-p",
@@ -445,14 +498,20 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
       if (stalenessTimer !== null) { clearTimeout(stalenessTimer); stalenessTimer = null; }
     };
 
+    // Opt-in raw stream dump for diagnostics — set SASTBOT_RAW_STREAM_DUMP=<file>
+    // to capture every extracted JSON object plus the surrounding raw buffer.
+    // Off by default; off in production. Kept in place because the
+    // 2026-05-22 FSS investigation needed exactly this and we don't want
+    // to rediscover the diagnostic affordance the next time the LLM drifts.
+    const rawDumpPath = process.env.SASTBOT_RAW_STREAM_DUMP;
     const flushAssistantLines = (final: boolean): void => {
-      const lines = assistantTextBuf.split("\n");
-      const tail = final ? "" : (lines.pop() ?? "");
-      assistantTextBuf = tail;
-      for (const raw of lines) {
-        const trimmed = raw.trim();
-        if (!trimmed) continue;
-        input.onLine(trimmed);
+      const { objects, rest } = extractJsonObjects(assistantTextBuf);
+      assistantTextBuf = final ? "" : rest;
+      for (const obj of objects) {
+        if (rawDumpPath) {
+          try { fsAppendSync(rawDumpPath, obj + "\n"); } catch { /* best-effort */ }
+        }
+        input.onLine(obj);
       }
     };
 

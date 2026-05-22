@@ -23,6 +23,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { extractJsonObjects } from "./llmSastService.js";
 import { pino } from "pino";
 
 import { loadConfig } from "../config.js";
@@ -314,14 +315,12 @@ async function spawnClaudeAndStream(
     let assistantTextBuf = "";
 
     const flushAssistantLines = (final: boolean): void => {
-      const lines = assistantTextBuf.split("\n");
-      const tail = final ? "" : (lines.pop() ?? "");
-      assistantTextBuf = tail;
-      for (const raw of lines) {
-        const trimmed = raw.trim();
-        if (!trimmed) continue;
-        input.onLine(trimmed);
-      }
+      // Robust JSON-object extraction — same logic as llmSastService.
+      // The line-split predecessor lost any record the LLM concatenated on
+      // a single line. See extractJsonObjects in llmSastService.ts.
+      const { objects, rest } = extractJsonObjects(assistantTextBuf);
+      assistantTextBuf = final ? "" : rest;
+      for (const obj of objects) input.onLine(obj);
     };
 
     const handleStreamEvent = (event: unknown): void => {

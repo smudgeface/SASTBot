@@ -29,7 +29,7 @@ export const SASTBOT_DUMP_FORMAT_VERSION = 2;
  * App version — kept in sync with backend/package.json `version` field.
  * Update this when bumping the package version.
  */
-export const APP_VERSION = "0.9.1";
+export const APP_VERSION = "0.9.2";
 
 /**
  * Read the lexicographically-last migration directory name from the Prisma

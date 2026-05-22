@@ -28,6 +28,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { extractJsonObjects } from "./llmSastService.js";
 import { pino } from "pino";
 import { z } from "zod";
 
@@ -192,12 +193,10 @@ async function spawnClaudeAndCollectVerdicts(input: {
     let assistantTextBuf = "";
 
     const flushAssistantLines = (final: boolean): void => {
-      const lines = assistantTextBuf.split("\n");
-      const tail = final ? "" : (lines.pop() ?? "");
-      assistantTextBuf = tail;
-      for (const raw of lines) {
-        const trimmed = raw.trim();
-        if (!trimmed || !trimmed.startsWith("{")) continue;
+      // Robust JSON-object extraction — same logic as llmSastService.
+      const { objects, rest } = extractJsonObjects(assistantTextBuf);
+      assistantTextBuf = final ? "" : rest;
+      for (const trimmed of objects) {
         let parsed: unknown;
         try {
           parsed = JSON.parse(trimmed);

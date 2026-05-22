@@ -417,7 +417,13 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       });
     }
 
-    // 5. sast_ingest phase — read SARIF file and upsert sast_issues.
+    // 5. sast_ingest phase — read SARIF file and upsert sast_issues. Also
+    //    stamps sastFindingCount = direct-observation count (SARIF results).
+    //    Mirrors E1's componentCount semantic: write once at ingest from the
+    //    file, never updated thereafter. Recheck verdicts that re-anchor
+    //    prior-scan issues to this scan (lastSeenScanRunId bump) do NOT
+    //    inflate the per-scan count — the scan's findings are what its
+    //    detection actually emitted.
     await setPhase(scanRunId, "sast_ingest");
     try {
       const ingestResult = await ingestSastFromArtifact({
@@ -428,6 +434,10 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         scopePath,
       });
       log.info(ingestResult, "[worker] sast_ingest complete");
+      await prisma.scanRun.update({
+        where: { id: scanRunId },
+        data: { sastFindingCount: ingestResult.inserted + ingestResult.updated },
+      });
     } catch (err) {
       log.error({ err: (err as Error).message }, "[worker] sast_ingest failed");
       await appendWarning(scanRunId, {
@@ -618,14 +628,10 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       }
     }
 
-    // 7. Update sastFindingCount denorm (post-ingest count from DB).
-    const sastCount = await prisma.sastIssue.count({
-      where: { scopeId: run.scopeId, lastSeenScanRunId: scanRunId },
-    });
-    await prisma.scanRun.update({
-      where: { id: scanRunId },
-      data: { sastFindingCount: sastCount },
-    });
+    // 7. sastFindingCount was stamped at sast_ingest time from the SARIF
+    //    file (direct observation). Recheck and the duplicate-merge sweep
+    //    operate on scope-level lifecycle state and intentionally do NOT
+    //    update the per-scan count. Parallel to E1's componentCount design.
   } finally {
     await cleanupLlmTmp(scanRunId);
   }

@@ -2396,3 +2396,27 @@ Closes Issues 2 and 9 in `docs/M9_POST_B_FOLLOWUPS.md`. The 2026-05-22 FSS closu
 
 **What we learned:** LLM output is not deterministic across effort levels and model versions. Schema must be defensively forgiving of common name aliases and soft-field omissions — treat anything the LLM "should always include" as an optional-with-default, not required. The `info`-severity `llm_*_parse_errors` warning type needs an escalation path when the drop ratio is high (Issue 10, still pending).
 
+
+## 2026-05-22 — LLM stream parser regression: same-line concatenation + reachability field drift (v0.9.2)
+
+Closure-gate validation on v0.9.1 surfaced a major regression: the FSS scan completed with 0 SAST findings emitted by detection (all 42 SAST issues on the scope page came from llm_recheck rescuing prior scans' findings — exactly the scope-augmentation pattern Stream E was meant to eliminate). The SARIF file was empty. Worker logs showed `recordCount: 36, parseErrorCount: 10`. Five of the parse-error samples were visible in the warning details (the other five truncated by `truncateParseErrors`, limit=5).
+
+**Two distinct root causes**, both pre-existing in the LLM stream-parsing layer, both unmasked by the larger reachability workload Opus 4.7 + xhigh + 47 SCA hints generates:
+
+1. **Same-line JSON concatenation.** `flushAssistantLines` split the assistant-text buffer on `\n` and `JSON.parse`'d each line. When the LLM emitted `{...}{...}` without a newline (verified on the live stream), the whole thing landed on one "line" and parse failed at "Unexpected non-whitespace character after JSON at position N". Five of the ten lost records on the failing scan were SAST findings — CWE-78 command injection, CWE-345 firmware-skip, CWE-1104 jQuery EOL, CWE-352 CSRF, CWE-798 license key.
+2. **Reachability field-name drift.** With SCA hints in scope, the LLM echoed the *input* field names (`cve`, `package`) as *output* field names — the input format is documented as `{id, package, version, cve_id, ...}` and the LLM treated `cve_id`+`package` as the identification fields on the output side. The Zod schema correctly rejects records missing `sca_issue_id`, so all 5 remaining parse errors (plus all 11 "schema: Invalid input" errors in the 10-hint dry-run) were reachability verdicts lost wholesale.
+
+**Diagnostic method.** Added an env-gated raw-stream dump (`SASTBOT_RAW_STREAM_DUMP=<file>`) in `spawnClaudeAndStream`, then ran the `dry-run-llm-sast` CLI three times against FSS with budgets capped at 30–60k tokens:
+- Dry-run A (0 SCA hints, 30k budget) → 9 SAST + 2 sast_absence, 0 parse errors. LLM works fine in isolation.
+- Dry-run B (10 SCA hints, 30k budget) → 2 SAST, 16 parse errors. Confirms both bug classes amplify with reachability work.
+- Dry-run C (47 SCA hints, 60k budget, post-fix) → **9 SAST + 2 sast_absence + 47 reachability, 0 parse errors**. Fix verified against the exact failing scenario.
+
+**Root-cause fix:**
+
+- New exported `extractJsonObjects(buf)` in `llmSastService.ts`. Walks the buffer once, tracks string state + brace depth, yields every balanced top-level `{...}` substring, returns any incomplete trailing object as `rest` for the next flush. Replaces line-split in all three `flushAssistantLines` implementations (`llmSastService`, `llmSbomService`, `llmSbomRecheckService`). 12-test fixture suite in `llmStreamExtractor.test.ts` anchored on the verbatim concatenation seen in dry-run B.
+- `sast_detection.md` field-name-discipline section gains a "Reachability records specifically" rule: emit `sca_issue_id` (the input file's `id` UUID), not `cve` / `package`. Same section adds a "one object per line" framing note so logs stay debuggable for humans, even though the parser now tolerates concatenation.
+- `worker.ts`: `sastFindingCount` is now stamped at `sast_ingest` time from the ingest result (direct observation), not recounted from `sast_issues` after recheck. Mirrors E1's `componentCount` invariant — per-scan denorm reflects what THIS scan's detection emitted, never bumps from recheck-recovery. Resolves the user-reported scope-augmentation issue parallel to E1.
+
+**Diagnostic affordance kept:** `SASTBOT_RAW_STREAM_DUMP=<file>` env var is preserved (commented) so the next person who debugs LLM drift doesn't have to re-add it.
+
+**What we learned:** LLM stream parsing is a layered problem. The 8603e0d schema fix handled "LLM emits wrong field names on SAST records" but assumed the lines themselves were well-formed JSONL. They aren't always — Opus 4.7 with xhigh effort sometimes concatenates records when batch-emitting verdicts. The parser must be robust at the JSON-object granularity, not the line granularity. Likewise, prompt-side field-name discipline needs per-record-kind guidance — broad "don't drift" rules aren't specific enough when the LLM has both input-shape and output-shape vocabulary to confuse.

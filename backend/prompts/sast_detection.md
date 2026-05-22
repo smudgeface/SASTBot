@@ -73,7 +73,13 @@ Use EXACTLY these field names. Common drift the schema will reject:
 - omitting `confidence` → always emit; use `0.5` if uncertain
 - omitting `reasoning` → always emit; use a brief one-liner
 
+**Reachability records specifically:** the output field is `sca_issue_id` and its value is the `id` field (UUID) from the SCA input file — **not** `cve_id`, `package`, or any other input column. The input columns are context for *your* analysis; the LLM-to-database link goes through the UUID alone. Records that say `"cve":"CVE-XXX"` or `"package":"foo"` instead of `"sca_issue_id":"<uuid>"` get rejected wholesale; the operator sees a parse error and no reachability verdict reaches the database.
+
 If you cannot produce one of the required fields, omit the entire record. Partial records get dropped.
+
+## Output framing — one object per line, no concatenation
+
+Each record is its own line. Do **not** emit two JSON objects back-to-back without a newline between them (`{...}{...}` in a single chunk). The parser is tolerant of same-line concatenation but the rule keeps the stream debuggable for humans tailing logs. When you finish one record, end the line; start the next one fresh.
 
 ## Output format (JSON-Lines)
 
