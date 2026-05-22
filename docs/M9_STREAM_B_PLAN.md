@@ -186,7 +186,7 @@ This runs only in mode=runtime (the only mode that uses the rename dance). For m
 - [ ] `routes/adminRestore.ts`: mode=full wipes + extracts artifacts; mode=runtime passes the artifact dir to `runRuntimeRestore`
 - [ ] `services/restoreService.ts`: extended signature; runs artifact overlay post-commit; A6.4 pre-flight
 - [ ] Backwards-compat: old-format tarballs (missing `artifacts/` or older format version) still restore cleanly
-- [ ] Version bump: backend + frontend `package.json` 0.5.1 → 0.6.0
+- [ ] Version bump (**three files**, see CLAUDE.md ⚠️ Versioning policy): `backend/package.json` + `frontend/package.json` + `APP_VERSION` in `backend/src/routes/version.ts` — all to 0.6.0
 - [ ] `docs/PROGRESS.md` entry for A6
 
 ---
@@ -741,9 +741,11 @@ Standard Zod-typed endpoint in `routes/scans.ts`. 204 on success; 409 (ScanIsCur
 
 | Deploy | Branch / PR | Version | Touches |
 |---|---|---|---|
-| 1 | `m9-stream-a6-backup-restore-artifacts` | 0.5.1 → 0.6.0 | adminBackup, adminRestore, restoreService, backupMetadata, version, package.json ×2 |
-| 2 | `m9-stream-b1-b4-emit-ingest` | 0.6.0 → 0.7.0 | worker, sbomCurated, sarifService, sbomIngest (new), schemas, frontend types, package.json ×2 |
-| 3 | `m9-stream-b5-b6-drop-jsonb` | 0.7.0 → 0.8.0 | cli/backfillArtifacts (new), prisma schema + migration, docker-compose, worker (cleanup), scans routes, sbomService + sbomOccurrences (read source switch), package.json ×2 |
+| 1 | `m9-stream-a6-backup-restore-artifacts` | 0.5.1 → 0.6.0 | adminBackup, adminRestore, restoreService, backupMetadata, version, **3-file version bump** |
+| 2 | `m9-stream-b1-b4-emit-ingest` | 0.6.0 → 0.7.0 | worker, sbomCurated, sarifService, sbomIngest (new), schemas, frontend types, **3-file version bump** |
+| 3 | `m9-stream-b5-b6-drop-jsonb` | 0.7.0 → 0.8.0 | cli/backfillArtifacts (new), prisma schema + migration, docker-compose, worker (cleanup), scans routes, sbomService + sbomOccurrences (read source switch), **3-file version bump** |
 | Side | `m9-side-delete-scan` | bundle with any of the above | scans routes, scanService, tests |
 
 Each deploy is its own PR-shaped commit cluster, with one or more commits per deploy. `docs/PROGRESS.md` gets an entry per deploy.
+
+**3-file version bump** = `backend/package.json` + `frontend/package.json` + `APP_VERSION` in `backend/src/routes/version.ts`. Agents have repeatedly missed `APP_VERSION` (B1–B4 sub-agent did) — list it explicitly in the brief. After bumping, restart the backend and verify with `curl -s http://localhost:8000/version | jq .app` showing the new value.

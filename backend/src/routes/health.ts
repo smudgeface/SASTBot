@@ -2,6 +2,8 @@ import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 
+import { APP_VERSION } from "./version.js";
+
 const HealthResponseSchema = z.object({
   status: z.literal("ok"),
   version: z.string(),
@@ -19,7 +21,7 @@ const healthRoutes: FastifyPluginAsync = async (app) => {
         response: { 200: HealthResponseSchema },
       },
     },
-    async () => ({ status: "ok" as const, version: "0.2.0" }),
+    async () => ({ status: "ok" as const, version: APP_VERSION }),
   );
 };
 

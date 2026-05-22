@@ -8,6 +8,7 @@ import { loadConfig } from "./config.js";
 import { prisma } from "./db.js";
 import { closeRedis, getRedis } from "./queue/connection.js";
 import { SCAN_QUEUE_NAME, type ScanJobData } from "./queue/scanQueue.js";
+import { APP_VERSION } from "./routes/version.js";
 import { cloneOrRefresh, RemoteUnreachableError } from "./services/repoCache.js";
 import { GitCloneError } from "./services/gitClone.js";
 import {
@@ -579,7 +580,7 @@ async function regenerateSastSarifForScan(
     select: { startedAt: true, finishedAt: true },
   });
   const sarif = buildSarifFromIssues(issues, {
-    toolVersion: process.env.npm_package_version ?? "0.1.0",
+    toolVersion: APP_VERSION,
     modelName: "claude-code-cli",
     scopePath,
     startedAt: run?.startedAt ?? null,
@@ -922,7 +923,7 @@ async function backfillSastSarif(): Promise<void> {
         where: { scopeId: r.scopeId, lastSeenScanRunId: r.id },
       });
       const sarif = buildSarifFromIssues(issues, {
-        toolVersion: process.env.npm_package_version ?? "0.1.0",
+        toolVersion: APP_VERSION,
         modelName: "claude-code-cli",
         scopePath: r.scope.path,
         startedAt: r.startedAt,

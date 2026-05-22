@@ -23,8 +23,11 @@ Two versions matter, and they have different rules:
 
 ### 1. App version — SemVer, manual bump
 
-- **Single source of truth:** `backend/package.json` `version` field.
-- **Mirror required:** `frontend/package.json` `version` must match. Both files are bumped together in one commit. If they drift, `GET /version` and the UI footer will lie to operators.
+- **Runtime single source of truth:** the `APP_VERSION` constant in `backend/src/routes/version.ts`. Every runtime version surface (`GET /version`, `GET /healthz`, the OpenAPI `info.version`, the SARIF tool version) imports from here. **Do not** hardcode a version string anywhere else in `backend/src/` or `frontend/src/`.
+- **Three files must move together every bump** (drift causes operators to see lying version numbers — historically this has bitten us at every minor bump):
+  1. `backend/package.json` `version` field
+  2. `frontend/package.json` `version` field (+ `frontend/package-lock.json` top-level `version` if `npm install` won't run cleanly — pnpm-lock.yaml has no version field)
+  3. `backend/src/routes/version.ts` `APP_VERSION` constant
 - **Current baseline:** `0.1.0` (pre-1.0 — API is still evolving).
 - **When to bump:**
   | Change | Bump |
@@ -32,8 +35,9 @@ Two versions matter, and they have different rules:
   | Bug fix, doc tweak, internal refactor with no operator-visible effect | PATCH (`0.1.0 → 0.1.1`) |
   | New backwards-compatible feature: new endpoint, new optional field, new admin UI, new env knob | MINOR (`0.1.0 → 0.2.0`) |
   | Breaking API change, schema migration that destroys data, removed feature, changed default behaviour | MAJOR (pre-1.0 still warrants a MINOR bump until we declare 1.0; reserve MAJOR for the 1.0+ era) |
-- **How to bump:** edit both `package.json` files, run `pnpm install` and `npm install` to update the respective lockfiles, commit as `chore: bump version to vX.Y.Z` (or fold into the feature commit that justified the bump).
-- **Surfaces:** `GET /version` (public), admin Settings page footer.
+- **How to bump:** edit all three files above, run `pnpm install` / `npm install` to refresh lockfiles, commit as `chore: bump version to vX.Y.Z` (or fold into the feature commit that justified the bump). Verify with `curl -s http://localhost:8000/version | jq .app` after restart — if it shows the old value, the running process didn't pick up `APP_VERSION` (restart again).
+- **Surfaces:** `GET /version` (public), `GET /healthz`, OpenAPI `info.version` at `/openapi.json` / `/docs`, SARIF `tool.driver.version`, admin Settings page footer.
+- **Spawning an agent that ships a feature?** Add an explicit "bump version (all three files: package.json ×2 + `APP_VERSION` in `backend/src/routes/version.ts`)" line to the brief. Agents have missed `APP_VERSION` even when the brief lists the two package.jsons.
 
 ### 2. DB schema version — Prisma-derived, automatic
 
@@ -209,7 +213,7 @@ docker compose -f docker/compose/docker-compose.yml down -v          # stop AND 
 - Check `docs/PROGRESS.md` for the current milestone and what was learned.
 - Read `docs/M5_PLAN.md` for the M5 phase checklist (5d Scheduler + 5e Hardening still pending).
 - Orient in ≤3 tool calls: `git log --oneline -10`, `tail -40 docs/PROGRESS.md`, `docker compose ps`.
-- **🔖 Versioning is not optional.** Before adding a schema migration → confirm the migration folder is committed (that IS the schema version). Before cutting a release or shipping an operator-visible change → bump `backend/package.json` AND `frontend/package.json` to the same SemVer string in one commit. Cross-version backup/restore relies on this — see the "⚠️ Versioning policy" section at the top of this file.
+- **🔖 Versioning is not optional.** Before adding a schema migration → confirm the migration folder is committed (that IS the schema version). Before cutting a release or shipping an operator-visible change → bump **all three** version surfaces in one commit: `backend/package.json`, `frontend/package.json`, and `APP_VERSION` in `backend/src/routes/version.ts`. Agents have repeatedly missed `APP_VERSION`. After bumping, `curl -s http://localhost:8000/version | jq .app` must show the new value. See the "⚠️ Versioning policy" section at the top of this file.
 - 🚦 **M9 closure gate is pending.** Per-stream unit tests deliberately do not cover end-to-end behaviour (worker pipeline, HTTP round-trips, operator UI flows, backup/restore on real artifact files). Before declaring M9 done, run the test round in `docs/M9_E2E_TEST_PLAN.md`. Remove this line in the commit that updates that doc's §5 (gate-passed header).
 - Never commit real secrets. `.env` is gitignored; `.env.example` is the canonical source of variable names.
 - Never push to the GitHub remote without explicit user approval. The user creates the remote (`smudgeface/SASTBot`).

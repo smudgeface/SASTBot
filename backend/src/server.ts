@@ -25,7 +25,7 @@ import authRoutes from "./routes/auth.js";
 import healthRoutes from "./routes/health.js";
 import scansRoutes from "./routes/scans.js";
 import scopesRoutes from "./routes/scopes.js";
-import versionRoutes from "./routes/version.js";
+import versionRoutes, { APP_VERSION } from "./routes/version.js";
 import { ensureCanary } from "./security/crypto.js";
 import { bootstrapIfEmpty } from "./services/bootstrap.js";
 
@@ -78,8 +78,8 @@ export async function buildServer(): Promise<FastifyInstance> {
       info: {
         title: "SASTBot API",
         description:
-          "LLM-augmented SAST/SCA tool. M1 walking skeleton: auth, repos, settings, credentials, scans (stub).",
-        version: "0.2.0",
+          "LLM-augmented SAST/SCA tool. Bumped in lockstep with APP_VERSION in routes/version.ts.",
+        version: APP_VERSION,
       },
       servers: [{ url: "/" }],
       components: {
