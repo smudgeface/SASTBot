@@ -23,6 +23,9 @@ import { backfillReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
 import { toRepoRelative } from "./services/scopePath.js";
 import { buildSarifFromIssues } from "./services/sarifService.js";
+import { emitSbomArtifact } from "./services/sbomCurated.js";
+import { ingestSbomFromArtifact } from "./services/sbomIngest.js";
+import { sarifPathFor, writeArtifact } from "./services/artifactStore.js";
 import {
   applyRecheckVerdicts,
   cleanupTmp as cleanupLlmTmp,
@@ -124,11 +127,14 @@ type ScanPhase =
   | "cdxgen"
   | "llm_sbom"
   | "llm_sbom_recheck"
+  | "sbom_emit"      // B1: write canonical CycloneDX artifact to disk
+  | "sbom_ingest"    // B2: ingest SBOM from disk (no-op for cdxgen flow)
   | "osv"
   | "nvd"
   | "eol"
   | "llm_detection"
   | "llm_recheck"
+  | "sarif_emit"     // B4: dual-write SARIF to disk + column
   | "sca_summaries"
   | "finalizing";
 
@@ -552,6 +558,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
     // 8. Generate the SARIF export from the issues observed in this run so
     //    operators can hand the standard JSON to dashboards / CI gates /
     //    compliance evidence collection. Cheap; idempotent.
+    // B4: set sarif_emit phase so the UI sees a live progress tick.
+    await setPhase(scanRunId, "sarif_emit");
     await regenerateSastSarifForScan(scanRunId, run.scopeId, scopePath);
   } finally {
     await cleanupLlmTmp(scanRunId);
@@ -577,6 +585,21 @@ async function regenerateSastSarifForScan(
     startedAt: run?.startedAt ?? null,
     endedAt: run?.finishedAt ?? null,
   });
+
+  // B4: dual-write — disk artifact AND the column. The column write goes away
+  // in Deploy 3 when scan-page endpoints are migrated to read from the file.
+  const sarifBody = JSON.stringify(sarif, null, 2);
+  try {
+    await writeArtifact(sarifPathFor(scanRunId), sarifBody);
+  } catch (err) {
+    logger.error({ err: (err as Error).message, scanRunId }, "[worker] sarif_emit: disk write failed");
+    await appendWarning(scanRunId, {
+      code: "sarif_emit_failed",
+      severity: "error",
+      message: `Failed to write SARIF artifact: ${(err as Error).message}.`,
+    });
+  }
+
   await prisma.scanRun.update({
     where: { id: scanRunId },
     data: { sastSarif: sarif as Prisma.InputJsonValue },
@@ -880,6 +903,12 @@ backfillManifestPathPrefixes().catch((err) => {
 // Generate sast_sarif for runs that pre-date the column (M6j cutover).
 // Idempotent — only fills NULL rows. Goes one scan at a time so a partial
 // failure doesn't take down the whole boot.
+//
+// B4 (Deploy 2): this backfill still only writes to the column. Disk
+// emission for legacy rows is intentionally deferred to Deploy 3, which will
+// rewrite this hook to write to ${ARTIFACT_DIR}/sarif/<scanRunId>.sarif.json
+// and then drop the column write. Don't add disk writes here now — they'd be
+// removed again in the very next PR.
 async function backfillSastSarif(): Promise<void> {
   const runs = await prisma.scanRun.findMany({
     where: { sastSarif: { equals: Prisma.DbNull }, sastFindingCount: { gt: 0 } },
@@ -1562,6 +1591,42 @@ const worker = new Worker<ScanJobData>(
           message: `SBOM component recheck failed: ${(err as Error).message}. Components from prior runs remain active.`,
         });
       }
+
+      // ── Step 3.99: emit canonical SBOM artifact (B1) ─────────────────────
+      // sbom_components is now in its final post-recheck state. Serialize it
+      // to ${ARTIFACT_DIR}/sbom/${scanRunId}.json as the canonical CycloneDX
+      // 1.7 artifact. Failure is an error-severity warning (gates remediation).
+      await setPhase(scanRunId, "sbom_emit");
+      const sbomEmitResult = await emitSbomArtifact(scanRunId).catch((err) => {
+        log.error({ err: (err as Error).message }, "[worker] sbom_emit failed");
+        return null;
+      });
+      if (!sbomEmitResult?.written) {
+        await appendWarning(scanRunId, {
+          code: "sbom_emit_failed",
+          severity: "error",
+          message: `Failed to write canonical SBOM artifact${
+            sbomEmitResult === null ? " (write threw)" : " (no components to emit)"
+          }.`,
+        });
+      }
+
+      // ── Step 3.995: sbom_ingest (B2) — no-op for cdxgen flow ─────────────
+      // For source='cdxgen', sbom_components is already fully populated by
+      // persistAugmentedComponents + recheck — no ingestion needed.
+      // For source='upload' (future B7), we'd read the artifact back in and
+      // upsert sbom_components from the CycloneDX doc. That path is a skeleton
+      // in sbomIngest.ts; this phase fires so the UI sees the tick.
+      await setPhase(scanRunId, "sbom_ingest");
+      const runForIngest = await prisma.scanRun.findUnique({
+        where: { id: scanRunId },
+        select: { source: true },
+      });
+      if (runForIngest?.source === "upload") {
+        await ingestSbomFromArtifact(scanRunId);
+      }
+      // For source='cdxgen' (the only flow today), sbom_components is already
+      // populated — nothing to do.
 
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");

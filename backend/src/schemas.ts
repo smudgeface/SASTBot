@@ -428,8 +428,11 @@ export const ScanRunOutSchema = z.object({
   /** Live progress fields, populated by the worker while status==="running",
    *  cleared on terminal status. */
   current_phase: z.enum([
-    "cloning", "cdxgen", "llm_sbom", "llm_sbom_recheck", "osv", "nvd", "eol",
-    "llm_detection", "llm_recheck", "sca_summaries", "finalizing",
+    "cloning", "cdxgen", "llm_sbom", "llm_sbom_recheck",
+    "sbom_emit", "sbom_ingest",
+    "osv", "nvd", "eol",
+    "llm_detection", "llm_recheck", "sarif_emit",
+    "sca_summaries", "finalizing",
   ]).nullable(),
   phase_progress: z.object({
     done: z.number().int().nonnegative(),

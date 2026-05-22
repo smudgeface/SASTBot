@@ -14,6 +14,7 @@
  */
 
 import { prisma } from "../db.js";
+import { sbomPathFor, writeArtifact } from "./artifactStore.js";
 
 // ---------------------------------------------------------------------------
 // D5 — Key-stable JSON serializer
@@ -139,6 +140,25 @@ const SBOM_TOOLS_COMPONENTS: Array<{ name: string; version?: string; type: strin
   { type: "application", name: "SASTBot", version: "M6q" },
   { type: "application", name: "cdxgen", version: "12.2" },
 ];
+
+/**
+ * B1: serialize the canonical CycloneDX 1.7 SBOM for `scanRunId` and write it
+ * to ${ARTIFACT_DIR}/sbom/${scanRunId}.json. Idempotent — overwrites the file
+ * atomically (via artifactStore.writeArtifact). Returns { written, path }.
+ *
+ * `written: false` means the scan had no components and no file was emitted —
+ * caller (worker.ts) treats this as a warning condition.
+ */
+export async function emitSbomArtifact(
+  scanRunId: string,
+): Promise<{ written: boolean; path: string }> {
+  const doc = await buildCuratedSbomJson(scanRunId);
+  const filePath = sbomPathFor(scanRunId);
+  if (!doc) return { written: false, path: filePath };
+  const body = stableStringify(doc, 2);
+  await writeArtifact(filePath, body);
+  return { written: true, path: filePath };
+}
 
 /**
  * Build a CycloneDX 1.7 doc from the persisted sbom_components rows for

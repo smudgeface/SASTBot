@@ -4,6 +4,64 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## M9 Stream B Deploy 2 — emit + ingest + sarif_emit (2026-05-22)
+
+### What shipped
+
+- **Three new worker phases: `sbom_emit`, `sbom_ingest`, `sarif_emit`.** Phase
+  enum extended in `worker.ts`, `schemas.ts`, `frontend/src/api/types.ts`, and
+  `frontend/src/api/schema.d.ts`. `SCAN_PHASE_LABELS` maps all three to
+  human-readable strings for the live-progress UI.
+
+- **B1 — `emitSbomArtifact`.** New export in `sbomCurated.ts`. After all
+  recheck verdicts apply and `sbom_components` is in final post-recheck state,
+  the worker serializes it to `${ARTIFACT_DIR}/sbom/${scanRunId}.json` via
+  `stableStringify` + `writeArtifact` (atomic tmp-then-rename). Failure emits
+  an `error`-severity `sbom_emit_failed` warning (gates remediation logic via
+  `hasErrorWarnings`). Zero-component scans return `{ written: false }` and
+  also emit the warning.
+
+- **B2 — `sbomIngest.ts` skeleton.** New service file. Phase fires for every
+  scan so the UI sees the tick. For `source='cdxgen'` (the only flow today),
+  worker skips the function body — `sbom_components` is already populated.
+  For `source='upload'` (future B7), the function reads the artifact file and
+  throws a `TODO(M9 B7)` error until someone implements the CycloneDX ingestion
+  path.
+
+- **B3 — verified, no code change.** `osvService`, `nvdService`, `eolService`
+  all read `prisma.sbomComponent.findMany` keyed on `scanRunId`. No change
+  required; noted here for the record.
+
+- **B4 — `sarif_emit` dual-write.** `regenerateSastSarifForScan` now writes to
+  `${ARTIFACT_DIR}/sarif/${scanRunId}.sarif.json` AND continues writing to
+  `scan_runs.sast_sarif` (column stays in Deploy 2; dropped in Deploy 3). Disk
+  write failure appends `error`-severity `sarif_emit_failed` warning.
+  `backfillSastSarif` (boot hook for legacy rows) intentionally left column-only
+  for now; a comment marks it for Deploy 3.
+
+- **App version bumped 0.6.0 → 0.7.0** (MINOR — three new worker phases) in
+  both `package.json` files and `frontend/package-lock.json`.
+
+- **Tests.** 202 tests passing (up from 193 pre-Deploy 2). New test files:
+  `sbomEmit.test.ts` (4 tests — emit 10 components, zero-component `written=false`,
+  round-trip byte equality, missing scan run), `sbomIngest.test.ts` (2 tests —
+  no-artifact throw, B7 skeleton throw), `sarifEmit.test.ts` (3 tests — writes
+  valid SARIF v2.1.0 file, propagates write errors, empty issues list).
+
+### What we learned
+
+- **`source='upload'` short-circuit in worker.ts is the right seam.** The
+  `ingestSbomFromArtifact` function never executes on `cdxgen` scans, so the
+  skeleton throw is fully safe — it only fires if someone manually sets
+  `source='upload'` on a scan row and triggers a re-run.
+
+- **E2E coverage for the full round-trip (file → backup → restore → file) is
+  the Phase 1 obligation in `docs/M9_E2E_TEST_PLAN.md`.** Don't try to run
+  that gate now — it requires Deploy 3 (column drop + endpoint migration) to
+  be complete first.
+
+---
+
 ## M9 Stream A6 — Artifact dir in backup/restore tarball (2026-05-22)
 
 ### What shipped

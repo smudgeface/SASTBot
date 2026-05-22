@@ -295,11 +295,14 @@ export type ScanPhase =
   | "cdxgen"
   | "llm_sbom"
   | "llm_sbom_recheck"
+  | "sbom_emit"
+  | "sbom_ingest"
   | "osv"
   | "nvd"
   | "eol"
   | "llm_detection"
   | "llm_recheck"
+  | "sarif_emit"
   | "sca_summaries"
   | "finalizing";
 
@@ -308,11 +311,14 @@ export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
   cdxgen: "Building SBOM",
   llm_sbom: "LLM SBOM augmentation",
   llm_sbom_recheck: "SBOM recheck",
+  sbom_emit: "Writing SBOM artifact",
+  sbom_ingest: "Indexing SBOM",
   osv: "Querying OSV.dev",
   nvd: "Querying NVD",
   eol: "Checking EOL / deprecation",
   llm_detection: "LLM SAST detection",
   llm_recheck: "LLM SAST recheck",
+  sarif_emit: "Writing SARIF artifact",
   sca_summaries: "Generating summaries",
   finalizing: "Finalizing",
 };

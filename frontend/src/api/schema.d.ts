@@ -1273,7 +1273,7 @@ export interface paths {
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
                             /** @enum {string|null} */
-                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_emit" | "sbom_ingest" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sca_summaries" | "finalizing" | null;
                             phase_progress: {
                                 done: number;
                                 total: number;
@@ -2551,7 +2551,7 @@ export interface paths {
                                 sast_finding_count: number;
                                 confirmed_reachable_count: number;
                                 /** @enum {string|null} */
-                                current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                                current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_emit" | "sbom_ingest" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sca_summaries" | "finalizing" | null;
                                 phase_progress: {
                                     done: number;
                                     total: number;
@@ -2654,7 +2654,7 @@ export interface paths {
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
                             /** @enum {string|null} */
-                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_emit" | "sbom_ingest" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sca_summaries" | "finalizing" | null;
                             phase_progress: {
                                 done: number;
                                 total: number;
@@ -2766,7 +2766,7 @@ export interface paths {
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
                             /** @enum {string|null} */
-                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sca_summaries" | "finalizing" | null;
+                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_emit" | "sbom_ingest" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sca_summaries" | "finalizing" | null;
                             phase_progress: {
                                 done: number;
                                 total: number;
