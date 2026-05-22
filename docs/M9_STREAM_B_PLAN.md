@@ -71,15 +71,16 @@ This is multi-PR work. Three commit clusters, ordered:
              ▼
 ┌──────────────────────────┐
 │ Deploy 3: B5 + B6        │  v0.7.0 → v0.8.0
-│   - backfillArtifacts    │  entrypoint runs backfill before migrate;
-│     CLI                  │  migration drops sbom_json + sast_sarif;
-│   - migration: drop      │  endpoints switch to artifact reads;
-│     scan_runs.sbom_json  │  remove the worker's JSONB writes from
-│     + sast_sarif         │  the worker (now redundant).
+│   - migration: drop      │  No backfill (locked 2026-05-22):
+│     scan_runs.sbom_json  │  legacy scans return 404 with a
+│     + sast_sarif         │  "re-run to produce artifact" message.
 │   - endpoints switch     │
-│     to artifactStore     │
-│   - worker stops writing │
-│     JSONB columns        │
+│     to artifactStore     │  - delete dead boot backfills
+│   - worker stops writing │    (backfillSastSarif,
+│     JSONB columns        │     backfillSbomManifestFiles,
+│   - delete dead          │     backfillSbomOccurrences)
+│     boot backfills       │  - frontend renders 404 as inline
+│                          │    "no SBOM for legacy scan" state
 └──────────────────────────┘
 ```
 
@@ -356,79 +357,15 @@ In Deploy 3 the `prisma.scanRun.update` line gets deleted along with the column.
 
 ---
 
-## 9. Stream B5 — backfill + drop JSONB columns
+## 9. Stream B5 — drop JSONB columns (no backfill)
 
-This is the irreversible deploy. Three discrete steps, all in one PR/commit cluster but careful about ordering inside the entrypoint:
+> **Posture locked 2026-05-22 after the first real-data validation round:** legacy `scan_runs` rows do NOT get their JSONB content backfilled to artifact files. Reasoning: (a) scan data is ephemeral — the upcoming `DELETE /api/scans/:id` makes this explicit; (b) backfilling SBOM would need to re-derive from `sbom_components`, which produces drift on `metadata.timestamp` and writes a file that doesn't reflect what `sbom_emit` would have produced at scan time; (c) operators who need an artifact for a legacy scan can re-trigger the scan or just live without it. The legacy `/scans/:id/sbom` and `/scans/:id/sast-sarif` endpoints will return 404 with a clear "legacy scan — re-run to produce artifact" message (see §10).
+>
+> Side effect: **issue 3 (metadata.timestamp re-emit drift) dissolves.** The artifact file is now written exactly once, by `sbom_emit`, at scan time. There is no re-derivation path. The drift can't happen.
 
-### B5.1 — CLI backfill script
+This deploy is small: one migration, four code deletions, one endpoint behavioural change (§10). No CLI script, no entrypoint reordering, no boot-time backfill.
 
-**New file:** `backend/src/cli/backfillArtifacts.ts`
-
-**Algorithm:**
-
-```ts
-async function main() {
-  // Probe information_schema — if columns are gone, exit 0 (already done).
-  const hasSbomJson = await columnExists("scan_runs", "sbom_json");
-  const hasSastSarif = await columnExists("scan_runs", "sast_sarif");
-  if (!hasSbomJson && !hasSastSarif) {
-    logger.info("[backfillArtifacts] columns already dropped — no-op");
-    return;
-  }
-
-  // SBOM: rebuild canonical doc from sbom_components, not from sbom_json
-  // (which is raw cdxgen — wrong shape for the curated artifact).
-  if (hasSbomJson) {
-    const runs = await prisma.$queryRawUnsafe<{ id: string }[]>(
-      `SELECT id FROM scan_runs WHERE sbom_json IS NOT NULL`
-    );
-    for (const { id } of runs) {
-      const filePath = sbomPathFor(id);
-      if (await fileExists(filePath)) continue;  // idempotent: skip
-      const doc = await buildCuratedSbomJson(id);
-      if (!doc) continue;
-      await writeArtifact(filePath, stableStringify(doc, 2));
-    }
-  }
-
-  // SARIF: byte-copy from sast_sarif column (it's already the final doc).
-  if (hasSastSarif) {
-    const runs = await prisma.$queryRawUnsafe<{ id: string; sarif: unknown }[]>(
-      `SELECT id, sast_sarif AS sarif FROM scan_runs WHERE sast_sarif IS NOT NULL`
-    );
-    for (const { id, sarif } of runs) {
-      const filePath = sarifPathFor(id);
-      if (await fileExists(filePath)) continue;
-      await writeArtifact(filePath, JSON.stringify(sarif, null, 2));
-    }
-  }
-}
-```
-
-**Asymmetry note:** SBOM backfill **re-derives** the file from `sbom_components`. This is necessary because `scan_runs.sbom_json` holds raw cdxgen output, not the post-augmentation curated form. SARIF backfill is a straight byte copy because `sast_sarif` already holds the final SARIF.
-
-**Failure mode:** per-row failures are logged and skipped (don't block deploy). The next scan will overwrite anything missing — the backfill is best-effort for historical data, not a hard requirement.
-
-**`package.json` script:** add `"backfill-artifacts": "tsx src/cli/backfillArtifacts.ts"`.
-
-### B5.2 — Entrypoint ordering
-
-**Touches:** `docker/compose/docker-compose.yml` (backend `command`) and `docker/backend-entrypoint.sh` if one exists (M8 added pre-deploy backup via the entrypoint per commit `04aa959`).
-
-Current backend command: `pnpm prisma migrate deploy && pnpm dev`.
-
-New command: `pnpm run backfill-artifacts && pnpm prisma migrate deploy && pnpm dev`.
-
-Why this order:
-- Backfill reads columns while they still exist.
-- Migration drops the columns.
-- Dev/prod server starts with the columns gone.
-
-If the backfill takes too long for a deploy window: it's idempotent + safe — the next deploy picks up where it left off. The columns aren't dropped until the migration runs, and we don't run the migration if backfill exits non-zero (`&&` short-circuit).
-
-Worker entrypoint stays unchanged (worker doesn't run migrations, doesn't need to backfill — the backend has already handled it before the worker boots).
-
-### B5.3 — Migration: drop the columns
+### B5.1 — Migration: drop the columns
 
 Per CLAUDE.md ("Compose stack has no TTY for `prisma migrate dev`"), generate manually:
 
@@ -446,21 +383,24 @@ ALTER TABLE "scan_runs" DROP COLUMN "sbom_json";
 ALTER TABLE "scan_runs" DROP COLUMN "sast_sarif";
 ```
 
-Per `docs/MIGRATIONS_CHECKLIST.md` (column drop): no row backfill required (we did it in B5.1), but worth confirming no code path still reads the columns.
+Per `docs/MIGRATIONS_CHECKLIST.md` (column drop): no row backfill required — by design. Worth confirming no code path still reads the columns before the migration runs (see B5.2).
 
-### B5.4 — Cleanup: remove worker JSONB writes + boot backfills + service reads
+### B5.2 — Cleanup: remove all JSONB writes, reads, and boot backfills
 
-Same PR as the migration:
+Same PR as the migration. Every consumer of `sbom_json` / `sast_sarif` either gets deleted or repointed at the artifact file:
 
 | Site | Change |
 |---|---|
-| `worker.ts:582` (regenerateSastSarifForScan column write) | delete the `prisma.scanRun.update({...sastSarif...})` line |
-| `worker.ts:1382` (raw cdxgen column write) | delete the `sbomJson: sbomDoc as object` line from the `scanRun.update` call inside `persistAugmentedComponents`'s preamble; the rest of that tx still runs |
-| `worker.ts:880–912` (backfillSastSarif) | delete the boot hook entirely |
-| `services/sbomService.ts:842–910` (backfillSbomManifestFiles) | this reads `sbom_json` to repair manifest paths in `sbom_components`. **Keep the function but switch the read source to the new artifact file via `tryReadArtifact(sbomPathFor(run.id))` and parse as CycloneDxDocument.** The function is idempotent and only runs on boot; the file IS the canonical replacement. |
-| `services/sbomOccurrences.ts:170,416,433,440,451,458` (backfillSbomOccurrences) | same surgery as above — read from disk, not the JSONB column |
-| `services/osvService.ts:439` (comment only — no actual column read) | no change |
-| Prisma schema | delete `sbomJson` and `sastSarif` fields on `ScanRun` model |
+| `worker.ts:~582` (regenerateSastSarifForScan column write) | Delete the `prisma.scanRun.update({...sastSarif...})` line. The disk write was added in Deploy 2 and is now the only path. |
+| `worker.ts:~1382` (raw cdxgen column write inside the augmentation tx) | Delete the `sbomJson: sbomDoc as object` line. The `componentCount` update on the same tx stays. |
+| `worker.ts:~880–912` (`backfillSastSarif` boot hook) | **Delete the entire function and its call site.** Its only purpose was to populate `sast_sarif` for runs that pre-dated the column. With no backfill posture, legacy rows simply don't have SARIF available — UI shows 404. |
+| `services/sbomService.ts:~842–910` (`backfillSbomManifestFiles`) | **Delete entirely.** This was a one-shot repair backfill for a manifest-path bug (per the function header comment) — it ran via boot hook and rewrote `sbom_components.manifest_file` based on `scan_runs.sbom_json`. Without the column, the read source is gone. The data it was repairing is years-old historical noise; legacy scans either already got repaired (idempotent function ran on every boot) or never will. Remove the function, its call site in `worker.ts`, and any test that exercises it. |
+| `services/sbomOccurrences.ts:~416,433,440,451,458` (`backfillSbomOccurrences`) | **Delete entirely.** Same posture and reasoning as `backfillSbomManifestFiles` — boot-time repair backfill keyed on the JSONB column. |
+| `services/osvService.ts:~439` (comment only) | Update the comment to reference the artifact file path instead. No behavioural change. |
+| Prisma schema | Delete `sbomJson` and `sastSarif` fields on the `ScanRun` model. |
+| Any test file that mocks or constructs `sbomJson` / `sastSarif` Prisma input | Audit + delete the field references. |
+
+**Pre-cleanup verification:** before generating the migration, `rg "sbomJson|sastSarif|sbom_json|sast_sarif" backend/src` should return zero hits outside the four sites above. The migration step will fail loudly if Prisma still references the columns in the client, so this is a build-time guarantee — but flagging it for the agent.
 
 ---
 
@@ -473,28 +413,47 @@ Two endpoints, both currently reading the JSONB columns. Switch to `tryReadArtif
 ### `GET /scans/:id/sbom`
 
 ```ts
-// Before
 const run = await prisma.scanRun.findFirst({
   where: { id: params.id, orgId: orgId ?? null },
-  select: { id: true, sbomJson: true, repo: { select: { name: true } } },
-});
-if (!run.sbomJson) return reply.code(404).send(...);
-const pretty = stableStringify(run.sbomJson, 2);
-
-// After
-const run = await prisma.scanRun.findFirst({
-  where: { id: params.id, orgId: orgId ?? null },
-  select: { id: true, repo: { select: { name: true } } },
+  select: { id: true, status: true, createdAt: true, repo: { select: { name: true } } },
 });
 if (!run) return reply.code(404).send({ detail: "Scan run not found" });
+
 const body = await tryReadArtifact(sbomPathFor(run.id));
-if (!body) return reply.code(404).send({ detail: "SBOM not yet available for this scan" });
+if (!body) {
+  // Distinguish three cases the operator might be hitting:
+  //   1. Scan is still running     → file will appear when sbom_emit fires
+  //   2. Scan ran but pre-dates B1 → no file will ever appear (legacy scan)
+  //   3. Scan ran but sbom_emit_failed (error-severity warning was recorded)
+  // We don't have a clean signal for (1) vs (2) vs (3) without joining warnings,
+  // so the message covers all three.
+  return reply.code(404).send({
+    detail:
+      `SBOM artifact not available for this scan. This is expected if: ` +
+      `(a) the scan is still running, ` +
+      `(b) the scan completed before the artifact-file pipeline shipped (M9 Stream B), ` +
+      `(c) the worker recorded an sbom_emit_failed warning during this scan. ` +
+      `To produce a downloadable SBOM, re-trigger the scan from the repo page.`,
+  });
+}
+
 const pretty = body.toString("utf8");  // file is already stableStringify-formatted
+const etag = `"${createHash("sha256").update(pretty).digest("hex").slice(0, 32)}"`;
+const ifNoneMatch = (req.headers as Record<string, string | undefined>)["if-none-match"];
+if (ifNoneMatch === etag) return reply.code(304).send();
+
+return reply
+  .header("Content-Type", "application/json; charset=utf-8")
+  .header("Content-Disposition", `attachment; filename="sbom-${run.repo.name}-${run.id.slice(0, 8)}.cdx.json"`)
+  .header("ETag", etag)
+  .send(pretty);
 ```
 
 ETag computation stays the same (`createHash("sha256").update(pretty).digest("hex").slice(0, 32)`); since the file was written deterministically by `stableStringify`, two reads with no scan in between will produce the same ETag.
 
-**Semantic shift to flag in PROGRESS.md:** before B6, this endpoint served the raw cdxgen audit-trail doc. After B6, it serves the post-augmentation curated doc. Per locked decision B-Q1, this is intentional — the raw cdxgen audit trail goes away.
+**Semantic shifts to flag in PROGRESS.md:**
+- Before B6, this endpoint served the raw cdxgen audit-trail doc. After B6, it serves the post-augmentation curated doc (per locked decision B-Q1).
+- Before B6, legacy scans (with non-null `sbom_json`) returned 200. After B6, they return 404 with the legacy-scan message above.
 
 Suggested doc-string update for the endpoint, replacing the existing "Raw cdxgen output for this scan..." comment:
 
@@ -504,6 +463,10 @@ Suggested doc-string update for the endpoint, replacing the existing "Raw cdxgen
 // by the worker's sbom_emit phase using stableStringify so two reads of an
 // unchanged scan return byte-identical output (ETag stable).
 //
+// Legacy scans (run before M9 Stream B) have no artifact file and return 404
+// with a re-run-the-scan hint. The user-facing UI should render this as a
+// friendly "no SBOM for this old scan — re-run to produce one" message.
+//
 // This is the scan-level (per-run) artifact. For the scope-level view that
 // reflects operator edits to scope_components, use
 // GET /api/scopes/:id/sbom-json.
@@ -511,15 +474,11 @@ Suggested doc-string update for the endpoint, replacing the existing "Raw cdxgen
 
 ### `GET /scans/:id/sast-sarif`
 
-Same pattern. Add an ETag header for parity with the SBOM endpoint (cheap, gives the frontend "did this change?" semantics for free).
+Same pattern: artifact-file read, identical 404 message structure, add an ETag header for parity with the SBOM endpoint.
 
-### Open question for B6 — empty-artifact 404 message
+### Frontend handling
 
-If `tryReadArtifact` returns null (file missing on disk), do we 404 or 410? The file might be missing because:
-- Scan is still running (sbom_emit hasn't fired yet) → 404 is correct.
-- Scan ran but `sbom_emit_failed` warning was recorded → arguably 410. But operators reading the file path expect 404, and the warning is surfaced in the scan-detail UI separately, so 404 with the existing "SBOM not yet available" detail is fine.
-
-Recommended: keep 404, no behavior change.
+The frontend's "Download SBOM" / "Download SARIF" buttons on `/scans/:id` should map 404 → an inline disabled state with the explanatory message, not a generic error toast. The 404 is expected and benign for legacy scans; treating it as an exceptional state would alarm operators reviewing pre-M9 history.
 
 ---
 
@@ -618,12 +577,11 @@ New `tests/sarifEmit.test.ts`:
 - Insert sast_issues, call `regenerateSastSarifForScan`, assert file exists and contains the SARIF doc.
 - Failure mode: pre-make the artifact dir read-only, assert the worker records the `sarif_emit_failed` warning.
 
-### B5 — backfill
+### B5 — column drop (no backfill)
 
-New `tests/backfillArtifacts.test.ts`:
-- Pre-populate a scan_run with `sbomJson` (raw cdxgen) and `sastSarif`. Run the CLI script in-process. Assert files appear on disk with curated content for SBOM, raw bytes for SARIF.
-- Re-run the script: no new writes (idempotent).
-- Drop the columns programmatically (test fixture), re-run: exits 0 cleanly.
+No backfill test — the posture is "legacy rows lose the column, period." Tests for B5 are instead:
+- A schema test asserting `scan_runs` model no longer has `sbomJson` / `sastSarif` fields (catches forgotten Prisma client regeneration).
+- A grep-style test asserting no remaining `sbom_json` / `sast_sarif` references in `backend/src/` outside the migration directory (catches forgotten cleanup).
 
 ### B6 — endpoint switch
 
@@ -743,7 +701,7 @@ Standard Zod-typed endpoint in `routes/scans.ts`. 204 on success; 409 (ScanIsCur
 |---|---|---|---|
 | 1 | `m9-stream-a6-backup-restore-artifacts` | 0.5.1 → 0.6.0 | adminBackup, adminRestore, restoreService, backupMetadata, version, **3-file version bump** |
 | 2 | `m9-stream-b1-b4-emit-ingest` | 0.6.0 → 0.7.0 | worker, sbomCurated, sarifService, sbomIngest (new), schemas, frontend types, **3-file version bump** |
-| 3 | `m9-stream-b5-b6-drop-jsonb` | 0.7.0 → 0.8.0 | cli/backfillArtifacts (new), prisma schema + migration, docker-compose, worker (cleanup), scans routes, sbomService + sbomOccurrences (read source switch), **3-file version bump** |
+| 3 | `m9-stream-b5-b6-drop-jsonb` | 0.7.0 → 0.8.0 | prisma schema + migration (drop 2 columns), worker (delete JSONB writes + 3 dead boot backfills), scans routes (404 for legacy), frontend friendly 404 state, **3-file version bump**. **No backfill** — locked posture, see §9. |
 | Side | `m9-side-delete-scan` | bundle with any of the above | scans routes, scanService, tests |
 
 Each deploy is its own PR-shaped commit cluster, with one or more commits per deploy. `docs/PROGRESS.md` gets an entry per deploy.
