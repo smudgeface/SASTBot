@@ -350,6 +350,31 @@ function killWithGrace(proc: ReturnType<typeof spawn>, onExited: Promise<void>):
 }
 
 /**
+ * Append a content-block's text to the assistant-text buffer, restoring the
+ * implicit JSONL record boundary that the Anthropic stream-json protocol
+ * drops at content-block edges.
+ *
+ * Confirmed via the 2026-05-22 per-block dump: each text block the API
+ * delivers ends at a closing `}` with NO trailing newline. The next block
+ * starts at `{`. Naive concatenation gives `}{` — invalid JSONL that the
+ * downstream parser sees as one malformed object. Within a block, multiple
+ * records are already separated by the LLM's own `\n\n`, so we only need
+ * a boundary newline at the gap between blocks.
+ *
+ * The rule is intentionally conservative: insert a single `\n` only when
+ * the buffer's tail closes a record (`}`) AND the new chunk opens one
+ * (`{`). Anything ambiguous — record split across blocks, prose interjections
+ * — is left untouched; the brace-aware `extractJsonObjects` walker downstream
+ * handles those cases as a fallback.
+ */
+export function appendBlockText(buf: string, text: string): string {
+  if (buf.endsWith("}") && text.startsWith("{")) {
+    return buf + "\n" + text;
+  }
+  return buf + text;
+}
+
+/**
  * Robust streaming extractor for top-level JSON objects.
  *
  * The LLM emits findings as JSONL but in practice Opus-class models sometimes
@@ -537,9 +562,21 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
         usage.cacheReadInputTokens += u.cache_read_input_tokens ?? 0;
         usage.cacheCreationInputTokens += u.cache_creation_input_tokens ?? 0;
         const content = msg?.content ?? [];
+        // Opt-in per-block dump for debugging API/stream behaviour — set
+        // SASTBOT_EVENT_TEXT_DUMP=<file> to capture every text block verbatim
+        // along with its length and trailing-newline status. The 2026-05-22
+        // investigation needed exactly this to prove the API delivers blocks
+        // without trailing newlines, which our naive concatenation collapsed
+        // into invalid JSONL.
+        const evtDumpPath = process.env.SASTBOT_EVENT_TEXT_DUMP;
         for (const block of content) {
           if (block.type === "text" && typeof block.text === "string") {
-            assistantTextBuf += block.text;
+            if (evtDumpPath) {
+              try {
+                fsAppendSync(evtDumpPath, `===BLOCK[len=${block.text.length},endsWithNewline=${block.text.endsWith("\n")}]===\n${block.text}\n===END===\n`);
+              } catch { /* best-effort */ }
+            }
+            assistantTextBuf = appendBlockText(assistantTextBuf, block.text);
           }
         }
         usage.requestCount += 1;

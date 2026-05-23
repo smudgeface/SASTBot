@@ -28,7 +28,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { extractJsonObjects } from "./llmSastService.js";
+import { appendBlockText, extractJsonObjects } from "./llmSastService.js";
 import { pino } from "pino";
 import { z } from "zod";
 
@@ -244,7 +244,7 @@ async function spawnClaudeAndCollectVerdicts(input: {
         const content = msg?.content ?? [];
         for (const block of content) {
           if (block.type === "text" && typeof block.text === "string") {
-            assistantTextBuf += block.text;
+            assistantTextBuf = appendBlockText(assistantTextBuf, block.text);
           }
         }
         usage.requestCount += 1;

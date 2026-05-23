@@ -2420,3 +2420,43 @@ Closure-gate validation on v0.9.1 surfaced a major regression: the FSS scan comp
 **Diagnostic affordance kept:** `SASTBOT_RAW_STREAM_DUMP=<file>` env var is preserved (commented) so the next person who debugs LLM drift doesn't have to re-add it.
 
 **What we learned:** LLM stream parsing is a layered problem. The 8603e0d schema fix handled "LLM emits wrong field names on SAST records" but assumed the lines themselves were well-formed JSONL. They aren't always — Opus 4.7 with xhigh effort sometimes concatenates records when batch-emitting verdicts. The parser must be robust at the JSON-object granularity, not the line granularity. Likewise, prompt-side field-name discipline needs per-record-kind guidance — broad "don't drift" rules aren't specific enough when the LLM has both input-shape and output-shape vocabulary to confuse.
+
+## 2026-05-22 — root cause: stream concatenation across content blocks (v0.9.3)
+
+User-prompted re-investigation: same-line JSON concatenation has surfaced in
+multiple debugging sessions. Strong signal it's a downstream bug, not LLM
+drift. Added a per-content-block diagnostic dump (`SASTBOT_EVENT_TEXT_DUMP=<file>`)
+and ran a small dry-run to capture exactly what the API delivers.
+
+**Smoking gun.** Of the 7 text content blocks claude-p emitted on the test
+run, 7 of 7 ended with `}` and **none** ended with a newline. Within a block
+the LLM separates multiple records with `\n\n`, but the block itself stops
+at the closing brace of the final record. The Anthropic stream-json
+protocol delivers each `assistant` event's content array verbatim — there's
+no implicit boundary newline between events.
+
+Our `assistantTextBuf += block.text` was the bug. Two consecutive blocks
+emitted as record boundaries became `}{` in the buffer. The v0.9.2
+brace-aware `extractJsonObjects` walker rescued these post-hoc (and is kept
+as defence in depth), but the proper fix is at the source.
+
+**Fix.** New `appendBlockText(buf, text)` helper inserts a single `\n` IFF
+the buffer ends with `}` AND the new block starts with `{` — an unambiguous
+record boundary. Anything more ambiguous (record split across blocks, prose
+continuation, partial string) is left untouched. Three `spawnClaudeAndStream`
+implementations updated (`llmSastService`, `llmSbomService`,
+`llmSbomRecheckService`). 7-test suite anchored on the verbatim 4-block
+sequence captured from the live event dump.
+
+**Diagnostic affordance kept.** `SASTBOT_EVENT_TEXT_DUMP=<file>` is preserved
+(commented) alongside `SASTBOT_RAW_STREAM_DUMP`. Two complementary dumps
+for future stream-protocol drift: one captures raw API-delivered blocks
+pre-concatenation, the other captures the post-extractor object stream.
+
+**What we learned.** When a class of bug ("concatenation without newline")
+recurs across investigations, the root cause is rarely at the symptom layer.
+The v0.9.2 fix was technically sufficient — the extractor handles
+concatenation correctly — but it left the source-side bug intact, where it
+could re-bite us if a future change relied on the buffer being well-formed
+JSONL (e.g. log inspection, alternate downstream consumer). Source-side
+fixes belong at the source.

@@ -23,7 +23,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { extractJsonObjects } from "./llmSastService.js";
+import { appendBlockText, extractJsonObjects } from "./llmSastService.js";
 import { pino } from "pino";
 
 import { loadConfig } from "../config.js";
@@ -347,7 +347,7 @@ async function spawnClaudeAndStream(
         const content = msg?.content ?? [];
         for (const block of content) {
           if (block.type === "text" && typeof block.text === "string") {
-            assistantTextBuf += block.text;
+            assistantTextBuf = appendBlockText(assistantTextBuf, block.text);
           }
         }
         usage.requestCount += 1;

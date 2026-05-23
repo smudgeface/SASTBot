@@ -10,7 +10,7 @@
  * `it()` documents what concrete LLM behaviour it pins.
  */
 import { describe, expect, it } from "vitest";
-import { extractJsonObjects } from "../src/services/llmSastService.js";
+import { appendBlockText, extractJsonObjects } from "../src/services/llmSastService.js";
 
 describe("extractJsonObjects", () => {
   it("extracts a single object", () => {
@@ -125,5 +125,66 @@ describe("extractJsonObjects", () => {
     expect(objects).toHaveLength(2);
     expect(JSON.parse(objects[0])).toMatchObject({ kind: "sast", cwe: "CWE-78" });
     expect(JSON.parse(objects[1])).toMatchObject({ kind: "sast", cwe: "CWE-1104" });
+  });
+});
+
+describe("appendBlockText", () => {
+  // The 2026-05-22 per-block diagnostic captured 7 content blocks delivered
+  // by the API; 7 of 7 ended with `}` (no trailing newline). Without the
+  // record-boundary newline restoration, naive concatenation produced
+  // `}{` between consecutive blocks and broke JSONL parsing.
+
+  it("inserts a newline between a closing-brace tail and an opening-brace block", () => {
+    const buf = '{"kind":"sast","cwe":"CWE-22"}';
+    const next = '{"kind":"sast","cwe":"CWE-345"}';
+    const out = appendBlockText(buf, next);
+    expect(out).toBe('{"kind":"sast","cwe":"CWE-22"}\n{"kind":"sast","cwe":"CWE-345"}');
+  });
+
+  it("does not insert a duplicate newline when the buffer already ends with one", () => {
+    const buf = '{"a":1}\n';
+    const next = '{"b":2}';
+    expect(appendBlockText(buf, next)).toBe('{"a":1}\n{"b":2}');
+  });
+
+  it("does not insert a newline mid-record (buffer ends inside a string)", () => {
+    // A record split across blocks: prev ends with a partial string,
+    // next continues it. Inserting a newline here would create invalid JSON.
+    const buf = '{"reasoning":"this is an unfinished';
+    const next = ' string with literal content"}';
+    expect(appendBlockText(buf, next)).toBe('{"reasoning":"this is an unfinished string with literal content"}');
+  });
+
+  it("does not insert a newline when the new block starts with prose, not `{`", () => {
+    const buf = '{"kind":"sast","cwe":"CWE-22"}';
+    const next = 'Now checking another file...';
+    expect(appendBlockText(buf, next)).toBe('{"kind":"sast","cwe":"CWE-22"}Now checking another file...');
+  });
+
+  it("handles an empty buffer (first block — no boundary to restore)", () => {
+    expect(appendBlockText("", '{"a":1}')).toBe('{"a":1}');
+  });
+
+  it("handles an empty new block (no-op)", () => {
+    expect(appendBlockText('{"a":1}', "")).toBe('{"a":1}');
+  });
+
+  it("reconstructs well-formed JSONL when fed the exact block sequence the API delivered on 2026-05-22", () => {
+    // Verbatim from /tmp/sastbot-debug/events.log on the per-block dump:
+    // 7 blocks, all ending with `}`, all starting with prose or `{`.
+    // Without the helper this concatenates to `}{` between records 1+2,
+    // 2+3, 3+4, 4+5 — three parse errors. With the helper, the buffer
+    // becomes parseable JSONL on every concatenation.
+    const blocks = [
+      'Found a hardcoded crypto key — emitting finding and continuing investigation.\n\n{"kind":"sast","cwe":"CWE-798","start_line":14,"end_line":14}',
+      '{"kind":"sast","cwe":"CWE-327","start_line":197,"end_line":203}',
+      '{"kind":"sast","cwe":"CWE-120","start_line":23,"end_line":23}',
+      '{"kind":"sast","cwe":"CWE-798","start_line":13,"end_line":13}',
+    ];
+    let buf = "";
+    for (const b of blocks) buf = appendBlockText(buf, b);
+    const { objects } = extractJsonObjects(buf);
+    expect(objects).toHaveLength(4);
+    expect(objects.map((o) => JSON.parse(o).cwe)).toEqual(["CWE-798", "CWE-327", "CWE-120", "CWE-798"]);
   });
 });
