@@ -2460,3 +2460,77 @@ concatenation correctly — but it left the source-side bug intact, where it
 could re-bite us if a future change relied on the buffer being well-formed
 JSONL (e.g. log inspection, alternate downstream consumer). Source-side
 fixes belong at the source.
+
+## 2026-05-23 — prompt-wide file/line harmonization + call_sites shorthand fix (v0.9.4)
+
+End-to-end test of v0.9.3 (scan 6b082660) surfaced **30 reachability parse
+errors** on a fresh class of LLM drift: `call_sites` emitted as `string[]`
+shorthand (`"path/to/file.cpp:266"`) instead of the canonical
+`[{file_path, line}]` object array. Zero JSONL-concatenation errors — the
+v0.9.2/v0.9.3 stream-parser fixes are watertight. This is the same drift
+class as Issues 2 and 9 from 8603e0d (LLM picks the shortest plausible
+representation when emitting at scale), just on a list-of-locations field.
+
+**User pushed back: don't fix the symptom, fix the source.** Audit ALL
+prompts. Make file/line references consistent across every record kind.
+
+**Prompt audit findings.** Three different field names for "the file" were
+in play across seven prompt files:
+
+| record kind | file field | line field | shape |
+|---|---|---|---|
+| `sast` finding | `file_path` | `start_line` + `end_line` | flat top-level |
+| `sast_absence` | `evidence_file` | `evidence_line` | flat top-level |
+| reachability `call_sites` | `file_path` | `line` | object in array |
+| SBOM evidence | `path` | `line` | object in array (path = file OR dir) |
+| SBOM drop / SBOM-recheck inputs | `evidence_path` | — | bare string (DB column) |
+
+Plus the LLM kept drifting to `file` (Issue 9, fixed) and now to the
+string-shorthand `"path:line"` form. Five name combinations across five
+record kinds — exactly the inconsistency the user predicted would force
+LLM drift.
+
+**Harmonization (LLM-facing names; internal-only names left alone to
+avoid churn on DB columns and SARIF properties):**
+
+- Canonical convention: every record references a code location with
+  **`file_path`** (string, scope-relative) + **`start_line`** (1-indexed
+  integer). For ranges, `sast` records add `end_line`. For lists of
+  locations, each item is a JSON object — never a string.
+- `sast_absence` prompt example now uses `file_path` / `start_line`
+  (matching `sast`). Schema accepts both the new names AND legacy
+  `evidence_file` / `evidence_line` (and the longer-standing `file`
+  alias). Transform normalizes to the internal `evidence_file` /
+  `evidence_line` names so downstream worker / SARIF / ingest code
+  doesn't need a coordinated rename — the harmonization is purely
+  prompt-facing.
+- Reachability `call_sites` schema accepts three input shapes — canonical
+  `{file_path, line}` object, legacy `{file, line}` alias, and the new
+  `"path:line"` string shorthand — all normalized to `{file_path, line}`.
+  Drive-letter paths use the LAST `:N` so `"C:/Users/foo.cpp:120"`
+  resolves correctly.
+- `sast_detection.md` Field-name discipline section now explicitly forbids
+  the string-array `call_sites` form with a WRONG example (the verbatim
+  bad output from the failing 6b082660 scan) alongside the RIGHT form.
+  Also adds a multi-entry example so the LLM sees the list-of-objects
+  pattern in context.
+- SBOM evidence is intentionally left at `path` (semantically broader —
+  can be a file or directory like `extern/Xenomai`); not coerced to
+  `file_path` to preserve the dir-vs-file distinction.
+- SBOM `evidence_path` (single string on drop records and worker-written
+  recheck inputs) left untouched — DB column name, deep dependency chain,
+  unchanged semantics, no observed drift.
+
+**Tests.** 4 new fixture-based tests anchored on the verbatim 30
+reachability records from 6b082660; 3 cross-shape `call_sites`
+permutation tests; 3 `sast_absence` canonical/legacy alias tests.
+Total 9 new tests, 293/293 green.
+
+**What we learned.** When a schema rejects records the LLM emits, the
+first reflex is "make the schema lenient". The deeper question is "why
+does the LLM emit this shape?" — and the answer is almost always
+"because the prompt vocabulary contains conflicting examples of how to
+say the same thing". Harmonizing the prompt vocabulary is the proper
+defence against the drift class, not just stacking aliases. The schema
+aliases remain as belt-and-braces; the prompt edit is what removes the
+incentive to drift in the first place.

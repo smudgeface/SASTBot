@@ -65,15 +65,43 @@ assess (e.g., couldn't determine the affected APIs).
 
 ## Field-name discipline
 
-Use EXACTLY these field names. Common drift the schema will reject:
+Every record kind references "a place in code" with the **same** two
+canonical fields: **`file_path`** (string, scope-relative) and **`start_line`**
+(integer, 1-indexed). For ranges, `sast` findings also carry `end_line`. When
+a record carries a LIST of locations (the reachability `call_sites` array),
+each item is a JSON OBJECT — `{"file_path":"...","line":N}` — not a string.
 
-- `file` → use `file_path` instead (applies to ALL record kinds including reachability `call_sites`)
+Common drift the schema rejects:
+
+- `file` → use `file_path` instead (every record kind, including reachability `call_sites`)
+- `evidence_file` / `evidence_line` on `sast_absence` → use `file_path` / `start_line`
+  (legacy alias still accepted, but new output should use the canonical names)
 - `title` → use `summary` instead
 - `description` → use `reasoning` instead
 - omitting `confidence` → always emit; use `0.5` if uncertain
 - omitting `reasoning` → always emit; use a brief one-liner
 
-**Reachability records specifically:** the output field is `sca_issue_id` and its value is the `id` field (UUID) from the SCA input file — **not** `cve_id`, `package`, or any other input column. The input columns are context for *your* analysis; the LLM-to-database link goes through the UUID alone. Records that say `"cve":"CVE-XXX"` or `"package":"foo"` instead of `"sca_issue_id":"<uuid>"` get rejected wholesale; the operator sees a parse error and no reachability verdict reaches the database.
+**Reachability records specifically.** Two pitfalls that have actually
+dropped records on past scans — read carefully:
+
+1. **`sca_issue_id` is the input file's `id` UUID, not `cve_id` / `package`.**
+   The input columns (`package`, `version`, `cve_id`, `osv_id`, `cvss_score`,
+   `summary`) are context for your analysis. The LLM-to-database link is the
+   UUID alone. Records that say `"cve":"CVE-XXX"` or `"package":"foo"`
+   instead of `"sca_issue_id":"<uuid>"` get rejected wholesale.
+
+2. **`call_sites` items are objects, never strings.** WRONG (this collapsed
+   30 records on the 2026-05-22 FSS scan):
+   ```
+   "call_sites":["kControls/Display2d/FtFont.cpp:266","kControls/Display2d/FtFont.cpp:124"]
+   ```
+   RIGHT:
+   ```
+   "call_sites":[{"file_path":"kControls/Display2d/FtFont.cpp","line":266},{"file_path":"kControls/Display2d/FtFont.cpp","line":124}]
+   ```
+   Yes, it's more bytes. Emit it anyway. The parser tolerates the shorthand
+   as a fallback, but the canonical form is the object — that's what the
+   downstream code reads without ambiguity.
 
 If you cannot produce one of the required fields, omit the entire record. Partial records get dropped.
 
@@ -109,17 +137,27 @@ the wrong line creates duplicate findings on the next scan.
 ### `kind: "sast_absence"` — cross-cutting absence finding
 
 ```
-{"kind":"sast_absence","cwe":"CWE-352","severity":"high","summary":"No CSRF protection on any state-changing endpoint","evidence_file":"GoSensor/GoSensor/Services/Http/GsHttpServer.cpp","evidence_line":193,"confidence":0.9,"reasoning":"Searched the entire HTTP server and all express routes; no csurf middleware, no SameSite cookie config, no CSRF token validation logic anywhere. evidence_file points to a representative state-changing endpoint."}
+{"kind":"sast_absence","cwe":"CWE-352","severity":"high","summary":"No CSRF protection on any state-changing endpoint","file_path":"GoSensor/GoSensor/Services/Http/GsHttpServer.cpp","start_line":193,"confidence":0.9,"reasoning":"Searched the entire HTTP server and all express routes; no csurf middleware, no SameSite cookie config, no CSRF token validation logic anywhere. file_path points to a representative state-changing endpoint."}
 ```
 
-`evidence_file` and `evidence_line` should point at a representative location
+`file_path` and `start_line` should point at a representative location
 (a single endpoint, a config file, etc.) that anchors the absence. They are not
 "the bug" — there is no single bug — but they give a triager somewhere to land.
+Same canonical field names as `kind:"sast"`; absence records simply omit `end_line`.
 
 ### `kind: "reachability"` — SCA reachability verdict
 
+Single call-site:
+
 ```
 {"kind":"reachability","sca_issue_id":"abc123-...","reachable":true,"confidence":0.85,"call_sites":[{"file_path":"src/utils.js","line":42}],"reasoning":"lodash.template called with a user-controlled string in BuildManager."}
+```
+
+Multiple call-sites (common pattern — emit one object PER site, not a
+shortened string):
+
+```
+{"kind":"reachability","sca_issue_id":"abc123-...","reachable":true,"confidence":0.85,"call_sites":[{"file_path":"kControls/Display2d/FtFont.cpp","line":124},{"file_path":"kControls/Display2d/FtFont.cpp","line":266}],"reasoning":"FT_Load_Glyph reachable on Windows via GDI faceName-supplied fonts; Linux path uses bundled DejaVuSansMono only."}
 ```
 
 For `reachable: false`, omit `call_sites` (or pass an empty array) and explain

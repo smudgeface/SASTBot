@@ -18,12 +18,13 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AddRecord } from "../src/services/llmSbomService.js";
-import { SastRecord } from "../src/services/llmSastService.js";
+import { ReachabilityRecord, SastAbsenceRecord, SastRecord } from "../src/services/llmSastService.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const SAST_FIXTURES_PATH = join(__dirname, "fixtures/sast-rejected-2026-05-22.jsonl");
 const SBOM_FIXTURES_PATH = join(__dirname, "fixtures/sbom-rejected-2026-05-22.jsonl");
+const REACHABILITY_FIXTURES_PATH = join(__dirname, "fixtures/reachability-rejected-2026-05-23.jsonl");
 
 // ---------------------------------------------------------------------------
 // SAST
@@ -159,5 +160,188 @@ describe("LLM SBOM augmentation record schema — defensive aliases", () => {
       llm_reason: "test — no evidence",
     });
     expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SAST absence — canonical file_path/start_line alongside legacy aliases
+// ---------------------------------------------------------------------------
+
+describe("LLM SAST absence record schema — canonical + legacy field-name aliases", () => {
+  it("accepts the canonical file_path + start_line form (new prompt style)", () => {
+    const result = SastAbsenceRecord.safeParse({
+      kind: "sast_absence",
+      cwe: "CWE-352",
+      severity: "high",
+      summary: "No CSRF protection",
+      file_path: "src/server.cpp",
+      start_line: 193,
+      confidence: 0.9,
+      reasoning: "grep returned no matches",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Transform normalizes to the internal evidence_* names so existing
+      // worker/SARIF/ingest code keeps working.
+      expect(result.data.evidence_file).toBe("src/server.cpp");
+      expect(result.data.evidence_line).toBe(193);
+    }
+  });
+
+  it("accepts the legacy evidence_file + evidence_line form (back-compat)", () => {
+    const result = SastAbsenceRecord.safeParse({
+      kind: "sast_absence",
+      cwe: "CWE-319",
+      severity: "high",
+      title: "No TLS anywhere",
+      evidence_file: "src/net.cpp",
+      evidence_line: 12,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.evidence_file).toBe("src/net.cpp");
+      expect(result.data.evidence_line).toBe(12);
+      expect(result.data.summary).toBe("No TLS anywhere");
+    }
+  });
+
+  it("canonical file_path takes precedence over legacy evidence_file when both present", () => {
+    // Defensive: if a producer sends both names (e.g. transitional output
+    // during a prompt-version mixup), the legacy field wins — see transform
+    // order. This matches the SastRecord behaviour where file_path is the
+    // canonical sink.
+    const result = SastAbsenceRecord.safeParse({
+      kind: "sast_absence",
+      cwe: "CWE-352",
+      severity: "high",
+      summary: "test",
+      evidence_file: "legacy.cpp",
+      file_path: "canonical.cpp",
+      evidence_line: 99,
+      start_line: 42,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Legacy evidence_file is what the worker reads — preferred when present
+      // so back-compat is guaranteed.
+      expect(result.data.evidence_file).toBe("legacy.cpp");
+      expect(result.data.evidence_line).toBe(99);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reachability call_sites — string shorthand drift (2026-05-23 FSS scan)
+// ---------------------------------------------------------------------------
+
+describe("LLM reachability record schema — call_sites string shorthand", () => {
+  it("parses real rejected records from the 2026-05-23 FSS scan (call_sites as string[])", () => {
+    const lines = readFileSync(REACHABILITY_FIXTURES_PATH, "utf8").trim().split("\n");
+    expect(lines.length).toBeGreaterThan(0);
+
+    for (const line of lines) {
+      const raw = JSON.parse(line);
+      const result = ReachabilityRecord.safeParse(raw);
+      expect(
+        result.success,
+        `Failed to parse: ${line.slice(0, 200)} — error: ${
+          result.success ? "" : JSON.stringify((result as { error: { format(): unknown } }).error.format())
+        }`,
+      ).toBe(true);
+
+      if (result.success) {
+        // After transform every call_site is an object with file_path + line.
+        for (const cs of result.data.call_sites) {
+          expect(typeof cs.file_path).toBe("string");
+          expect(cs.file_path.length).toBeGreaterThan(0);
+          expect(typeof cs.line).toBe("number");
+          expect(cs.line).toBeGreaterThanOrEqual(0);
+        }
+      }
+    }
+  });
+
+  it("transforms `\"path:42\"` into `{file_path: \"path\", line: 42}`", () => {
+    const result = ReachabilityRecord.safeParse({
+      kind: "reachability",
+      sca_issue_id: "abc-123",
+      reachable: true,
+      call_sites: ["src/foo.cpp:42", "src/bar.cpp:7"],
+      reasoning: "two call sites",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.call_sites).toEqual([
+        { file_path: "src/foo.cpp", line: 42 },
+        { file_path: "src/bar.cpp", line: 7 },
+      ]);
+    }
+  });
+
+  it("handles a string call_site with no line as line=0", () => {
+    const result = ReachabilityRecord.safeParse({
+      kind: "reachability",
+      sca_issue_id: "abc-123",
+      reachable: false,
+      call_sites: ["src/foo.cpp"],
+      reasoning: "no specific line",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.call_sites).toEqual([{ file_path: "src/foo.cpp", line: 0 }]);
+    }
+  });
+
+  it("accepts a MIX of object and string forms in the same call_sites array", () => {
+    // The schema must tolerate a half-drift case where the LLM emits some
+    // call_sites canonically and others as shorthand. (Unlikely but cheap to
+    // guarantee.)
+    const result = ReachabilityRecord.safeParse({
+      kind: "reachability",
+      sca_issue_id: "abc-123",
+      reachable: true,
+      call_sites: [
+        { file_path: "src/a.cpp", line: 10 },
+        "src/b.cpp:20",
+      ],
+      reasoning: "mixed shapes",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.call_sites).toEqual([
+        { file_path: "src/a.cpp", line: 10 },
+        { file_path: "src/b.cpp", line: 20 },
+      ]);
+    }
+  });
+
+  it("still accepts the canonical {file_path, line} object form", () => {
+    const result = ReachabilityRecord.safeParse({
+      kind: "reachability",
+      sca_issue_id: "abc-123",
+      reachable: true,
+      call_sites: [{ file_path: "src/foo.cpp", line: 42, snippet: "..." }],
+      reasoning: "canonical",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.call_sites[0]?.file_path).toBe("src/foo.cpp");
+      expect(result.data.call_sites[0]?.line).toBe(42);
+    }
+  });
+
+  it("handles drive-letter paths correctly (last `:N` wins)", () => {
+    const result = ReachabilityRecord.safeParse({
+      kind: "reachability",
+      sca_issue_id: "abc",
+      reachable: true,
+      call_sites: ["C:/Users/foo/file.cpp:120"],
+      reasoning: "drive letter",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.call_sites[0]?.file_path).toBe("C:/Users/foo/file.cpp");
+      expect(result.data.call_sites[0]?.line).toBe(120);
+    }
   });
 });

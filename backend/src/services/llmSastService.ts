@@ -75,16 +75,23 @@ export const SastRecord = z.object({
 }));
 export type SastRecord = z.infer<typeof SastRecord>;
 
-const SastAbsenceRecord = z.object({
+export const SastAbsenceRecord = z.object({
   kind: z.literal("sast_absence"),
   cwe: z.string(),
   severity: SeverityEnum,
   summary: z.string().optional(),
   /** LLM-drift alias for summary. */
   title: z.string().optional(),
+  // Canonical: file_path + start_line (matches SastRecord). Legacy:
+  // evidence_file + evidence_line — accepted for back-compat. The prompt
+  // now teaches the canonical names so newly-written records use them;
+  // the legacy aliases catch records emitted before the prompt update or
+  // by other model versions that drift back to the older names.
+  file_path: z.string().optional(),
   evidence_file: z.string().optional(),
-  /** LLM-drift alias for evidence_file (mirrors file alias on SastRecord). */
+  /** LLM-drift alias for the file name (matches SastRecord). */
   file: z.string().optional(),
+  start_line: z.number().int().nonnegative().optional(),
   evidence_line: z.number().int().nonnegative().optional(),
   confidence: z.number().min(0).max(1).default(0.5),
   reasoning: z.string().optional(),
@@ -96,31 +103,57 @@ const SastAbsenceRecord = z.object({
 ).transform((r) => ({
   ...r,
   summary: (r.summary ?? r.title)!,
-  evidence_file: r.evidence_file ?? r.file ?? "",
-  evidence_line: r.evidence_line ?? 0,
+  // Internal field names kept as evidence_file/evidence_line so downstream
+  // worker / SARIF / ingest code (which reads these by name across many
+  // files) doesn't need a coordinated rename. The transform normalizes
+  // every input shape to the existing internal layout.
+  evidence_file: r.evidence_file ?? r.file_path ?? r.file ?? "",
+  evidence_line: r.evidence_line ?? r.start_line ?? 0,
   reasoning: r.reasoning ?? r.description ?? "",
 }));
 export type SastAbsenceRecord = z.infer<typeof SastAbsenceRecord>;
 
-const ReachabilityRecord = z.object({
+/**
+ * Parse a "path:line" shorthand string into the canonical call-site object.
+ * Examples that should round-trip cleanly:
+ *   "src/utils.js:42"             → {file_path: "src/utils.js", line: 42}
+ *   "kFireSync/Sensor/Web.cpp:7"  → {file_path: "kFireSync/Sensor/Web.cpp", line: 7}
+ *   "C:/Users/foo/file.cpp:120"   → {file_path: "C:/Users/foo/file.cpp", line: 120}
+ *                                   (uses LAST `:N` so drive-letter colons don't trip it)
+ *   "src/utils.js"                → {file_path: "src/utils.js", line: 0}   (line unknown)
+ */
+function parseCallSiteShorthand(s: string): { file_path: string; line: number } {
+  const m = s.match(/^(.+):(\d+)$/);
+  if (m) return { file_path: m[1]!, line: parseInt(m[2]!, 10) };
+  return { file_path: s, line: 0 };
+}
+
+export const ReachabilityRecord = z.object({
   kind: z.literal("reachability"),
   sca_issue_id: z.string(),
   reachable: z.boolean(),
   confidence: z.number().min(0).max(1).default(0.5),
+  // call_sites accepts THREE shapes:
+  //   1. Canonical: {file_path, line, snippet?}
+  //   2. Legacy file alias: {file, line, snippet?} (mirrors SastRecord)
+  //   3. LLM-drift shorthand: "path:line" — observed on the 2026-05-22 FSS
+  //      6b082660 scan, all 30 parse errors had this shape (30/30 reachability
+  //      records collapsed call_sites to string[] when emitting at scale).
+  // All three normalize to {file_path, line, snippet?} in the transform.
   call_sites: z
     .array(
-      z.object({
-        // Canonical name. Accept legacy `file` alias; normalize to file_path.
-        file_path: z.string().optional(),
-        /** Legacy alias — normalized to file_path by transform. */
-        file: z.string().optional(),
-        line: z.number().int().nonnegative(),
-        // Worker-built post-detection (M6k); model may still emit it.
-        snippet: z.string().optional(),
-      }).transform((s) => ({
-        ...s,
-        file_path: (s.file_path ?? s.file) ?? "",
-      })),
+      z.union([
+        z.string().transform(parseCallSiteShorthand),
+        z.object({
+          file_path: z.string().optional(),
+          file: z.string().optional(),
+          line: z.number().int().nonnegative(),
+          snippet: z.string().optional(),
+        }).transform((s) => ({
+          ...s,
+          file_path: (s.file_path ?? s.file) ?? "",
+        })),
+      ]),
     )
     .default([]),
   reasoning: z.string().optional().default(""),
