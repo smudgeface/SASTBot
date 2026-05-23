@@ -105,6 +105,25 @@ export async function deleteScanArtifacts(scanRunId: string): Promise<void> {
   ]);
 }
 
+/**
+ * Empty a directory without unlinking the directory itself.
+ *
+ * The dir-rm + mkdir pattern is unsafe when `dir` is a mount point: Linux
+ * returns EBUSY on `rmdir` of a mount root (different from ENOTEMPTY, so
+ * `fs.rm`'s recursive walk bails without removing children). Restore endpoints
+ * need "clear it" semantics regardless of whether the path is a plain dir or
+ * a volume mount.
+ *
+ * Creates the dir if it does not exist. ENOENT children are tolerated.
+ */
+export async function clearDirContents(dir: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+  const entries = await fs.readdir(dir);
+  for (const entry of entries) {
+    await fs.rm(path.join(dir, entry), { recursive: true, force: true });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

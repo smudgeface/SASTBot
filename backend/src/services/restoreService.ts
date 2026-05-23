@@ -46,6 +46,7 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 
 import { prisma } from "../db.js";
+import { clearDirContents } from "./artifactStore.js";
 
 /**
  * Tables whose contents survive a mode=runtime restore. The operator's
@@ -429,10 +430,12 @@ export async function runRuntimeRestore(input: RuntimeRestoreInput): Promise<Run
   await dropRestoreTemp();
 
   // A6.3: artifact dir overlay — after DB transaction commits, wipe and copy.
-  // Failure here leaves the DB authoritative; operator can re-run idempotently.
+  // `clearDirContents` keeps the directory itself in place: `fs.rm` of the dir
+  // fails EBUSY on a mount point in containerized deployments where
+  // ARTIFACT_DIR is a Docker volume. Failure here leaves the DB authoritative;
+  // operator can re-run idempotently.
   try {
-    await fs.rm(input.artifactTargetDir, { recursive: true, force: true });
-    await fs.mkdir(input.artifactTargetDir, { recursive: true });
+    await clearDirContents(input.artifactTargetDir);
     if (input.artifactSourceDir) {
       const hasSource = await fs.access(input.artifactSourceDir).then(() => true).catch(() => false);
       if (hasSource) {

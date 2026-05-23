@@ -50,9 +50,10 @@ import { z } from "zod";
 
 import { loadConfig } from "../config.js";
 import { ErrorSchema } from "../schemas.js";
+import { clearDirContents } from "../services/artifactStore.js";
 import { runRuntimeRestore } from "../services/restoreService.js";
 import { pgEnvFromUrl } from "./adminBackup.js";
-import { APP_VERSION, getExpectedSchemaVersion } from "./version.js";
+import { APP_VERSION, getExpectedSchemaVersion, SASTBOT_DUMP_FORMAT_VERSION } from "./version.js";
 
 /**
  * Restore mode — controls how much of the database the dump overlays.
@@ -472,6 +473,23 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
           metadataWarning = "Tarball does not contain metadata.json — treating as legacy dump. Version compatibility is unknown.";
         }
 
+        // Tarball-format version check: refuse if the dump was produced by a
+        // backend with a strictly newer tarball format. Backward-compat
+        // (older format) is allowed — older tarballs are read by all newer
+        // backends — but a newer format may carry layout the current backend
+        // can't safely interpret.
+        if (metadata && metadata.sastbot_dump_format_version > SASTBOT_DUMP_FORMAT_VERSION) {
+          await cleanupTarball();
+          return reply.code(422).send({
+            detail:
+              `Cannot restore: the backup was produced with tarball format version ` +
+              `${metadata.sastbot_dump_format_version}, but this backend only understands ` +
+              `up to format version ${SASTBOT_DUMP_FORMAT_VERSION}. ` +
+              `Upgrade the backend to at least the version that produced this backup, ` +
+              `then retry the restore.`,
+          });
+        }
+
         // Version check: compare dump's schema_version to running expected_schema_version.
         // Prisma migration names start with YYYYMMDDHHMMSS_ timestamps, so
         // lexicographic comparison is equivalent to chronological comparison.
@@ -593,9 +611,11 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
         }
 
         // A6.2: overlay artifact directory. mode=full = "exactly as backup".
+        // `clearDirContents` empties the dir without unlinking it — `fs.rm` of
+        // the dir itself fails EBUSY on a mount point in containerized
+        // deployments where ARTIFACT_DIR is a Docker volume.
         try {
-          await fsPromises.rm(config.artifactDir, { recursive: true, force: true });
-          await fsPromises.mkdir(config.artifactDir, { recursive: true });
+          await clearDirContents(config.artifactDir);
           const tarballArtifacts = path.join(extractDir, "artifacts");
           const hasArtifacts = await fsPromises.access(tarballArtifacts).then(() => true).catch(() => false);
           if (hasArtifacts) {

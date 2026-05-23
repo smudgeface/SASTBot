@@ -221,3 +221,26 @@ describe("A6: tarball allowlist includes artifacts", () => {
     expect(unexpected).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// sastbot_dump_format_version gate: refuse strictly-newer tarball format
+// ---------------------------------------------------------------------------
+
+function shouldRefuseDumpFormat(dumpFormat: number, runningFormat: number): boolean {
+  return dumpFormat > runningFormat;
+}
+
+describe("dump format version gate", () => {
+  it("refuses when dump format is strictly newer than running", () => {
+    expect(shouldRefuseDumpFormat(3, 2)).toBe(true);
+    expect(shouldRefuseDumpFormat(99, 2)).toBe(true);
+  });
+
+  it("accepts equal dump format", () => {
+    expect(shouldRefuseDumpFormat(2, 2)).toBe(false);
+  });
+
+  it("accepts older dump format (backwards-compat)", () => {
+    expect(shouldRefuseDumpFormat(1, 2)).toBe(false);
+  });
+});

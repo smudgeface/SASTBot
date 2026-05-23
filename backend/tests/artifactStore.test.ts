@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  clearDirContents,
   deleteArtifact,
   deleteScanArtifacts,
   readArtifact,
@@ -178,5 +179,46 @@ describe("artifactStore", () => {
     await expect(
       deleteScanArtifacts("scan-run-nonexistent")
     ).resolves.toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------------
+  // clearDirContents — mount-point-safe replacement for rm + mkdir
+  // ---------------------------------------------------------------------------
+
+  it("clearDirContents removes files and subdirectories but keeps the dir itself", async () => {
+    const targetDir = path.join(tmpDir, "to-clear");
+    await fs.mkdir(path.join(targetDir, "sub"), { recursive: true });
+    await fs.writeFile(path.join(targetDir, "a.txt"), "a");
+    await fs.writeFile(path.join(targetDir, "sub", "b.txt"), "b");
+
+    // Capture the inode of the target dir; it must survive the clear.
+    const inodeBefore = (await fs.stat(targetDir)).ino;
+
+    await clearDirContents(targetDir);
+
+    const remaining = await fs.readdir(targetDir);
+    expect(remaining).toEqual([]);
+
+    const inodeAfter = (await fs.stat(targetDir)).ino;
+    expect(inodeAfter).toBe(inodeBefore);
+  });
+
+  it("clearDirContents creates the dir if it does not exist", async () => {
+    const targetDir = path.join(tmpDir, "missing", "nested");
+
+    await clearDirContents(targetDir);
+
+    const stat = await fs.stat(targetDir);
+    expect(stat.isDirectory()).toBe(true);
+  });
+
+  it("clearDirContents is idempotent on an already-empty dir", async () => {
+    const targetDir = path.join(tmpDir, "empty");
+    await fs.mkdir(targetDir);
+
+    await clearDirContents(targetDir);
+    await clearDirContents(targetDir);
+
+    expect((await fs.readdir(targetDir)).length).toBe(0);
   });
 });
