@@ -327,6 +327,52 @@ Apply the same defensive pattern to `SastAbsenceRecord` (already requires `summa
 
 ---
 
+## Issue 12 — `deleteRepo` leaks `/app/clones/<repoId>` for retained-clone repos
+
+**Status: open.** Surfaced by closure-gate Phase 6.3 on 2026-05-23.
+
+**Symptom.** `DELETE /api/admin/repos/:id` against a repo with
+`retain_clone=true` (and a populated `/app/clones/<repoId>` on the worker
+volume) correctly cascades the DB rows (`scan_runs`, `scan_scopes`,
+`scope_components`, `sast_issues`, `sca_issues`, `sbom_components`) AND
+removes the per-scan artifact files at `/var/lib/sastbot/artifacts/{sbom,sarif}/<scanRunId>.*`.
+But the retained clone directory at `/app/clones/<repoId>` is left
+untouched. Other repos' clones are unaffected (no blast radius), so this
+is a strictly-additive disk leak.
+
+**Root cause.** `repoService.ts:221-238` (`deleteRepo`) only calls
+`deleteScanArtifacts` per scan run. It never touches the clone cache.
+The clone-cache writer (`repoCache.ts`) and the clone-cache purge code
+that exists for the toggle path (`retain_clone: true → false`) both know
+about the path; they just aren't invoked by repo deletion.
+
+**Operator impact.** Slow disk leak in any deployment that uses
+`retain_clone=true`. Per-repo footprint scales with repo size (FSS-class:
+~100MB; large monorepo: GBs). Doesn't break anything functionally —
+filesystem just fills up over time.
+
+**Fix.** After the `Promise.allSettled(...deleteScanArtifacts...)` line
+(repoService.ts:237), add a best-effort `fs.rm(path.join(CLONE_CACHE_DIR,
+id), {recursive, force})`. Mirror the existing artifact-cleanup pattern:
+log a warning on failure but don't roll back the DB delete. The DB row is
+already gone — the clone path is reachable only via the deleted ID, so
+it's strictly orphaned once the delete commits.
+
+**Tests.** Add a `repoService.deleteRepo` test that pre-creates a fake
+directory at `<tmpCloneDir>/<repoId>`, runs deleteRepo, and asserts the
+directory is gone. Pure-function — no DB needed if the path resolution
+is extracted (or mock `prisma.repo.delete` + `prisma.scanRun.findMany`).
+
+**Operator workaround until shipped.** After deleting a repo with
+`retain_clone=true`, manually `rm -rf` the matching directory on the
+worker:
+
+```sh
+docker compose exec worker rm -rf /app/clones/<repoId>
+```
+
+---
+
 ## Process improvement — agent brief checklist (separate from issue queue)
 
 The 2026-05-22 validation surfaced this as a recurring pattern. The B1–B4 sub-agent missed bumping `APP_VERSION` even though the brief listed both `package.json` files. Already addressed in commit `8aabf7e` (consolidated all version surfaces under `APP_VERSION`, updated CLAUDE.md policy, added explicit "3-file version bump" reminder to plan docs).
@@ -341,16 +387,17 @@ After Deploy 3 (B5+B6) ships AND the closure gate (`docs/M9_E2E_TEST_PLAN.md`) p
 
 1. Read this doc.
 2. Open one PR-shaped commit cluster titled `fix(m9-followups): post-deploy-3 cleanup`.
-3. Address Issues 6, 7, 8, 10, 11. (2 and 9 fixed in v0.8.1; **1 and 5 dissolved by M9 Stream E** — see `docs/M9_STREAM_E_PLAN.md`; 3 dissolved with the no-backfill posture; 4 is infra-not-code.) Issue 10 is the highest-priority remaining item — it can let the scope re-anchor to a near-empty result when parse-error drop ratio is high. Issue 7 (`ALLOWED_PHASES` allowlist) needs the `sast_ingest` phase added when Stream E2 ships, in addition to the existing phases it's missing.
+3. Address Issues 6, 7, 8, 10, 11, 12. (2 and 9 fixed in v0.8.1; **1 and 5 dissolved by M9 Stream E** — see `docs/M9_STREAM_E_PLAN.md`; 3 dissolved with the no-backfill posture; 4 is infra-not-code.) Issue 10 is the highest-priority remaining item — it can let the scope re-anchor to a near-empty result when parse-error drop ratio is high. Issue 7 (`ALLOWED_PHASES` allowlist) needs the `sast_ingest` phase added when Stream E2 ships, in addition to the existing phases it's missing. Issue 12 (clone-cache leak on repo delete) is small and standalone — easy starter from this list.
 4. Delete this file in the same commit, OR retain it with a "✅ Closed YYYY-MM-DD" header and a one-line summary per issue.
 5. Remove the pin from CLAUDE.md "For AI agents" section.
 
-**Note on Issues 6–11 origin.** All six were surfaced by the 2026-05-22 closure-gate run itself:
+**Note on Issues 6–12 origin.** Issues 6–11 surfaced by the 2026-05-22 closure-gate run; Issue 12 by the 2026-05-23 continuation:
 - 6 — `SASTBot.version` hardcoded to `"M6q"` in `sbomCurated.ts`
 - 7 — `ALLOWED_PHASES` allowlist stale in `mappers.ts`
 - 8 — named-volume Prisma client shadowing on rebuild
 - 9 — LLM SAST schema rejects valid records (sibling of Issue 2)
 - 10 — parse-error warning severity should escalate to `error` when drop ratio is high
 - 11 — Settings page credential picker shows blank for already-selected credentials (display fix shipped locally as part of this cluster's pending commit)
+- 12 — `deleteRepo` leaks `/app/clones/<repoId>` for retained-clone repos (closure-gate Phase 6.3 finding)
 
 They are documented here rather than fixed inline to keep Deploy 3 surgical and to bundle all post-Deploy-3 work into one cluster as planned.
