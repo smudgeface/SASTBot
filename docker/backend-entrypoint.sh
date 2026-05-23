@@ -201,6 +201,17 @@ else
   log "SASTBOT_TAKE_BACKUP=$SASTBOT_TAKE_BACKUP — skipping pre-deploy backup (worker boot)"
 fi
 
+# Regenerate the Prisma client every boot. The image bakes a fresh client in
+# its build stage, but in compose-driven dev the `sastbot_backend_node_modules`
+# named volume shadows /app/backend/node_modules across rebuilds — so after a
+# schema migration, the running container can serve a stale client even though
+# the image is fresh. ~300ms cost, idempotent, runs in both backend and worker
+# so either service that boots first refreshes the shared mount. `|| true` so a
+# transient generate failure (e.g. read-only mount during shutdown) doesn't
+# block the deploy.
+log "Regenerating Prisma client..."
+pnpm prisma generate || log "WARN: prisma generate failed — continuing with whatever client is in node_modules"
+
 if [ "$SASTBOT_RUN_MIGRATIONS" = "true" ]; then
   log "Running prisma migrate deploy..."
   pnpm prisma migrate deploy

@@ -2534,3 +2534,102 @@ say the same thing". Harmonizing the prompt vocabulary is the proper
 defence against the drift class, not just stacking aliases. The schema
 aliases remain as belt-and-braces; the prompt edit is what removes the
 incentive to drift in the first place.
+
+## 2026-05-23 — M9 post-Deploy-3 followups cluster (v0.9.7)
+
+Closes the 🧹 pin in `CLAUDE.md` "For AI agents" and the
+`docs/M9_POST_B_FOLLOWUPS.md` queue. Single PR-shaped commit bundling six
+fixes: five from the original followups doc (Issues 6, 7, 8, 10, 11) plus
+one adjacent gap discovered while shipping v0.9.6 (Issue 12's sibling on
+`updateRepo`).
+
+**What shipped.**
+
+- **Issue 6 — SBOM tool-version drift fixed.** `sbomCurated.ts` no longer
+  hardcodes the `"M6q"` milestone tag on the `metadata.tools.components`
+  entry. Now imports `APP_VERSION` directly from `routes/version.js`.
+  Two new determinism-test assertions guard against the next milestone-tag
+  hardcoding regression.
+- **Issue 7 — Worker phase allowlist no longer drifts.** `mappers.ts`
+  derives `ALLOWED_PHASES` from `ScanRunOutSchema.shape.current_phase`
+  (the Zod enum that already drives the OpenAPI contract and frontend
+  types). Previously the array was a hardcoded literal that fell out of
+  sync every time a new phase shipped (M6p `llm_sbom`, M9 B1/B2/B4
+  `sbom_emit` / `sbom_ingest` / `sarif_emit`, NVD). Result: the scopes
+  list "Last Scan" cell now shows the right phase label during ~80% of
+  scan wall-clock time it used to display as blank.
+- **Issue 8 — Stale Prisma client shadowing eliminated.** Both the prod
+  entrypoint (`docker/backend-entrypoint.sh`) and the dev compose commands
+  now run `pnpm prisma generate` on boot. The `sastbot_backend_node_modules`
+  named volume can no longer shadow a freshly-built client across rebuilds
+  — every schema migration now self-aligns on container start.
+- **Issue 10 — Parse-error severity now escalates on critical drop ratios.**
+  New `parseErrorSeverity(accepted, parseErrors)` helper in `worker.ts`
+  with a 50% threshold (`PARSE_ERROR_FAILURE_THRESHOLD`). All four
+  `llm_*_parse_errors` warning sites — SAST detection, SAST recheck,
+  SBOM augmentation, SBOM recheck — now emit at `error` severity when ≥
+  50% of records were dropped, tripping the M6i `hasErrorWarnings` gate
+  and blocking the SCA auto-fix sweep / `lastScanRunId` advance on a
+  degraded scan. Below threshold, severity stays `info`. Operator-facing
+  message format also changes when escalated, calling out the drop ratio
+  explicitly.
+- **Issue 11 — Credential-picker blank-display fixed.** `SettingsPage.tsx`
+  and `ReposPage.tsx` now render a disabled "Loading credentials…"
+  `Select` while the credentials query is in flight, so Radix never
+  renders a `value=<uuid>` against an empty `SelectContent`. Mounted
+  options-then-value sequencing resolves the trigger label on first
+  render, instead of staying blank when the credentials response arrives
+  later.
+- **Issue 12 adjacent gap — `updateRepo` purges on retain_clone disable.**
+  Mirrors the v0.9.6 deleteRepo fix: the operator-flow where someone
+  toggles `retain_clone` from true → false via `PUT /api/admin/repos/:id`
+  previously left `/app/clones/<repoId>` orphaned on the worker disk.
+  `updateRepo` now captures `existing.retainClone` before the transaction
+  and calls `purgeRepoCache(id)` post-commit when it observes the
+  transition. Same best-effort posture as deleteRepo (purge failure does
+  not roll back the DB write).
+
+**Version + closure mechanics.**
+
+- Bumped 0.9.6 → 0.9.7 (PATCH — bug-fix work; no new operator-visible
+  feature). Three files moved together per policy: `backend/package.json`,
+  `frontend/package.json` (+ lockfile top-level), and `APP_VERSION` in
+  `backend/src/routes/version.ts`.
+- `docs/M9_POST_B_FOLLOWUPS.md` retained with a "✅ All issues resolved"
+  banner and the per-issue status lines updated to point at v0.9.7. The
+  trailing "How to use this doc" / process-improvement sections were
+  dropped — they made sense while the queue was open, not after.
+- The 🧹 M9-post-Deploy-3 line removed from `CLAUDE.md` "For AI agents"
+  in the same commit, per the doc's own self-closure instructions.
+
+**Tests.** 17 new unit tests across four files. `sbomCurated.deterministic.test.ts`
+gets two SASTBot-version assertions (scope + scan builders).
+`mappersPhase.test.ts` round-trips every value in the Zod phase enum and
+explicitly anchors the six post-M6p phases. `parseErrorTruncation.test.ts`
+gets eight cases on the new severity helper (0%, 5%, 49.5%, 50%, 60%,
+100%, zero-counts, custom threshold). `repoServiceUpdate.test.ts` covers
+the retain_clone transition + every no-op edge.
+
+**What we learned.** Three followup classes worth naming for future cleanup
+clusters:
+
+1. **Anything that uses a hardcoded literal of "the running version" or
+   "the set of enum values" needs a regression test on the next
+   iteration of that thing.** Issues 6 and 7 are the same shape — a
+   string that should have been derived from a source-of-truth wasn't.
+   The fix in both cases is structural derivation; the test is what
+   stops the next maintainer from undoing it under pressure.
+2. **Severity isn't just a UI cosmetic — it's the trustworthiness gate's
+   only input.** The 0.9.4 SCA auto-fix gate (`hasErrorWarnings`) was
+   shipped with the assumption that worker code would consistently
+   classify "this scan is degraded" as `error`. Issue 10 found two
+   sites where it didn't, and the operator-visible failure mode (zero
+   findings after a successful-looking scan) was severe. When designing
+   future gates, audit *every* upstream `info | error` decision: a gate
+   that silently misses a class of failure is worse than no gate.
+3. **Disk-side leaks scale slowly enough to skip notice but live forever.**
+   Issue 12 + its adjacent gap is the same logical bug shape on two
+   surfaces (deleteRepo, updateRepo). Future "best-effort post-commit
+   cleanup" patterns should be implemented once and applied uniformly —
+   not copied per-handler. Filed as a tiny refactor candidate but
+   deliberately not bundled here (the cluster is scope-disciplined).

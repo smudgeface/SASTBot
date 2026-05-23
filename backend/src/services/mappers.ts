@@ -13,6 +13,7 @@ import type {
   User,
 } from "@prisma/client";
 
+import { ScanRunOutSchema } from "../schemas.js";
 import type {
   AppSettingsOut,
   CredentialOut,
@@ -41,12 +42,15 @@ type ScanStatus = "pending" | "running" | "success" | "failed" | "cancelled";
 type ScanTriggeredBy = "user" | "api" | "schedule";
 type ScanPhase = NonNullable<ScanRunOut["current_phase"]>;
 
-const ALLOWED_PHASES: ReadonlyArray<ScanPhase> = [
-  "cloning", "cdxgen", "osv", "eol",
-  "llm_detection", "llm_recheck", "sast_ingest", "sca_summaries", "finalizing",
-];
+// Derive the phase allowlist from the Zod enum so the two can't drift again.
+// Historically (M9 post-Deploy-3 followups Issue 7) this was a hardcoded array
+// that got stale every time a new phase was added to the worker. The Zod enum
+// already feeds the OpenAPI contract and the frontend types, so deriving the
+// mapper allowlist from it makes those two sources structurally identical.
+const ALLOWED_PHASES: ReadonlyArray<ScanPhase> =
+  ScanRunOutSchema.shape.current_phase.unwrap().options as ReadonlyArray<ScanPhase>;
 
-function toPhase(value: string | null): ScanPhase | null {
+export function toPhase(value: string | null): ScanPhase | null {
   if (value === null) return null;
   return (ALLOWED_PHASES as ReadonlyArray<string>).includes(value)
     ? (value as ScanPhase)

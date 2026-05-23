@@ -61,6 +61,47 @@ const logger = pino({ level: config.logLevel, name: "sastbot-worker" });
 /** Maximum byte length for a single `raw` string stored in warning details. */
 export const PARSE_ERROR_RAW_MAX_BYTES = 2048;
 
+/**
+ * Drop-ratio threshold at which `llm_*_parse_errors` warnings escalate from
+ * `info` to `error` severity. At/above this fraction of total records lost,
+ * the scan is treated as untrustworthy: the M6i `hasErrorWarnings` gate flips
+ * to true, blocking the SCA auto-fix sweep and the `lastScanRunId` advance.
+ *
+ * Picked at 0.5 because:
+ *   - It captures the worst-case "LLM returned nothing parseable" outcome
+ *     (ratio = 1.0) that the closure-gate run surfaced (M9 followups Issue 10).
+ *   - It tolerates one or two unparseable records on a large scan (ratio < 0.05)
+ *     without burning the trustworthiness gate on minor drift.
+ *   - 50% is an obvious operator-explainable line: "more than half the records
+ *     were lost → don't trust the scan".
+ *
+ * Operator-tunable in code only — this is a quality threshold, not a user knob.
+ */
+export const PARSE_ERROR_FAILURE_THRESHOLD = 0.5;
+
+/**
+ * Decide the severity of an `llm_*_parse_errors` warning from the relative size
+ * of the accepted and rejected record sets. Escalates to `error` when the LLM
+ * dropped a critical fraction of its emitted records — see
+ * `PARSE_ERROR_FAILURE_THRESHOLD` for rationale.
+ *
+ * `acceptedCount` is the number of records that survived Zod parsing.
+ * `parseErrorCount` is the number that failed. The caller is expected to skip
+ * emitting the warning entirely when `parseErrorCount === 0`.
+ *
+ * Exported for unit tests.
+ */
+export function parseErrorSeverity(
+  acceptedCount: number,
+  parseErrorCount: number,
+  threshold: number = PARSE_ERROR_FAILURE_THRESHOLD,
+): "error" | "info" {
+  const total = acceptedCount + parseErrorCount;
+  if (total === 0) return "info";
+  const dropRatio = parseErrorCount / total;
+  return dropRatio >= threshold ? "error" : "info";
+}
+
 /** Truncation suffix appended when a raw string exceeds the byte cap. */
 const TRUNCATION_SUFFIX = "…[truncated]";
 
@@ -334,10 +375,16 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         message: `LLM SAST detection subprocess was killed by SASTBot after exceeding the ${reason}. Existing SAST/SCA findings were preserved — check the LLM endpoint health and re-run.`,
       });
     } else if (detection.parseErrors.length > 0) {
+      const sev = parseErrorSeverity(detection.records.length, detection.parseErrors.length);
+      const totalEmitted = detection.records.length + detection.parseErrors.length;
+      const dropPct = Math.round((detection.parseErrors.length / totalEmitted) * 100);
       await appendWarning(scanRunId, {
         code: "llm_sast_parse_errors",
-        severity: "info",
-        message: `LLM SAST detection emitted ${detection.parseErrors.length} unparseable record(s); some findings may be missing.`,
+        severity: sev,
+        message:
+          sev === "error"
+            ? `LLM SAST detection dropped ${detection.parseErrors.length}/${totalEmitted} records (${dropPct}%) — at or above the ${Math.round(PARSE_ERROR_FAILURE_THRESHOLD * 100)}% trustworthiness threshold. Scan marked untrustworthy: existing SAST findings preserved.`
+            : `LLM SAST detection emitted ${detection.parseErrors.length} unparseable record(s); some findings may be missing.`,
         details: truncateParseErrors(detection.parseErrors),
       });
     }
@@ -583,10 +630,16 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
           message: `LLM SAST recheck subprocess was killed by SASTBot after exceeding the ${reason}. Existing recheck results are incomplete — re-run the scan once the LLM endpoint is healthy.`,
         });
       } else if (recheck.parseErrors.length > 0) {
+        const sev = parseErrorSeverity(recheck.verdicts.length, recheck.parseErrors.length);
+        const totalEmitted = recheck.verdicts.length + recheck.parseErrors.length;
+        const dropPct = Math.round((recheck.parseErrors.length / totalEmitted) * 100);
         await appendWarning(scanRunId, {
           code: "llm_recheck_parse_errors",
-          severity: "info",
-          message: `LLM recheck emitted ${recheck.parseErrors.length} unparseable record(s).`,
+          severity: sev,
+          message:
+            sev === "error"
+              ? `LLM SAST recheck dropped ${recheck.parseErrors.length}/${totalEmitted} verdicts (${dropPct}%) — at or above the ${Math.round(PARSE_ERROR_FAILURE_THRESHOLD * 100)}% trustworthiness threshold. Scan marked untrustworthy: recheck results are incomplete.`
+              : `LLM recheck emitted ${recheck.parseErrors.length} unparseable record(s).`,
           details: truncateParseErrors(recheck.parseErrors),
         });
       }
@@ -1322,10 +1375,16 @@ const worker = new Worker<ScanJobData>(
             { count: augResult.parseErrors.length, samples: augResult.parseErrors.slice(0, 3) },
             "[worker] LLM SBOM augmentation parse errors",
           );
+          const sev = parseErrorSeverity(augResult.records.length, augResult.parseErrors.length);
+          const totalEmitted = augResult.records.length + augResult.parseErrors.length;
+          const dropPct = Math.round((augResult.parseErrors.length / totalEmitted) * 100);
           await appendWarning(scanRunId, {
             code: "llm_sbom_parse_errors",
-            severity: "info",
-            message: `LLM SBOM augmentation emitted ${augResult.parseErrors.length} unparseable records. Partial results applied.`,
+            severity: sev,
+            message:
+              sev === "error"
+                ? `LLM SBOM augmentation dropped ${augResult.parseErrors.length}/${totalEmitted} records (${dropPct}%) — at or above the ${Math.round(PARSE_ERROR_FAILURE_THRESHOLD * 100)}% trustworthiness threshold. Scan marked untrustworthy: SBOM may be missing real components.`
+                : `LLM SBOM augmentation emitted ${augResult.parseErrors.length} unparseable records. Partial results applied.`,
             details: truncateParseErrors(augResult.parseErrors),
           });
         }
@@ -1521,10 +1580,17 @@ const worker = new Worker<ScanJobData>(
         }
 
         if (recheckResult.parseErrors.length > 0) {
+          const acceptedVerdicts = recheckResult.recovered.length + recheckResult.removed.length;
+          const sev = parseErrorSeverity(acceptedVerdicts, recheckResult.parseErrors.length);
+          const totalEmitted = acceptedVerdicts + recheckResult.parseErrors.length;
+          const dropPct = Math.round((recheckResult.parseErrors.length / totalEmitted) * 100);
           await appendWarning(scanRunId, {
             code: "llm_sbom_recheck_partial",
-            severity: "info",
-            message: `SBOM recheck emitted ${recheckResult.parseErrors.length} unparseable verdict(s). Ambiguous components remain active.`,
+            severity: sev,
+            message:
+              sev === "error"
+                ? `SBOM recheck dropped ${recheckResult.parseErrors.length}/${totalEmitted} verdicts (${dropPct}%) — at or above the ${Math.round(PARSE_ERROR_FAILURE_THRESHOLD * 100)}% trustworthiness threshold. Scan marked untrustworthy: ambiguous components remain active.`
+                : `SBOM recheck emitted ${recheckResult.parseErrors.length} unparseable verdict(s). Ambiguous components remain active.`,
             details: truncateParseErrors(recheckResult.parseErrors),
           });
         }

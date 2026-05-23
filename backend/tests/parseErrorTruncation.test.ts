@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { truncateParseErrors, PARSE_ERROR_RAW_MAX_BYTES } from "../src/worker.js";
+import {
+  PARSE_ERROR_FAILURE_THRESHOLD,
+  PARSE_ERROR_RAW_MAX_BYTES,
+  parseErrorSeverity,
+  truncateParseErrors,
+} from "../src/worker.js";
 
 describe("truncateParseErrors", () => {
   it("returns entries unchanged when raw is within the byte cap", () => {
@@ -77,5 +82,55 @@ describe("truncateParseErrors", () => {
     const result = truncateParseErrors(input);
     expect(result[0].raw).toBe(exactRaw);
     expect(result[0].raw.endsWith("…[truncated]")).toBe(false);
+  });
+});
+
+describe("parseErrorSeverity — M9 followups Issue 10", () => {
+  it("escalates to error when 100% of records failed to parse", () => {
+    // The closure-gate FSS scan dropped 74 / 74 SAST records this way.
+    expect(parseErrorSeverity(0, 74)).toBe("error");
+  });
+
+  it("keeps info severity for low-drop scans (e.g. 1 of 100)", () => {
+    expect(parseErrorSeverity(99, 1)).toBe("info");
+  });
+
+  it("keeps info severity at 5% drop", () => {
+    expect(parseErrorSeverity(95, 5)).toBe("info");
+  });
+
+  it("escalates to error at exactly the threshold (50% by default)", () => {
+    expect(parseErrorSeverity(50, 50)).toBe("error");
+  });
+
+  it("keeps info just below the threshold (49.5%)", () => {
+    // 99/200 = 0.495 — just under the default 0.5 threshold.
+    expect(parseErrorSeverity(101, 99)).toBe("info");
+  });
+
+  it("escalates to error above the threshold (60%)", () => {
+    expect(parseErrorSeverity(40, 60)).toBe("error");
+  });
+
+  it("keeps info severity when both counts are zero (no signal at all)", () => {
+    // Caller should not emit a warning in this case, but the helper itself
+    // must not classify it as error — there's nothing to be untrustworthy about.
+    expect(parseErrorSeverity(0, 0)).toBe("info");
+  });
+
+  it("uses the constant PARSE_ERROR_FAILURE_THRESHOLD as the default", () => {
+    // Boundary case at the configured threshold should fire as error.
+    const errors = Math.ceil(PARSE_ERROR_FAILURE_THRESHOLD * 100);
+    const accepted = 100 - errors;
+    expect(parseErrorSeverity(accepted, errors)).toBe("error");
+    // One fewer error should drop back to info.
+    expect(parseErrorSeverity(accepted + 1, errors - 1)).toBe("info");
+  });
+
+  it("respects a custom threshold override", () => {
+    // Stricter threshold (10%): 5/100 drop ratio is still info.
+    expect(parseErrorSeverity(95, 5, 0.1)).toBe("info");
+    // But 11/100 trips it.
+    expect(parseErrorSeverity(89, 11, 0.1)).toBe("error");
   });
 });

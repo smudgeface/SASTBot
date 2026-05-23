@@ -95,6 +95,7 @@ export default function SettingsPage() {
   const jiraOptions = credentials.data?.items.filter((c) => c.kind.startsWith("jira")) ?? [];
   const llmOptions = credentials.data?.items.filter((c) => c.kind === "llm_api_key") ?? [];
   const nvdOptions = credentials.data?.items.filter((c) => c.kind === "nvd_api_key") ?? [];
+  const credentialsLoading = credentials.isLoading;
 
   const buildJiraCred = (): AdminSettingsUpdate["jira_credential"] => {
     if (jiraCredChoice !== "new") return null;
@@ -263,6 +264,7 @@ export default function SettingsPage() {
               setNewValue={setJiraNewValue}
               valuePlaceholder="Jira API token"
               kindLabel="Jira token"
+              isLoading={credentialsLoading}
             />
 
             <div className="flex items-center gap-3">
@@ -347,6 +349,7 @@ export default function SettingsPage() {
               setNewValue={setLlmNewValue}
               valuePlaceholder="API key"
               kindLabel="LLM API key"
+              isLoading={credentialsLoading}
             />
 
             <Separator />
@@ -468,6 +471,7 @@ export default function SettingsPage() {
               setNewValue={setNvdNewValue}
               valuePlaceholder="NVD API key"
               kindLabel="NVD API key"
+              isLoading={credentialsLoading}
             />
           </CardContent>
         </Card>
@@ -862,6 +866,10 @@ interface CredentialPickerProps {
   setNewValue: (v: string) => void;
   valuePlaceholder: string;
   kindLabel: string;
+  /** When true, the existing-credential Select is replaced with a disabled
+   *  loading state. Prevents the Radix Select race where `value` is set before
+   *  the matching SelectItem mounts (so the trigger displays a blank). */
+  isLoading?: boolean;
 }
 
 function CredentialPicker({
@@ -877,6 +885,7 @@ function CredentialPicker({
   setNewValue,
   valuePlaceholder,
   kindLabel,
+  isLoading,
 }: CredentialPickerProps) {
   return (
     <div className="space-y-3">
@@ -905,23 +914,32 @@ function CredentialPicker({
       </div>
 
       {choice === "existing" ? (
-        <Select value={credentialId} onValueChange={setCredentialId}>
-          <SelectTrigger>
-            <SelectValue placeholder="Select a credential" />
-          </SelectTrigger>
-          <SelectContent>
-            {options.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-muted-foreground">
-                No credentials yet. Create one instead.
-              </div>
-            ) : null}
-            {options.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                {c.name} — <span className="text-muted-foreground">{c.kind}</span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        isLoading ? (
+          <Select value="" disabled>
+            <SelectTrigger>
+              <SelectValue placeholder="Loading credentials…" />
+            </SelectTrigger>
+            <SelectContent />
+          </Select>
+        ) : (
+          <Select value={credentialId} onValueChange={setCredentialId}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select a credential" />
+            </SelectTrigger>
+            <SelectContent>
+              {options.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-muted-foreground">
+                  No credentials yet. Create one instead.
+                </div>
+              ) : null}
+              {options.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name} — <span className="text-muted-foreground">{c.kind}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">

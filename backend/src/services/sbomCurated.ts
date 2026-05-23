@@ -14,6 +14,7 @@
  */
 
 import { prisma } from "../db.js";
+import { APP_VERSION } from "../routes/version.js";
 import { sbomPathFor, writeArtifact } from "./artifactStore.js";
 import {
   type CdxComponent,
@@ -148,7 +149,7 @@ export interface CuratedSbomDoc {
 // Module-level constant so both builders share the same tools array without
 // duplicating the literal.
 const SBOM_TOOLS_COMPONENTS: Array<{ name: string; version?: string; type: string }> = [
-  { type: "application", name: "SASTBot", version: "M6q" },
+  { type: "application", name: "SASTBot", version: APP_VERSION },
   { type: "application", name: "cdxgen", version: "12.2" },
 ];
 

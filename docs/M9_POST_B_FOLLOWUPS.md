@@ -1,8 +1,9 @@
 # M9 — pre-existing bugs to address after Deploy 3
 
-> **Trigger:** these are validation-round findings from real scans (FSS + Gocator Classic /GoWeb, 2026-05-22) that are **not** in Stream B scope. Address as a single cleanup commit cluster after Deploy 3 (B5+B6) ships and the E2E closure gate in `docs/M9_E2E_TEST_PLAN.md` is run.
->
-> **Pinned reference from `CLAUDE.md` "For AI agents" section** so the post-Deploy-3 maintainer can't miss it.
+> **✅ All issues resolved as of 2026-05-23 in v0.9.7.** Closure cluster shipped
+> as `fix(m9-followups): post-deploy-3 cleanup`; the 🧹 pin in `CLAUDE.md` was
+> removed in the same commit. This file is retained as a record of what M9
+> surfaced during real-data validation and how each item was resolved.
 
 Numbered to match the validation report so cross-references stay stable.
 
@@ -135,6 +136,12 @@ This is structurally consistent with the M7 audit-vs-truth split, but it means t
 
 ## Issue 6 — SBOM `tools.components.SASTBot.version` hardcoded to milestone tag, not `APP_VERSION`
 
+**Status: ✅ FIXED 2026-05-23 in v0.9.7.** `sbomCurated.ts` now imports
+`APP_VERSION` from `routes/version.js`; the SBOM_TOOLS_COMPONENTS array
+references it directly. Two new unit tests in
+`sbomCurated.deterministic.test.ts` assert both builders emit the running
+APP_VERSION on the SASTBot tool entry.
+
 **Symptom.** Closure-gate Phase 1.5 (2026-05-22): the canonical SBOM served by `/scans/:id/sbom` (and the file written by `sbom_emit`) reports `metadata.tools.components[0].version = "M6q"`. APP_VERSION is `0.8.0`. SARIF correctly reports the running APP_VERSION; only the SBOM is wrong. CRA-evidence consumers cannot tell which app version produced a given SBOM file.
 
 **Root cause.** `backend/src/services/sbomCurated.ts:140`:
@@ -166,6 +173,13 @@ Note: this changes the SBOM byte output on every version bump. The determinism c
 ---
 
 ## Issue 7 — Stale `ALLOWED_PHASES` allowlist swallows new phase names in the API
+
+**Status: ✅ FIXED 2026-05-23 in v0.9.7.** `mappers.ts` now derives
+`ALLOWED_PHASES` from `ScanRunOutSchema.shape.current_phase.unwrap().options`
+so the mapper allowlist, the OpenAPI contract, and the frontend types are all
+the same source of truth. `toPhase` exported for testing. New unit tests in
+`mappersPhase.test.ts` round-trip every value in the Zod enum and explicitly
+cover the previously-missing post-M6p / M9 Stream B phases.
 
 **Symptom.** Closure-gate Phase 1.4 (2026-05-22): the API returns `current_phase: null` whenever the worker is in `llm_sbom`, `llm_sbom_recheck`, `sbom_emit`, `sbom_ingest`, `sarif_emit`, or `nvd`. The DB column has the correct value (verified via direct psql query). The Zod response schema (`backend/src/schemas.ts:430-436`) lists all the new phases correctly. Only the mapper layer drops them.
 
@@ -203,6 +217,13 @@ const ALLOWED_PHASES: ReadonlyArray<ScanPhase> =
 ---
 
 ## Issue 8 — Named `sastbot_backend_node_modules` volume shadows freshly-built Prisma client
+
+**Status: ✅ FIXED 2026-05-23 in v0.9.7.** Both the prod entrypoint
+(`docker/backend-entrypoint.sh`) and the dev compose commands now run
+`pnpm prisma generate` on every boot — before `prisma migrate deploy` in
+prod, in front of `pnpm dev` / `pnpm run worker` in dev. Idempotent ~300ms
+cost; aligns the client with `schema.prisma` regardless of whether the
+named volume is shadowing a stale build.
 
 **Symptom.** Closure-gate pre-flight (2026-05-22, immediately after the Deploy-3 image rebuild): the `/api/scans` list endpoint 500s with `Invalid prisma.scanRun.findMany() invocation ... The column scan_runs.sbom_json does not exist in the current database.` The image was rebuilt cleanly (`pnpm prisma generate` ran in the Dockerfile per `docker/backend.Dockerfile:72`), but the running container served stale TypeScript types AND a stale generated client that still referenced the dropped columns.
 
@@ -296,6 +317,23 @@ Apply the same defensive pattern to `SastAbsenceRecord` (already requires `summa
 
 ## Issue 10 — `llm_*_parse_errors` warnings should be error-severity when they drop a non-trivial fraction of records
 
+**Status: ✅ FIXED 2026-05-23 in v0.9.7.** Introduced
+`parseErrorSeverity(accepted, parseErrors)` in `worker.ts` with a 50% drop-
+ratio threshold (`PARSE_ERROR_FAILURE_THRESHOLD`). All four parse-error
+warning sites — `llm_sast_parse_errors`, `llm_recheck_parse_errors`,
+`llm_sbom_parse_errors`, `llm_sbom_recheck_partial` — now escalate to
+`error` severity when the dropped fraction is ≥50%, which trips the M6i
+`hasErrorWarnings` gate and prevents the SCA auto-fix sweep / scope
+`lastScanRunId` advance on a degraded scan. Below the threshold, severity
+stays `info` (the existing operator-visible audit). Eight new unit tests in
+`parseErrorTruncation.test.ts` cover 0%, 5%, 49.5%, 50%, 60%, 100%, the
+zero-counts case, and a custom-threshold override.
+
+Threshold rationale: 50% is the obvious operator-explainable line ("more
+than half the records were lost → don't trust the scan"). It captures the
+100% catastrophic case the closure-gate run surfaced (74 / 74 SAST records
+lost) without tripping on small drift on a large scan (1 of 100 dropped).
+
 **Symptom.** Both `llm_sbom_parse_errors` ([[Issue 2]]) and `llm_sast_parse_errors` ([[Issue 9]]) emit at **info** severity regardless of how many records were dropped. On the FSS 2026-05-22 scan, 74 / 74 SAST records and 19 / N SBOM records were dropped — 100% and ~60% — yet `hasErrorWarnings(scanRunId)` returned false. The M6i trustworthiness gate let `scope.lastScanRunId` advance to the degraded scan; the SCA auto-fix sweep also ran on this degraded snapshot.
 
 **Why it matters.** Per CLAUDE.md M6i: "When adding new remediation logic that mutates issue state, gate it on `hasErrorWarnings`." That gate's whole purpose is to prevent a scan with no real signal from re-anchoring the scope's truth set. A scan that parsed zero of N SAST records is by definition a no-signal scan — it MUST flip to error severity.
@@ -312,6 +350,16 @@ Apply the same defensive pattern to `SastAbsenceRecord` (already requires `summa
 ---
 
 ## Issue 11 — Settings page credential pickers display blank for already-selected credentials
+
+**Status: ✅ FIXED 2026-05-23 in v0.9.7.** `SettingsPage.tsx` and
+`ReposPage.tsx` now render a disabled `Select` with a "Loading
+credentials…" placeholder while the credentials query is in flight. Once
+the response arrives, the real `Select` mounts with options already
+present, so Radix can resolve the saved `value` to a matching
+`SelectItem` on first render. The `ReposPage` `buildPayload` `||` null
+posture was left as-is (display fix alone resolves the operator-visible
+ambiguity; the omit-vs-null behavior is a separate, more invasive
+refactor).
 
 **Symptom.** Closure-gate session (2026-05-22): opening `/admin/settings` against a stack with all three credentials wired (jira, llm, nvd) shows three blank-looking `Select` widgets. Operator can't tell what's selected, and naturally worries that "Save" will write nulls.
 
@@ -337,13 +385,12 @@ created on the worker, repo deleted, dir gone. 4 new unit tests in
 `backend/tests/repoServiceDelete.test.ts` cover the wiring and the
 best-effort posture.
 
-**Adjacent gap (separate, not fixed in v0.9.6).** Toggling
-`Repo.retainClone` from `true → false` via `PUT /api/admin/repos/:id`
-also leaves the cache dir on disk. Same one-line pattern would fix it,
-but the trigger condition differs (transition detection in
-`updateRepo`). Operator workaround for the toggle case: hit
-`POST /api/admin/repos/:id/purge-cache` after the toggle, or the
-manual `rm` below. Worth folding into the next post-deploy cleanup.
+**Adjacent gap — ✅ FIXED 2026-05-23 in v0.9.7.** `updateRepo` now
+captures `existing.retainClone` before the transaction and, after commit,
+purges the clone cache when it observes a `true → false` transition.
+Mirrors the deleteRepo best-effort posture; new `repoServiceUpdate.test.ts`
+covers the transition + every no-op case (unchanged, omitted, false→true,
+false→false) + the purge-failure / repo-missing edges.
 
 **Symptom.** `DELETE /api/admin/repos/:id` against a repo with
 `retain_clone=true` (and a populated `/app/clones/<repoId>` on the worker
@@ -387,31 +434,20 @@ docker compose exec worker rm -rf /app/clones/<repoId>
 
 ---
 
-## Process improvement — agent brief checklist (separate from issue queue)
+## Closure summary (2026-05-23, v0.9.7)
 
-The 2026-05-22 validation surfaced this as a recurring pattern. The B1–B4 sub-agent missed bumping `APP_VERSION` even though the brief listed both `package.json` files. Already addressed in commit `8aabf7e` (consolidated all version surfaces under `APP_VERSION`, updated CLAUDE.md policy, added explicit "3-file version bump" reminder to plan docs).
-
-**No further action.** Just noted here so the post-Deploy-3 maintainer sees the cleanup history was actively curated, not accidental.
-
----
-
-## How to use this doc
-
-After Deploy 3 (B5+B6) ships AND the closure gate (`docs/M9_E2E_TEST_PLAN.md`) passes:
-
-1. Read this doc.
-2. Open one PR-shaped commit cluster titled `fix(m9-followups): post-deploy-3 cleanup`.
-3. Address Issues 6, 7, 8, 10, 11. (2, 9, and 12 fixed in v0.8.1 / v0.9.6; **1 and 5 dissolved by M9 Stream E** — see `docs/M9_STREAM_E_PLAN.md`; 3 dissolved with the no-backfill posture; 4 is infra-not-code.) Issue 10 is the highest-priority remaining item — it can let the scope re-anchor to a near-empty result when parse-error drop ratio is high. Issue 7 (`ALLOWED_PHASES` allowlist) needs the `sast_ingest` phase added when Stream E2 ships, in addition to the existing phases it's missing.
-4. Delete this file in the same commit, OR retain it with a "✅ Closed YYYY-MM-DD" header and a one-line summary per issue.
-5. Remove the pin from CLAUDE.md "For AI agents" section.
-
-**Note on Issues 6–12 origin.** Issues 6–11 surfaced by the 2026-05-22 closure-gate run; Issue 12 by the 2026-05-23 continuation:
-- 6 — `SASTBot.version` hardcoded to `"M6q"` in `sbomCurated.ts`
-- 7 — `ALLOWED_PHASES` allowlist stale in `mappers.ts`
-- 8 — named-volume Prisma client shadowing on rebuild
-- 9 — LLM SAST schema rejects valid records (sibling of Issue 2)
-- 10 — parse-error warning severity should escalate to `error` when drop ratio is high
-- 11 — Settings page credential picker shows blank for already-selected credentials (display fix shipped locally as part of this cluster's pending commit)
-- 12 — `deleteRepo` leaks `/app/clones/<repoId>` for retained-clone repos (closure-gate Phase 6.3 finding)
-
-They are documented here rather than fixed inline to keep Deploy 3 surgical and to bundle all post-Deploy-3 work into one cluster as planned.
+| Issue | Resolution |
+|-------|------------|
+| 1 | Dissolved by M9 Stream E (see `docs/M9_STREAM_E_PLAN.md`) |
+| 2 | Fixed in v0.8.1 |
+| 3 | Dissolved by no-backfill posture |
+| 4 | Infra-not-code (LLM endpoint flakiness, not a SASTBot bug) |
+| 5 | Dissolved by M9 Stream E |
+| 6 | Fixed in v0.9.7 — `APP_VERSION` import in `sbomCurated.ts` |
+| 7 | Fixed in v0.9.7 — `ALLOWED_PHASES` derived from Zod enum |
+| 8 | Fixed in v0.9.7 — `pnpm prisma generate` on entrypoint + compose boot |
+| 9 | Fixed in v0.8.1 |
+| 10 | Fixed in v0.9.7 — `parseErrorSeverity` helper escalates to `error` ≥50% drop |
+| 11 | Fixed in v0.9.7 — disabled loading-state `Select` on both Settings and Repos pages |
+| 12 | Fixed in v0.9.6 — `deleteRepo` now calls `purgeRepoCache` |
+| 12-adj | Fixed in v0.9.7 — `updateRepo` purges on `retain_clone: true → false` |

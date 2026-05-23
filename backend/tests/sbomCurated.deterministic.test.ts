@@ -683,3 +683,50 @@ describe("stableStringify", () => {
     expect(JSON.parse(stableStringify(obj, 2))).toEqual(JSON.parse(JSON.stringify(obj, null, 2)));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue 6 (M9 post-Deploy-3 followups) — SASTBot tool version tracks APP_VERSION.
+// Guards against a future milestone tag being hardcoded back into the
+// SBOM_TOOLS_COMPONENTS array; the literal "M6q" lived there from M6q through
+// v0.9.6 because the version-consolidation sweep grepped for SemVer strings.
+// ---------------------------------------------------------------------------
+
+describe("SBOM tools.components.SASTBot.version reflects APP_VERSION", () => {
+  it("scope-level SBOM emits the running APP_VERSION", async () => {
+    const { prisma } = await import("../src/db.js");
+    const { buildCuratedSbomJsonForScope } = await import("../src/services/sbomCurated.js");
+    const { APP_VERSION } = await import("../src/routes/version.js");
+
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow(SCOPE_ID) as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue(
+      makeScopeComponents(SCOPE_ID) as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
+    );
+
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+    const sastbot = doc!.metadata.tools.components.find((c) => c.name === "SASTBot");
+    expect(sastbot?.version).toBe(APP_VERSION);
+
+    vi.restoreAllMocks();
+  });
+
+  it("scan-level SBOM emits the running APP_VERSION", async () => {
+    const { prisma } = await import("../src/db.js");
+    const { buildCuratedSbomJson } = await import("../src/services/sbomCurated.js");
+    const { APP_VERSION } = await import("../src/routes/version.js");
+
+    vi.spyOn(prisma.scanRun, "findUnique").mockResolvedValue(
+      makeScanRow(SCAN_RUN_ID) as unknown as Awaited<ReturnType<typeof prisma.scanRun.findUnique>>,
+    );
+    vi.spyOn(prisma.sbomComponent, "findMany").mockResolvedValue(
+      makeSbomComponents(SCAN_RUN_ID) as unknown as Awaited<ReturnType<typeof prisma.sbomComponent.findMany>>,
+    );
+
+    const doc = await buildCuratedSbomJson(SCAN_RUN_ID);
+    const sastbot = doc!.metadata.tools.components.find((c) => c.name === "SASTBot");
+    expect(sastbot?.version).toBe(APP_VERSION);
+
+    vi.restoreAllMocks();
+  });
+});

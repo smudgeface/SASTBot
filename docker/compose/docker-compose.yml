@@ -73,8 +73,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # Apply any committed Prisma migrations then start the dev server.
-    command: ["sh", "-c", "pnpm prisma migrate deploy && pnpm dev"]
+    # Regenerate the Prisma client first — the `sastbot_backend_node_modules`
+    # named volume shadows the image's freshly-built client across rebuilds, so
+    # without this step a `schema.prisma` change can leave the running container
+    # serving the previous client (silent until a query hits the new column).
+    # Then apply committed migrations and start the dev server.
+    command: ["sh", "-c", "pnpm prisma generate && pnpm prisma migrate deploy && pnpm dev"]
     restart: unless-stopped
 
   worker:
@@ -106,9 +110,11 @@ services:
         condition: service_healthy
       backend:
         condition: service_started
-    # BullMQ worker is a stub in M1 — it consumes the `scans` queue but the
-    # handler just logs and marks the run successful. M2 fills it in.
-    command: ["pnpm", "run", "worker"]
+    # BullMQ worker. Regenerate the Prisma client first so it can't drift
+    # behind the backend container after a schema change (the worker doesn't
+    # run migrate deploy — the backend service does that — but it shares the
+    # node_modules named volume and needs the same fresh client).
+    command: ["sh", "-c", "pnpm prisma generate && pnpm run worker"]
     restart: unless-stopped
 
   frontend:

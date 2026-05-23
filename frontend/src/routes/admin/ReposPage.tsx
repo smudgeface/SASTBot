@@ -981,23 +981,36 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
             </div>
 
             {credentialChoice === "existing" ? (
-              <Select value={credentialId} onValueChange={setCredentialId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a credential" />
-                </SelectTrigger>
-                <SelectContent>
-                  {filteredCredentials.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-muted-foreground">
-                      No compatible credentials yet. Create one instead.
-                    </div>
-                  ) : null}
-                  {filteredCredentials.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name} — <span className="text-muted-foreground">{c.kind}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              credentials.isLoading ? (
+                // Disabled placeholder while credentials are in flight. Without
+                // this, Radix Select renders `value=<uuid>` before the matching
+                // SelectItem mounts and the trigger label stays blank — operator
+                // can't tell what credential is selected.
+                <Select value="" disabled>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Loading credentials…" />
+                  </SelectTrigger>
+                  <SelectContent />
+                </Select>
+              ) : (
+                <Select value={credentialId} onValueChange={setCredentialId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a credential" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {filteredCredentials.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-muted-foreground">
+                        No compatible credentials yet. Create one instead.
+                      </div>
+                    ) : null}
+                    {filteredCredentials.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name} — <span className="text-muted-foreground">{c.kind}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )
             ) : (
               <CredentialFormFields
                 idPrefix="repo-cred"

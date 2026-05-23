@@ -130,8 +130,16 @@ export async function updateRepo(
   const existing = await prisma.repo.findFirst({ where: { id, orgId: orgId ?? null } });
   if (!existing) throw new RepoNotFoundError();
 
+  // Detect a retain_clone disable transition so we can purge the clone cache
+  // after the transaction commits. Mirrors deleteRepo's best-effort posture:
+  // the DB write is the source of truth, the disk rm is an after-thought that
+  // failure-tolerates. Captured BEFORE the update so we can compare new value.
+  const retainCloneWillDisable =
+    existing.retainClone === true &&
+    input.retain_clone === false;
+
   try {
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       let credentialId: string | null | undefined;
       if (input.credential) {
         const cred = await createCredential(
@@ -200,6 +208,16 @@ export async function updateRepo(
 
       return updated;
     });
+
+    // Post-commit best-effort: purge the retained clone cache when the
+    // operator toggled retain_clone off. The DB row is already updated, so
+    // the clone path is orphaned — leaving it in place is a slow disk leak
+    // (matches the deleteRepo gap that shipped in v0.9.6).
+    if (retainCloneWillDisable) {
+      await purgeRepoCache(id).catch(() => undefined);
+    }
+
+    return result;
   } catch (err) {
     if (isUniqueViolation(err)) {
       throw new RepoConflictError("A repo with this URL already exists for this org");
