@@ -981,36 +981,51 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
             </div>
 
             {credentialChoice === "existing" ? (
-              credentials.isLoading ? (
-                // Disabled placeholder while credentials are in flight. Without
-                // this, Radix Select renders `value=<uuid>` before the matching
-                // SelectItem mounts and the trigger label stays blank — operator
-                // can't tell what credential is selected.
-                <Select value="" disabled>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Loading credentials…" />
-                  </SelectTrigger>
-                  <SelectContent />
-                </Select>
-              ) : (
-                <Select value={credentialId} onValueChange={setCredentialId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a credential" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {filteredCredentials.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-muted-foreground">
-                        No compatible credentials yet. Create one instead.
-                      </div>
-                    ) : null}
-                    {filteredCredentials.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name} — <span className="text-muted-foreground">{c.kind}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )
+              // Same Radix quirk-pair as SettingsPage credential picker; see
+              // the long comment there for the full explanation. Short
+              // version: render the label explicitly via SelectValue
+              // children to skip Radix's deferred item registration, AND
+              // reject onValueChange("") when no options are mounted so the
+              // value isn't silently cleared by Radix's mismatch handler
+              // while credentials are still loading.
+              (() => {
+                const selected = filteredCredentials.find((c) => c.id === credentialId);
+                const handleValueChange = (v: string) => {
+                  if (v === "" && filteredCredentials.length === 0) return;
+                  setCredentialId(v);
+                };
+                return (
+                  <Select
+                    value={credentialId}
+                    onValueChange={handleValueChange}
+                    disabled={credentials.isLoading}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a credential">
+                        {credentials.isLoading ? (
+                          "Loading credentials…"
+                        ) : selected ? (
+                          <>
+                            {selected.name} — <span className="text-muted-foreground">{selected.kind}</span>
+                          </>
+                        ) : null}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {filteredCredentials.length === 0 ? (
+                        <div className="px-3 py-2 text-xs text-muted-foreground">
+                          No compatible credentials yet. Create one instead.
+                        </div>
+                      ) : null}
+                      {filteredCredentials.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name} — <span className="text-muted-foreground">{c.kind}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                );
+              })()
             ) : (
               <CredentialFormFields
                 idPrefix="repo-cred"

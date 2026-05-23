@@ -1,7 +1,9 @@
 # M9 — pre-existing bugs to address after Deploy 3
 
-> **✅ All issues resolved as of 2026-05-23 in v0.9.7.** Closure cluster shipped
-> as `fix(m9-followups): post-deploy-3 cleanup`; the 🧹 pin in `CLAUDE.md` was
+> **✅ All issues resolved as of 2026-05-23 in v0.9.7 (Issue 11 hardened in
+> v0.9.8 after Chrome DevTools E2E surfaced a Radix-quirk regression in the
+> v0.9.7 picker rewrite).** Closure cluster shipped as
+> `fix(m9-followups): post-deploy-3 cleanup`; the 🧹 pin in `CLAUDE.md` was
 > removed in the same commit. This file is retained as a record of what M9
 > surfaced during real-data validation and how each item was resolved.
 
@@ -351,15 +353,20 @@ lost) without tripping on small drift on a large scan (1 of 100 dropped).
 
 ## Issue 11 — Settings page credential pickers display blank for already-selected credentials
 
-**Status: ✅ FIXED 2026-05-23 in v0.9.7.** `SettingsPage.tsx` and
-`ReposPage.tsx` now render a disabled `Select` with a "Loading
-credentials…" placeholder while the credentials query is in flight. Once
-the response arrives, the real `Select` mounts with options already
-present, so Radix can resolve the saved `value` to a matching
-`SelectItem` on first render. The `ReposPage` `buildPayload` `||` null
-posture was left as-is (display fix alone resolves the operator-visible
-ambiguity; the omit-vs-null behavior is a separate, more invasive
-refactor).
+**Status: ✅ FIXED 2026-05-23 in v0.9.7, hardened 2026-05-23 in v0.9.8.**
+The v0.9.7 fix introduced a regression discoverable under throttled
+network: the disabled-`Select` → real-`Select` conditional remount still
+triggered Radix's mismatch handler (it fires `onValueChange("")` when
+the controlled value has no matching `SelectItem` yet), which silently
+overwrote the hydrated credential UUID, leaving the picker stuck at
+"Select a credential" forever. v0.9.8 collapses the conditional to a
+single `<Select>` that (a) renders the label explicitly via
+`SelectValue` children to bypass Radix's deferred item registration and
+(b) rejects `onValueChange("")` while `options.length === 0` so Radix's
+phantom-clear can't poison the parent state. The original Issue 11
+operator-visible blank-picker bug is now resolved on cold load, on
+throttled load, and on revisit. Applied symmetrically to `ReposPage`.
+`ReposPage` `buildPayload` `||` null posture was left as-is.
 
 **Symptom.** Closure-gate session (2026-05-22): opening `/admin/settings` against a stack with all three credentials wired (jira, llm, nvd) shows three blank-looking `Select` widgets. Operator can't tell what's selected, and naturally worries that "Save" will write nulls.
 
@@ -448,6 +455,6 @@ docker compose exec worker rm -rf /app/clones/<repoId>
 | 8 | Fixed in v0.9.7 — `pnpm prisma generate` on entrypoint + compose boot |
 | 9 | Fixed in v0.8.1 |
 | 10 | Fixed in v0.9.7 — `parseErrorSeverity` helper escalates to `error` ≥50% drop |
-| 11 | Fixed in v0.9.7 — disabled loading-state `Select` on both Settings and Repos pages |
+| 11 | Fixed in v0.9.7, hardened in v0.9.8 — single `Select` with explicit `SelectValue` children + phantom-clear guard |
 | 12 | Fixed in v0.9.6 — `deleteRepo` now calls `purgeRepoCache` |
 | 12-adj | Fixed in v0.9.7 — `updateRepo` purges on `retain_clone: true → false` |

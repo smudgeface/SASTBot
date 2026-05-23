@@ -2633,3 +2633,59 @@ clusters:
    cleanup" patterns should be implemented once and applied uniformly —
    not copied per-handler. Filed as a tiny refactor candidate but
    deliberately not bundled here (the cluster is scope-disciplined).
+
+## 2026-05-23 — Issue 11 hardening (v0.9.8) — Radix Select quirk
+
+E2E Chrome DevTools validation of the v0.9.7 closure cluster surfaced a
+regression in the credential picker fix. The v0.9.7 fix split the
+`<Select>` into a disabled loading-placeholder branch and a real
+branch; switching between them tripped a second Radix quirk that v0.9.7
+didn't address: when a controlled `value` doesn't match any rendered
+`SelectItem` (because the credentials query hadn't resolved yet), Radix
+fires `onValueChange("")` to "fix" the apparent mismatch. That phantom
+callback was wired straight into `setJiraCredId` / `setLlmCredId` /
+`setNvdCredId`, silently overwriting the UUIDs the hydration `useEffect`
+had just set. Cold-load symptom: the picker stays at "Select a
+credential" forever, even though the save still works (state is empty
+so `buildPayload` omits the field per the original Issue 11 analysis).
+
+**What shipped (v0.9.8).** Collapsed the conditional back to a single
+`<Select>` and addressed both Radix quirks together:
+
+- `<SelectValue>` now takes children that render the picker label
+  explicitly (`"Loading credentials…"` while in flight, `<name> —
+  <kind>` once a matching option exists). This bypasses the deferred
+  item-registration race that made even the v0.9.7 happy path show
+  "Select a credential" on the first render after the conditional flip.
+- `onValueChange` is wrapped in a guard that rejects `""` whenever
+  `options.length === 0`. Real user selections always carry a non-empty
+  UUID; the only path through Radix that produces an empty change is
+  the mismatch-fixup, which we want to ignore so the parent state
+  isn't poisoned.
+
+Applied symmetrically to `frontend/src/routes/admin/SettingsPage.tsx`
+and `frontend/src/routes/admin/ReposPage.tsx`. Cross-validated via
+Chrome DevTools in an isolated browser context: state walk of the
+SettingsPage hooks confirms `jiraCredId` / `llmCredId` / `nvdCredId`
+hold the right UUIDs at t=200ms through steady-state, and the trigger
+labels resolve to the saved credential names at every sampled moment.
+A throttle-the-credentials-fetch interceptor reproduces the original
+regression on v0.9.7 and confirms v0.9.8 holds.
+
+Version bumped 0.9.7 → 0.9.8 (PATCH — single behavioral regression in
+operator-facing UI, no new feature). Three files + lockfile per policy.
+
+**What we learned.** The v0.9.7 "loading placeholder via second
+`<Select>` instance" pattern looked clean in isolation but was an
+incomplete model of Radix's behavior. Radix isn't just lazy about
+resolving controlled values to item labels (the registration race) —
+it actively fires onValueChange to "correct" mismatches. Conditionally
+remounting a Select tripped both quirks at once: the new instance
+mounts before items register, sees a value that doesn't match anything,
+and fires the fixup callback that wipes the parent state. Single-Select
+with explicit `SelectValue` children + a guard on the change handler is
+the canonical Radix pattern for "controlled value resolved from an
+async-loaded option list" — worth remembering for the next
+fetched-options form. Doubles as a reminder that visual E2E (in our
+case Chrome DevTools state walks) catches what unit tests can't:
+mock-DOM tests didn't exercise Radix's internal scheduling.

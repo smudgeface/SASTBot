@@ -914,32 +914,68 @@ function CredentialPicker({
       </div>
 
       {choice === "existing" ? (
-        isLoading ? (
-          <Select value="" disabled>
-            <SelectTrigger>
-              <SelectValue placeholder="Loading credentials…" />
-            </SelectTrigger>
-            <SelectContent />
-          </Select>
-        ) : (
-          <Select value={credentialId} onValueChange={setCredentialId}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select a credential" />
-            </SelectTrigger>
-            <SelectContent>
-              {options.length === 0 ? (
-                <div className="px-3 py-2 text-xs text-muted-foreground">
-                  No credentials yet. Create one instead.
-                </div>
-              ) : null}
-              {options.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name} — <span className="text-muted-foreground">{c.kind}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )
+        // Two compounding Radix quirks make this section non-trivial:
+        //   (1) On a freshly-mounted Select with a controlled `value` that
+        //       has no matching SelectItem yet (because the credentials
+        //       query hasn't resolved), Radix can't auto-resolve the trigger
+        //       label, AND it fires onValueChange("") to "fix" the
+        //       mismatch — which overwrites our hydrated state. Repro:
+        //       settings resolves fast, useEffect sets credentialId to
+        //       <uuid>, render with empty options → Radix clears it. State
+        //       sticks at "" even after credentials arrive.
+        //   (2) Even if we sidestep (1), Radix renders the placeholder
+        //       instead of the item's text on the first render after a
+        //       value→item match, because items register in a useEffect
+        //       one render later.
+        // Both are addressed below by:
+        //   - rendering the label explicitly via SelectValue children
+        //     (sidesteps quirk 2)
+        //   - ignoring the phantom onValueChange("") when no real options
+        //     are registered yet (sidesteps quirk 1)
+        //   - showing a "Loading credentials…" pseudo-value while the
+        //     credentials query is in flight (covers the original Issue 11
+        //     operator-visible bug)
+        (() => {
+          const selected = options.find((c) => c.id === credentialId);
+          const handleValueChange = (v: string) => {
+            // Reject Radix's "fix" callback: never accept "" while no real
+            // options are mounted. Real user selections only ever come with
+            // a non-empty UUID that exists in the rendered options list.
+            if (v === "" && options.length === 0) return;
+            setCredentialId(v);
+          };
+          return (
+            <Select
+              value={credentialId}
+              onValueChange={handleValueChange}
+              disabled={isLoading}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select a credential">
+                  {isLoading ? (
+                    "Loading credentials…"
+                  ) : selected ? (
+                    <>
+                      {selected.name} — <span className="text-muted-foreground">{selected.kind}</span>
+                    </>
+                  ) : null}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {options.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-muted-foreground">
+                    No credentials yet. Create one instead.
+                  </div>
+                ) : null}
+                {options.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name} — <span className="text-muted-foreground">{c.kind}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          );
+        })()
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
