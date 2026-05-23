@@ -5,6 +5,7 @@ import type { RepoCreate, RepoUpdate } from "../schemas.js";
 
 import { createCredential } from "./credentialService.js";
 import { deleteScanArtifacts } from "./artifactStore.js";
+import { purge as purgeRepoCache } from "./repoCache.js";
 
 export class RepoNotFoundError extends Error {
   constructor() {
@@ -235,6 +236,11 @@ export async function deleteRepo(id: string, orgId: string | null): Promise<void
   // Clean up artifact files for all deleted scan runs. Missing files are
   // silently ignored (force: true semantics in deleteArtifact).
   await Promise.allSettled(scanRuns.map((run) => deleteScanArtifacts(run.id)));
+
+  // Drop the retained clone cache. Same best-effort posture as artifact
+  // cleanup — the DB row is already gone, so the cache path is orphaned
+  // regardless of whether the rm succeeds.
+  await purgeRepoCache(id).catch(() => undefined);
 }
 
 function isUniqueViolation(err: unknown): boolean {

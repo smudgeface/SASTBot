@@ -329,7 +329,21 @@ Apply the same defensive pattern to `SastAbsenceRecord` (already requires `summa
 
 ## Issue 12 — `deleteRepo` leaks `/app/clones/<repoId>` for retained-clone repos
 
-**Status: open.** Surfaced by closure-gate Phase 6.3 on 2026-05-23.
+**Status: ✅ FIXED 2026-05-23 in v0.9.6.** Surfaced by closure-gate Phase 6.3
+the same day. `repoService.deleteRepo` now calls the existing
+`repoCache.purge(repoId)` as a best-effort cleanup after the DB delete and
+per-scan artifact cleanup. Verified end-to-end: synthetic clone dir
+created on the worker, repo deleted, dir gone. 4 new unit tests in
+`backend/tests/repoServiceDelete.test.ts` cover the wiring and the
+best-effort posture.
+
+**Adjacent gap (separate, not fixed in v0.9.6).** Toggling
+`Repo.retainClone` from `true → false` via `PUT /api/admin/repos/:id`
+also leaves the cache dir on disk. Same one-line pattern would fix it,
+but the trigger condition differs (transition detection in
+`updateRepo`). Operator workaround for the toggle case: hit
+`POST /api/admin/repos/:id/purge-cache` after the toggle, or the
+manual `rm` below. Worth folding into the next post-deploy cleanup.
 
 **Symptom.** `DELETE /api/admin/repos/:id` against a repo with
 `retain_clone=true` (and a populated `/app/clones/<repoId>` on the worker
@@ -387,7 +401,7 @@ After Deploy 3 (B5+B6) ships AND the closure gate (`docs/M9_E2E_TEST_PLAN.md`) p
 
 1. Read this doc.
 2. Open one PR-shaped commit cluster titled `fix(m9-followups): post-deploy-3 cleanup`.
-3. Address Issues 6, 7, 8, 10, 11, 12. (2 and 9 fixed in v0.8.1; **1 and 5 dissolved by M9 Stream E** — see `docs/M9_STREAM_E_PLAN.md`; 3 dissolved with the no-backfill posture; 4 is infra-not-code.) Issue 10 is the highest-priority remaining item — it can let the scope re-anchor to a near-empty result when parse-error drop ratio is high. Issue 7 (`ALLOWED_PHASES` allowlist) needs the `sast_ingest` phase added when Stream E2 ships, in addition to the existing phases it's missing. Issue 12 (clone-cache leak on repo delete) is small and standalone — easy starter from this list.
+3. Address Issues 6, 7, 8, 10, 11. (2, 9, and 12 fixed in v0.8.1 / v0.9.6; **1 and 5 dissolved by M9 Stream E** — see `docs/M9_STREAM_E_PLAN.md`; 3 dissolved with the no-backfill posture; 4 is infra-not-code.) Issue 10 is the highest-priority remaining item — it can let the scope re-anchor to a near-empty result when parse-error drop ratio is high. Issue 7 (`ALLOWED_PHASES` allowlist) needs the `sast_ingest` phase added when Stream E2 ships, in addition to the existing phases it's missing.
 4. Delete this file in the same commit, OR retain it with a "✅ Closed YYYY-MM-DD" header and a one-line summary per issue.
 5. Remove the pin from CLAUDE.md "For AI agents" section.
 
