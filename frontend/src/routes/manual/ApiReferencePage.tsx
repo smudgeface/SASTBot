@@ -18,9 +18,11 @@ import { cn } from "@/lib/utils";
  *    request body schema, and response codes.
  *
  * Tradeoffs:
- *  - schema rendering is one level deep ($ref names are surfaced as text but
- *    not recursively expanded). Operators wanting nested detail can pop the
- *    raw openapi.json (link on this page) or hit /docs (backend Swagger UI).
+ *  - request body and response schemas render recursively (objects, arrays,
+ *    anyOf/oneOf/allOf) up to 6 levels of nesting. Deeper trees collapse to
+ *    "{…}" with a hint to open /docs (backend Swagger UI). `$ref` references
+ *    surface their target name but are not auto-dereferenced — the Fastify +
+ *    Zod schema export inlines everything in practice, so this rarely matters.
  *  - if /api/openapi.json is unreachable (backend down), we show an inline
  *    error with a "retry" affordance.
  */
@@ -65,6 +67,11 @@ interface OpenApiSchema {
   required?: string[];
   enum?: unknown[];
   description?: string;
+  nullable?: boolean;
+  additionalProperties?: boolean | OpenApiSchema;
+  anyOf?: OpenApiSchema[];
+  oneOf?: OpenApiSchema[];
+  allOf?: OpenApiSchema[];
 }
 
 interface OpenApiDoc {
@@ -288,19 +295,23 @@ function EndpointRow({ endpoint }: { endpoint: FlatEndpoint }) {
                 {describeContent(op.requestBody.content)}
                 {op.requestBody.description ? ` — ${op.requestBody.description}` : null}
               </div>
+              <ContentSchema content={op.requestBody.content} />
             </div>
           ) : null}
           {op.responses ? (
             <div>
               <div className="mb-1 font-medium">Responses</div>
-              <ul className="space-y-1">
+              <ul className="space-y-3">
                 {Object.entries(op.responses).map(([code, resp]) => (
-                  <li key={code} className="flex gap-2">
-                    <code className="font-mono text-foreground">{code}</code>
-                    <span className="text-muted-foreground">
-                      {resp.description ?? "(no description)"}
-                      {resp.content ? ` · ${describeContent(resp.content)}` : ""}
-                    </span>
+                  <li key={code}>
+                    <div className="flex gap-2">
+                      <code className="font-mono text-foreground">{code}</code>
+                      <span className="text-muted-foreground">
+                        {resp.description ?? "(no description)"}
+                        {resp.content ? ` · ${describeContent(resp.content)}` : ""}
+                      </span>
+                    </div>
+                    <ContentSchema content={resp.content} />
                   </li>
                 ))}
               </ul>
@@ -317,6 +328,136 @@ function describeContent(content: OpenApiRequestBody["content"]): string {
   const types = Object.keys(content);
   if (types.length === 0) return "";
   return types.join(", ");
+}
+
+// Render the schema for the first JSON-ish content variant (prefers
+// `application/json`; falls back to the first declared media type). Skips
+// non-JSON content types — those usually mean file downloads / opaque blobs
+// that don't have a meaningful tree shape.
+function ContentSchema({ content }: { content: OpenApiRequestBody["content"] }) {
+  if (!content) return null;
+  const json = content["application/json"] ?? content[Object.keys(content)[0]];
+  if (!json?.schema) return null;
+  return (
+    <div className="mt-1 rounded border border-border/60 bg-muted/30 p-2">
+      <SchemaTree schema={json.schema} />
+    </div>
+  );
+}
+
+// Recursive renderer for OpenAPI schemas. Walks object properties + array
+// items so operators can see the full response shape without leaving the
+// page. Bails out after 6 levels of nesting — anything deeper is dumped as
+// "{…}" with a hint to open /docs (Swagger UI) for the full tree.
+function SchemaTree({ schema, depth = 0 }: { schema: OpenApiSchema; depth?: number }) {
+  if (depth > 6) {
+    return <span className="font-mono text-muted-foreground">{"{…}"}</span>;
+  }
+
+  // anyOf / oneOf — render each variant separated by "or".
+  const union = schema.anyOf ?? schema.oneOf;
+  if (union && union.length > 0) {
+    return (
+      <div>
+        {union.map((variant, i) => (
+          <div key={i}>
+            <span className="text-muted-foreground">{i === 0 ? "" : "or "}</span>
+            <SchemaTree schema={variant} depth={depth + 1} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // allOf — flatten into one object by merging properties (best-effort).
+  if (schema.allOf && schema.allOf.length > 0) {
+    const merged: OpenApiSchema = {
+      type: "object",
+      properties: {},
+      required: [],
+    };
+    for (const s of schema.allOf) {
+      if (s.properties) Object.assign(merged.properties!, s.properties);
+      if (s.required) merged.required!.push(...s.required);
+    }
+    return <SchemaTree schema={merged} depth={depth} />;
+  }
+
+  // Object — list properties.
+  if ((schema.type === "object" || schema.properties) && schema.properties) {
+    const required = new Set(schema.required ?? []);
+    const entries = Object.entries(schema.properties);
+    if (entries.length === 0) {
+      return <span className="font-mono text-muted-foreground">object (no fields)</span>;
+    }
+    return (
+      <ul className="ml-3 space-y-0.5 border-l border-border/40 pl-3">
+        {entries.map(([name, prop]) => {
+          const isComplex =
+            (prop.type === "object" && !!prop.properties) ||
+            (prop.type === "array" && !!prop.items) ||
+            !!prop.anyOf || !!prop.oneOf || !!prop.allOf;
+          return (
+            <li key={name} className="font-mono text-[11px]">
+              <span className="text-primary">{name}</span>
+              {required.has(name) ? <span className="text-destructive">*</span> : null}
+              <span className="text-muted-foreground">: </span>
+              <TypeLabel s={prop} />
+              {prop.enum ? (
+                <span className="text-muted-foreground"> (enum: {prop.enum.map((e) => JSON.stringify(e)).join(" | ")})</span>
+              ) : null}
+              {prop.description ? (
+                <span className="ml-1 text-muted-foreground">— {prop.description}</span>
+              ) : null}
+              {isComplex ? <SchemaTree schema={prop} depth={depth + 1} /> : null}
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+
+  // Array — show item shape.
+  if (schema.type === "array" && schema.items) {
+    return (
+      <div className="ml-3">
+        <SchemaTree schema={schema.items} depth={depth + 1} />
+      </div>
+    );
+  }
+
+  // Primitive at root (rare for responses but possible).
+  if (schema.type) {
+    return (
+      <span className="font-mono text-[11px] text-muted-foreground">
+        <TypeLabel s={schema} />
+        {schema.enum ? ` (enum: ${schema.enum.map((e) => JSON.stringify(e)).join(" | ")})` : ""}
+      </span>
+    );
+  }
+
+  // $ref or unknown — surface it for debug rather than render an empty box.
+  if (schema.$ref) {
+    return <span className="font-mono text-[11px] text-muted-foreground">{`→ ${schema.$ref}`}</span>;
+  }
+
+  return null;
+}
+
+// Compact one-line type label: handles "array of <type>", nullable, format.
+function TypeLabel({ s }: { s: OpenApiSchema }) {
+  if (s.type === "array" && s.items) {
+    return (
+      <span className="text-muted-foreground">
+        array of <TypeLabel s={s.items} />
+        {s.nullable ? " | null" : ""}
+      </span>
+    );
+  }
+  const base = s.type ?? (s.properties ? "object" : "any");
+  const suffix = s.format ? ` (${s.format})` : "";
+  const nullable = s.nullable ? " | null" : "";
+  return <span className="text-muted-foreground">{base}{suffix}{nullable}</span>;
 }
 
 function MethodBadge({ method }: { method: Method }) {

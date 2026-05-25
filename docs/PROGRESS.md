@@ -4,6 +4,39 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-25 — M11 follow-up: API reference response schemas (v0.11.1)
+
+User shake-out caught a gap in the M10/M11 API reference page: response
+sections only showed the status code + media type, never the actual JSON
+field tree. So `GET /healthz`'s 200 read as "Default Response ·
+application/json" with no hint that the body has `status` and `version`
+fields. Same gap on every other endpoint and on request bodies.
+
+**What shipped.** `ApiReferencePage.tsx` got a recursive `SchemaTree`
+renderer (and a `ContentSchema` wrapper that picks the first JSON-ish
+content variant). It walks objects, arrays, `anyOf`/`oneOf`/`allOf`, up
+to 6 nesting levels (then collapses to `{…}` with a hint to open
+`/docs`). Each leaf shows: field name (required marker, type, format
+hint, nullable suffix, enum values, description). Wired into both
+**Request body** and every **Responses** entry. Browser-verified on the
+trivial case (`/healthz` shows `status*: string (enum: "ok")` and
+`version*: string`) and on a nested case (`GET /api/scopes` expands the
+`active_scan` object and its inner `phase_progress` object two levels
+deep, with enum + nullability + uuid format hints).
+
+**Version bumped 0.11.0 → 0.11.1** (PATCH — operator-visible docs fix)
+across all four surfaces.
+
+**What we learned.** The M10 docstring on this component had honestly
+flagged "schema rendering is one level deep" as a known tradeoff —
+which turned out to be optimistic; it was zero levels deep for
+responses. Lesson: when the docstring says a tradeoff is acceptable,
+re-test it from the operator's perspective. "Acceptable to me writing
+the code" and "acceptable to the operator reading the docs" are
+different bars.
+
+---
+
 ## 2026-05-25 — M11: comprehensive SBOM + phase reorder (v0.11.0)
 
 The per-scan SBOM artifact graduates from "list of components" to a
