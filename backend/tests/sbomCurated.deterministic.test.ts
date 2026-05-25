@@ -413,6 +413,8 @@ describe("buildCuratedSbomJsonForScope — determinism", () => {
     vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue(
       components as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
     );
+    // M11 Step 3: buildCuratedSbomJsonForScope now queries scaIssue.
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
     const doc1 = await buildCuratedSbomJsonForScope(SCOPE_ID);
     const doc2 = await buildCuratedSbomJsonForScope(SCOPE_ID);
@@ -450,6 +452,9 @@ describe("buildCuratedSbomJsonForScope — determinism", () => {
       // reverse the evidence array; sort should produce the same result
       evidence: [...(componentForward.evidence as Array<{ path: string; line?: number | null }>)].reverse(),
     };
+
+    // M11 Step 3: scaIssue.findMany now queried — mock for both calls.
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
     // Call 1: forward order
     vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValueOnce(
@@ -492,6 +497,8 @@ describe("buildCuratedSbomJsonForScope — determinism", () => {
     vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue(
       makeScopeComponents(SCOPE_ID) as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
     );
+    // M11 Step 3: scaIssue.findMany now queried.
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
     const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
     expect(doc).not.toBeNull();
@@ -549,6 +556,8 @@ describe("buildCuratedSbomJson — determinism", () => {
     vi.spyOn(prisma.sbomComponent, "findMany").mockResolvedValue(
       makeSbomComponents(SCAN_RUN_ID) as unknown as Awaited<ReturnType<typeof prisma.sbomComponent.findMany>>,
     );
+    // M11 Step 3: scaIssue.findMany now queried by buildCuratedSbomJson.
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
     const doc1 = await buildCuratedSbomJson(SCAN_RUN_ID);
     const doc2 = await buildCuratedSbomJson(SCAN_RUN_ID);
@@ -572,6 +581,8 @@ describe("buildCuratedSbomJson — determinism", () => {
     vi.spyOn(prisma.sbomComponent, "findMany").mockResolvedValue(
       makeSbomComponents(SCAN_RUN_ID) as unknown as Awaited<ReturnType<typeof prisma.sbomComponent.findMany>>,
     );
+    // M11 Step 3: scaIssue.findMany now queried.
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
     const doc = await buildCuratedSbomJson(SCAN_RUN_ID);
     expect(doc).not.toBeNull();
@@ -703,6 +714,8 @@ describe("SBOM tools.components.SASTBot.version reflects APP_VERSION", () => {
     vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue(
       makeScopeComponents(SCOPE_ID) as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
     );
+    // M11 Step 3: scaIssue.findMany now queried.
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
     const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
     const sastbot = doc!.metadata.tools.components.find((c) => c.name === "SASTBot");
@@ -722,10 +735,85 @@ describe("SBOM tools.components.SASTBot.version reflects APP_VERSION", () => {
     vi.spyOn(prisma.sbomComponent, "findMany").mockResolvedValue(
       makeSbomComponents(SCAN_RUN_ID) as unknown as Awaited<ReturnType<typeof prisma.sbomComponent.findMany>>,
     );
+    // M11 Step 3: scaIssue.findMany now queried.
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
     const doc = await buildCuratedSbomJson(SCAN_RUN_ID);
     const sastbot = doc!.metadata.tools.components.find((c) => c.name === "SASTBot");
     expect(sastbot?.version).toBe(APP_VERSION);
+
+    vi.restoreAllMocks();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M11 Step 3 — Determinism with vulns + EOL data: build twice, expect identical bytes.
+// ---------------------------------------------------------------------------
+
+const VULN_SCOPE_ID = "cccccccc-1111-0000-0000-000000000030";
+
+function makeScaIssueForDet(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "issue-det1-0000-0000-000000000001",
+    osvId: "GHSA-wxyz-5678-abcd",
+    latestCveId: "CVE-2025-99999",
+    source: "osv",
+    latestCvssScore: 8.5,
+    latestCvssVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    latestSeverity: "high",
+    latestSummary: "Test vuln for determinism",
+    latestAliases: ["GHSA-wxyz-5678-abcd", "CVE-2025-99999"],
+    dismissedStatus: "pending",
+    dismissedReason: null,
+    notes: null,
+    firstSeenAt: new Date("2025-06-01T00:00:00Z"),
+    updatedAt: new Date("2025-06-15T00:00:00Z"),
+    packageName: "axios",
+    latestPackageVersion: "1.6.0",
+    latestEolDate: new Date("2025-01-01T00:00:00Z"), // past date → eol
+    latestFindingType: "eol",
+    ...overrides,
+  };
+}
+
+describe("buildCuratedSbomJsonForScope — determinism with vulns + EOL data (M11 Step 3)", () => {
+  it("produces byte-identical output on two calls when vulns and EOL data are present", async () => {
+    const { prisma } = await import("../src/db.js");
+    const { buildCuratedSbomJsonForScope, stableStringify } = await import(
+      "../src/services/sbomCurated.js"
+    );
+
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow(VULN_SCOPE_ID) as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue(
+      // Reuse the first two components from makeScopeComponents — axios matches the issue.
+      makeScopeComponents(VULN_SCOPE_ID).slice(0, 2) as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
+    );
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
+      makeScaIssueForDet() as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+    ]);
+
+    const doc1 = await buildCuratedSbomJsonForScope(VULN_SCOPE_ID);
+    const doc2 = await buildCuratedSbomJsonForScope(VULN_SCOPE_ID);
+
+    expect(doc1).not.toBeNull();
+    expect(doc2).not.toBeNull();
+
+    // Must have vulnerabilities.
+    expect(doc1!.vulnerabilities).toBeDefined();
+    expect(doc1!.vulnerabilities!.length).toBeGreaterThan(0);
+
+    // Must have EOL property on the matching component.
+    const axiosComp = doc1!.components.find((c) => c.name === "axios");
+    expect(axiosComp).toBeDefined();
+    const props = Object.fromEntries((axiosComp!.properties ?? []).map((p) => [p.name, p.value]));
+    expect(props["sastbot:lifecycle_state"]).toBe("eol");
+
+    // Byte-identical on both calls.
+    const json1 = stableStringify(doc1!, 2);
+    const json2 = stableStringify(doc2!, 2);
+    expect(json1).toBe(json2);
 
     vi.restoreAllMocks();
   });

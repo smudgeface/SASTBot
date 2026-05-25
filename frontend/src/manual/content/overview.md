@@ -32,30 +32,35 @@ which the UI polls every three seconds. The phases, in order:
    first-party noise, surfaces vendored libraries cdxgen missed
    (`extern/`, `third-party/`, `vendor/`), and keeps a rationale field
    for any change it makes.
-4. **`sbom_emit`** — writes the curated CycloneDX SBOM to disk as the
-   canonical per-scan artifact.
-5. **`sbom_ingest`** — re-reads that artifact into the `sbom_components`
-   table so the rest of the pipeline sees only what's in the file.
+4. **`sbom_persist`** — persists components into the per-scan
+   `sbom_components` table from the in-memory post-augmentation list —
+   no file round-trip needed at this stage.
+5. **`llm_sbom_recheck`** — verifies ambiguous-component dispositions
+   from the augmentation pass.
 6. **`osv`** — batched OSV.dev queries for every component (with caching
    of recently-queried PURLs).
 7. **`nvd`** — NVD enrichment for C/C++ components without an OSV hit
    (optional, but recommended; raises rate limit with an NVD API key).
 8. **`eol`** — end-of-life lookup for runtime / framework components.
-9. **`llm_detection`** — an LLM agent (claude-p) walks the source tree
-   and emits SAST records, SAST-absence records (where it looked but
-   found nothing concerning), and reachability verdicts for every SCA
-   issue at the configured minimum severity.
-10. **`sarif_emit`** — writes SARIF v2.1.0 from the in-memory detection
+9. **`sbom_emit`** — writes the comprehensive CycloneDX 1.7 SBOM artifact
+   to disk. Because this phase runs after `osv`, `nvd`, and `eol`, the
+   file embeds `vulnerabilities[]` and per-component lifecycle/EOL
+   properties — a self-contained CRA-grade evidence document.
+10. **`llm_detection`** — an LLM agent (claude-p) walks the source tree
+    and emits SAST records, SAST-absence records (where it looked but
+    found nothing concerning), and reachability verdicts for every SCA
+    issue at the configured minimum severity.
+11. **`sarif_emit`** — writes SARIF v2.1.0 from the in-memory detection
     buffer.
-11. **`sast_ingest`** — re-reads the SARIF and persists SAST issues with
+12. **`sast_ingest`** — re-reads the SARIF and persists SAST issues with
     de-duped fingerprints.
-12. **`llm_recheck`** — a narrower LLM pass that verifies every
+13. **`llm_recheck`** — a narrower LLM pass that verifies every
     non-detected issue is *still* fixed, and that detected ones still
     appear at the reported location. Recheck failures are the safety
     net against the LLM giving spurious "all clear" verdicts.
-13. **`sca_summaries`** — short LLM-written summaries for each SCA
+14. **`sca_summaries`** — short LLM-written summaries for each SCA
     issue.
-14. **`finalizing`** — updates `scan_runs` denorms, advances scope
+15. **`finalizing`** — updates `scan_runs` denorms, advances scope
     pointers if (and only if) the scan was trustworthy.
 
 Most of the wall-clock budget on a typical scan is spent in
@@ -124,9 +129,9 @@ It does **not** use the LLM for:
 
 - **`/app/clones/<repoId>`** — retained clone cache (only when the repo
   has `retain_clone=true`).
-- **`/var/lib/sastbot/artifacts/sbom/<scanRunId>.json`** — canonical
-  curated SBOM, written once at `sbom_emit`, served by
-  `GET /scans/:id/sbom`.
+- **`/var/lib/sastbot/artifacts/sbom/<scanRunId>.json`** — comprehensive
+  curated SBOM (components + vulnerabilities + lifecycle), written once
+  at `sbom_emit` after osv/nvd/eol, served by `GET /scans/:id/sbom`.
 - **`/var/lib/sastbot/artifacts/sarif/<scanRunId>.sarif.json`** —
   SARIF v2.1.0, written at `sarif_emit`, served by
   `GET /scans/:id/sast-sarif`.

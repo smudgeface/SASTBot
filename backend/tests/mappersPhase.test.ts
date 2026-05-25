@@ -45,16 +45,23 @@ describe("mappers.toPhase — Zod enum coverage", () => {
     const { toPhase } = await import("../src/services/mappers.js");
     // The exact phases that surfaced as `null` in the closure-gate validation
     // (2026-05-22) because the hardcoded allowlist hadn't been updated.
+    // Note: sbom_ingest was replaced by sbom_persist in M11 Step 1; sbom_persist
+    // is in the schema enum and must round-trip cleanly.
     const phasesAddedSinceM6: ReadonlyArray<string> = [
       "llm_sbom",
       "llm_sbom_recheck",
+      "sbom_persist",
       "sbom_emit",
-      "sbom_ingest",
       "nvd",
       "sarif_emit",
     ];
     for (const phase of phasesAddedSinceM6) {
       expect(toPhase(phase)).toBe(phase);
     }
+  });
+
+  it("sbom_ingest is no longer a valid phase (replaced by sbom_persist in M11)", async () => {
+    const { toPhase } = await import("../src/services/mappers.js");
+    expect(toPhase("sbom_ingest")).toBeNull();
   });
 });

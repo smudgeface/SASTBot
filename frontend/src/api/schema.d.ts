@@ -1273,7 +1273,7 @@ export interface paths {
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
                             /** @enum {string|null} */
-                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_emit" | "sbom_ingest" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sca_summaries" | "finalizing" | null;
+                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_persist" | "sbom_emit" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sast_ingest" | "sca_summaries" | "finalizing" | null;
                             phase_progress: {
                                 done: number;
                                 total: number;
@@ -2551,7 +2551,7 @@ export interface paths {
                                 sast_finding_count: number;
                                 confirmed_reachable_count: number;
                                 /** @enum {string|null} */
-                                current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_emit" | "sbom_ingest" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sca_summaries" | "finalizing" | null;
+                                current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_persist" | "sbom_emit" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sast_ingest" | "sca_summaries" | "finalizing" | null;
                                 phase_progress: {
                                     done: number;
                                     total: number;
@@ -2654,7 +2654,7 @@ export interface paths {
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
                             /** @enum {string|null} */
-                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_emit" | "sbom_ingest" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sca_summaries" | "finalizing" | null;
+                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_persist" | "sbom_emit" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sast_ingest" | "sca_summaries" | "finalizing" | null;
                             phase_progress: {
                                 done: number;
                                 total: number;
@@ -2690,7 +2690,76 @@ export interface paths {
         };
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a scan run and its artifacts
+         * @description Refuses (409) when the run is the scope's current lastScanRunId; refuses (400) when the run is still pending/running. Admin-only.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": "null" | null;
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -2766,7 +2835,7 @@ export interface paths {
                             sast_finding_count: number;
                             confirmed_reachable_count: number;
                             /** @enum {string|null} */
-                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_emit" | "sbom_ingest" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sca_summaries" | "finalizing" | null;
+                            current_phase: "cloning" | "cdxgen" | "llm_sbom" | "llm_sbom_recheck" | "sbom_persist" | "sbom_emit" | "osv" | "nvd" | "eol" | "llm_detection" | "llm_recheck" | "sarif_emit" | "sast_ingest" | "sca_summaries" | "finalizing" | null;
                             phase_progress: {
                                 done: number;
                                 total: number;

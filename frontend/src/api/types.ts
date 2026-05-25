@@ -294,12 +294,12 @@ export type ScanPhase =
   | "cloning"
   | "cdxgen"
   | "llm_sbom"
+  | "sbom_persist"
   | "llm_sbom_recheck"
-  | "sbom_emit"
-  | "sbom_ingest"
   | "osv"
   | "nvd"
   | "eol"
+  | "sbom_emit"
   | "llm_detection"
   | "llm_recheck"
   | "sarif_emit"
@@ -311,12 +311,12 @@ export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
   cloning: "Cloning repo",
   cdxgen: "Building SBOM",
   llm_sbom: "LLM SBOM augmentation",
+  sbom_persist: "Persisting components",
   llm_sbom_recheck: "SBOM recheck",
-  sbom_emit: "Writing SBOM artifact",
-  sbom_ingest: "Indexing SBOM",
   osv: "Querying OSV.dev",
   nvd: "Querying NVD",
   eol: "Checking EOL / deprecation",
+  sbom_emit: "Writing SBOM artifact",
   llm_detection: "LLM SAST detection",
   llm_recheck: "LLM SAST recheck",
   sarif_emit: "Writing SARIF artifact",

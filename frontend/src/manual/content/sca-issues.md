@@ -23,6 +23,10 @@ package, location, reachability badges, and triage status](:::asset:scope-detail
 5. The `sca_summaries` phase writes a short LLM-authored summary for
    each issue.
 
+The per-scope SBOM endpoint (`/api/scopes/:id/sbom-json`) embeds every
+active sca_issue inline alongside the components, so a single download
+is a complete CRA evidence artifact.
+
 ## Row anatomy
 
 Each SCA row has:

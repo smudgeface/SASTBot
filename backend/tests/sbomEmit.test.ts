@@ -101,6 +101,9 @@ describe("emitSbomArtifact", () => {
     vi.spyOn(prisma.sbomComponent, "findMany").mockResolvedValue(
       makeSbomComponents(SCAN_RUN_ID, 10) as unknown as Awaited<ReturnType<typeof prisma.sbomComponent.findMany>>,
     );
+    // M11 Step 3: buildCuratedSbomJson now queries scaIssue. Return empty list
+    // for all emit tests (no vulnerability assertions needed here).
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
     const { emitSbomArtifact } = await import("../src/services/sbomCurated.js");
 
@@ -165,6 +168,8 @@ describe("emitSbomArtifact", () => {
       .mockResolvedValue(
         components as unknown as Awaited<ReturnType<typeof prisma.sbomComponent.findMany>>,
       );
+    // M11 Step 3: scaIssue.findMany is now called by buildCuratedSbomJson.
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
     const { emitSbomArtifact } = await import("../src/services/sbomCurated.js");
     const { sbomPathFor } = await import("../src/services/artifactStore.js");

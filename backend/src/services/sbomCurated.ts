@@ -129,6 +129,53 @@ interface CycloneDxComponent {
   properties?: Array<{ name: string; value: string }>;
 }
 
+interface CycloneDxVulnerabilitySource {
+  name: string;
+  url: string;
+}
+
+interface CycloneDxRating {
+  source: { name: string };
+  score?: number;
+  severity?: string;
+  method?: string;
+  vector?: string;
+}
+
+interface CycloneDxReference {
+  id: string;
+  source: { name: string };
+}
+
+interface CycloneDxAdvisory {
+  url: string;
+}
+
+interface CycloneDxAffect {
+  ref: string;
+}
+
+interface CycloneDxAnalysis {
+  state: string;
+  detail?: string;
+  response?: string[];
+  firstIssued: string;
+  lastUpdated: string;
+}
+
+interface CycloneDxVulnerability {
+  "bom-ref": string;
+  id: string;
+  source: CycloneDxVulnerabilitySource;
+  ratings?: CycloneDxRating[];
+  cwes?: number[];
+  description?: string;
+  advisories?: CycloneDxAdvisory[];
+  references?: CycloneDxReference[];
+  affects: CycloneDxAffect[];
+  analysis: CycloneDxAnalysis;
+}
+
 export interface CuratedSbomDoc {
   bomFormat: "CycloneDX";
   specVersion: "1.7";
@@ -144,6 +191,7 @@ export interface CuratedSbomDoc {
     };
   };
   components: CycloneDxComponent[];
+  vulnerabilities?: CycloneDxVulnerability[];
 }
 
 // Module-level constant so both builders share the same tools array without
@@ -152,6 +200,211 @@ const SBOM_TOOLS_COMPONENTS: Array<{ name: string; version?: string; type: strin
   { type: "application", name: "SASTBot", version: APP_VERSION },
   { type: "application", name: "cdxgen", version: "12.2" },
 ];
+
+// ---------------------------------------------------------------------------
+// Vulnerability helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Infer the CycloneDX CVSS method string from a CVSS vector prefix.
+ */
+function cvssMethod(vector: string | null | undefined): string {
+  if (!vector) return "other";
+  if (vector.startsWith("CVSS:4.0")) return "CVSSv4";
+  if (vector.startsWith("CVSS:3.1")) return "CVSSv31";
+  if (vector.startsWith("CVSS:3.0")) return "CVSSv3";
+  if (vector.startsWith("CVSS:2")) return "CVSSv2";
+  // CVSS v2 vectors per FIRST.org spec carry no "CVSS:" prefix — they begin
+  // with the AV metric: "AV:N/AC:L/Au:N/C:P/I:N/A:N". Detect that case.
+  if (/^AV:[NALP]\/AC:[LMH]\/Au:[MSN]\//.test(vector)) return "CVSSv2";
+  return "other";
+}
+
+/**
+ * Map a dismissedStatus value to CycloneDX `analysis.state`.
+ */
+function analysisState(dismissedStatus: string): string {
+  switch (dismissedStatus) {
+    case "fixed": return "resolved";
+    case "suppressed": return "not_affected";
+    case "false_positive": return "false_positive";
+    // pending, confirmed, planned → in_triage
+    default: return "in_triage";
+  }
+}
+
+/**
+ * Infer a source name for a CVE/GHSA alias id prefix.
+ */
+function aliasSourceName(id: string): string {
+  if (id.startsWith("GHSA-")) return "GitHub";
+  if (id.startsWith("GO-")) return "Go";
+  if (id.startsWith("RUSTSEC-")) return "RustSec";
+  if (id.startsWith("PYSEC-")) return "PyPI";
+  if (id.startsWith("DSA-")) return "Debian";
+  return "Other";
+}
+
+/**
+ * Build a CycloneDX 1.7 `vulnerabilities[]` entry from a ScaIssue row.
+ *
+ * `purlByKey` maps `"name@version"` (or `"name@"` for null version) to the
+ * component's PURL (= bom-ref in these SBOM docs).
+ */
+function buildVulnerabilityFromIssue(
+  // Minimal ScaIssue shape (both builders use the same Prisma select)
+  issue: {
+    id: string;
+    osvId: string;
+    latestCveId: string | null;
+    source: string;
+    latestCvssScore: number | null;
+    latestCvssVector: string | null;
+    latestSeverity: string;
+    latestSummary: string | null;
+    latestAliases: string[];
+    dismissedStatus: string;
+    dismissedReason: string | null;
+    notes: string | null;
+    firstSeenAt: Date;
+    updatedAt: Date;
+    packageName: string;
+    latestPackageVersion: string | null;
+  },
+  purlByKey: Map<string, string>,
+): CycloneDxVulnerability {
+  const vuln: CycloneDxVulnerability = {
+    "bom-ref": issue.latestCveId ?? issue.osvId,
+    id: issue.latestCveId ?? issue.osvId,
+    source: buildVulnSource(issue),
+    affects: buildAffects(issue, purlByKey),
+    analysis: buildAnalysis(issue),
+  };
+
+  // ratings[]
+  const method = cvssMethod(issue.latestCvssVector);
+  const sourceName = issue.source === "nvd" ? "NVD" : "OSV.dev";
+  const rating: CycloneDxRating = {
+    source: { name: sourceName },
+    method,
+  };
+  if (issue.latestCvssScore != null) rating.score = issue.latestCvssScore;
+  if (issue.latestSeverity && issue.latestSeverity !== "unknown") {
+    rating.severity = issue.latestSeverity.toLowerCase();
+  }
+  if (issue.latestCvssVector) rating.vector = issue.latestCvssVector;
+  // Only emit ratings when we have at least a score or severity.
+  if (rating.score != null || rating.severity != null) {
+    vuln.ratings = [rating];
+    // Sort by (source.name, method, score)
+    vuln.ratings.sort((a, b) => {
+      const snCmp = a.source.name.localeCompare(b.source.name);
+      if (snCmp !== 0) return snCmp;
+      const mCmp = (a.method ?? "").localeCompare(b.method ?? "");
+      if (mCmp !== 0) return mCmp;
+      return (a.score ?? 0) - (b.score ?? 0);
+    });
+  }
+
+  // description
+  if (issue.latestSummary) vuln.description = issue.latestSummary;
+
+  // advisories[] — deduplicate and sort by url
+  const advisoryUrls = new Set<string>();
+  if (issue.source === "nvd" && issue.latestCveId) {
+    advisoryUrls.add(`https://nvd.nist.gov/vuln/detail/${issue.latestCveId}`);
+  }
+  // Always include OSV url when osvId is a real OSV id (starts with known prefix or is CVE id)
+  advisoryUrls.add(`https://osv.dev/vulnerability/${issue.osvId}`);
+  if (advisoryUrls.size > 0) {
+    vuln.advisories = [...advisoryUrls].sort().map((url) => ({ url }));
+  }
+
+  // references[] — aliases sorted by id
+  if (issue.latestAliases.length > 0) {
+    vuln.references = [...issue.latestAliases]
+      .sort()
+      .map((alias) => ({
+        id: alias,
+        source: { name: aliasSourceName(alias) },
+      }));
+  }
+
+  return vuln;
+}
+
+function buildVulnSource(issue: {
+  source: string;
+  latestCveId: string | null;
+  osvId: string;
+}): CycloneDxVulnerabilitySource {
+  if (issue.source === "nvd") {
+    const id = issue.latestCveId ?? issue.osvId;
+    return {
+      name: "NVD",
+      url: `https://nvd.nist.gov/vuln/detail/${id}`,
+    };
+  }
+  return {
+    name: "OSV.dev",
+    url: `https://osv.dev/vulnerability/${issue.osvId}`,
+  };
+}
+
+function buildAffects(
+  issue: { packageName: string; latestPackageVersion: string | null },
+  purlByKey: Map<string, string>,
+): CycloneDxAffect[] {
+  const key = `${issue.packageName}@${issue.latestPackageVersion ?? ""}`;
+  const purl = purlByKey.get(key);
+  const affects: CycloneDxAffect[] = purl ? [{ ref: purl }] : [];
+  // Sort by ref ascending
+  affects.sort((a, b) => a.ref.localeCompare(b.ref));
+  return affects;
+}
+
+function buildAnalysis(issue: {
+  dismissedStatus: string;
+  dismissedReason: string | null;
+  notes: string | null;
+  firstSeenAt: Date;
+  updatedAt: Date;
+}): CycloneDxAnalysis {
+  const state = analysisState(issue.dismissedStatus);
+  const analysis: CycloneDxAnalysis = {
+    state,
+    firstIssued: issue.firstSeenAt.toISOString(),
+    lastUpdated: issue.updatedAt.toISOString(),
+  };
+  const detail = issue.notes ?? issue.dismissedReason;
+  if (detail) analysis.detail = detail;
+  if (issue.dismissedStatus === "planned") analysis.response = ["update"];
+  return analysis;
+}
+
+/**
+ * Shared ScaIssue select shape for both builders.
+ */
+const SCA_ISSUE_SELECT = {
+  id: true,
+  osvId: true,
+  latestCveId: true,
+  source: true,
+  latestCvssScore: true,
+  latestCvssVector: true,
+  latestSeverity: true,
+  latestSummary: true,
+  latestAliases: true,
+  dismissedStatus: true,
+  dismissedReason: true,
+  notes: true,
+  firstSeenAt: true,
+  updatedAt: true,
+  packageName: true,
+  latestPackageVersion: true,
+  latestEolDate: true,
+  latestFindingType: true,
+} as const;
 
 /**
  * B1: serialize the canonical CycloneDX 1.7 SBOM for `scanRunId` and write it
@@ -200,6 +453,33 @@ export async function buildCuratedSbomJson(
   });
   if (rows.length === 0) return null;
 
+  // Fetch sca_issues detected by THIS scan only (lastSeenScanRunId == scanRunId).
+  // The per-scan SBOM is a snapshot of what this run found; issues from prior
+  // scans that weren't re-detected this run belong on the scope-level SBOM, not
+  // here. Includes dismissed issues per A1 — disposition is surfaced via
+  // analysis.state, not used as a filter.
+  const scaIssues = await prisma.scaIssue.findMany({
+    where: { lastSeenScanRunId: scanRunId },
+    select: SCA_ISSUE_SELECT,
+  });
+
+  // Build component key → purl side-map for A3 linkage.
+  const purlByKey = new Map<string, string>();
+  for (const r of rows) {
+    purlByKey.set(`${r.name}@${r.version ?? ""}`, r.purl);
+  }
+
+  // Build EOL map: "name@version" → issue (only EOL-class issues).
+  const eolByKey = new Map<string, typeof scaIssues[number]>();
+  for (const issue of scaIssues) {
+    const isEol = issue.latestEolDate != null
+      || issue.latestFindingType === "eol"
+      || issue.latestFindingType === "deprecated";
+    if (isEol) {
+      eolByKey.set(`${issue.packageName}@${issue.latestPackageVersion ?? ""}`, issue);
+    }
+  }
+
   // D2 comparator: sort occurrences by (path asc, line asc nulls-first).
   function sortOccurrences(arr: ComponentOccurrence[]): ComponentOccurrence[] {
     return [...arr].sort((a, b) => {
@@ -209,6 +489,7 @@ export async function buildCuratedSbomJson(
     });
   }
 
+  const now = new Date();
   const components: CycloneDxComponent[] = rows.map((r) => {
     const c: CycloneDxComponent = {
       type: r.componentType ?? "library",
@@ -261,6 +542,22 @@ export async function buildCuratedSbomJson(
         properties.push({ name: "sastbot:llm_evidence_path", value: evidenceBlob.path });
       }
     }
+    // A5: EOL / lifecycle properties — appended before D4 sort.
+    const eolIssue = eolByKey.get(`${r.name}@${r.version ?? ""}`);
+    if (eolIssue) {
+      if (eolIssue.latestEolDate) {
+        properties.push({
+          name: "sastbot:eol_date",
+          value: eolIssue.latestEolDate.toISOString().slice(0, 10),
+        });
+        properties.push({
+          name: "sastbot:lifecycle_state",
+          value: eolIssue.latestEolDate < now ? "eol" : "active",
+        });
+      } else if (eolIssue.latestFindingType === "deprecated") {
+        properties.push({ name: "sastbot:lifecycle_state", value: "deprecated" });
+      }
+    }
     // D4: sort properties by (name asc, value asc) — eliminates "stable by
     // source-code accident" fragility without reorganising the conditional blocks.
     if (properties.length > 0) {
@@ -273,6 +570,11 @@ export async function buildCuratedSbomJson(
 
     return c;
   });
+
+  // Build vulnerabilities[] — all sca_issues for this scope, sorted by id.
+  const vulnerabilities: CycloneDxVulnerability[] = scaIssues
+    .map((issue) => buildVulnerabilityFromIssue(issue, purlByKey))
+    .sort((a, b) => a.id.localeCompare(b.id));
 
   return {
     bomFormat: "CycloneDX",
@@ -291,6 +593,7 @@ export async function buildCuratedSbomJson(
       },
     },
     components,
+    ...(vulnerabilities.length > 0 ? { vulnerabilities } : {}),
   };
 }
 
@@ -330,6 +633,30 @@ export async function buildCuratedSbomJsonForScope(
     orderBy: [{ ecosystem: "asc" }, { name: "asc" }, { purl: "asc" }, { id: "asc" }],
   });
   if (scopeComponents.length === 0) return null;
+
+  // Fetch all sca_issues for this scope.
+  const scaIssues = await prisma.scaIssue.findMany({
+    where: { scopeId },
+    select: SCA_ISSUE_SELECT,
+  });
+
+  // Build component key → purl side-map for A3 linkage (scope-level).
+  const purlByKey = new Map<string, string>();
+  for (const sc of scopeComponents) {
+    purlByKey.set(`${sc.name}@${sc.version ?? ""}`, sc.purl);
+  }
+
+  // Build EOL map: "name@version" → issue (only EOL-class issues).
+  const now = new Date();
+  const eolByKey = new Map<string, typeof scaIssues[number]>();
+  for (const issue of scaIssues) {
+    const isEol = issue.latestEolDate != null
+      || issue.latestFindingType === "eol"
+      || issue.latestFindingType === "deprecated";
+    if (isEol) {
+      eolByKey.set(`${issue.packageName}@${issue.latestPackageVersion ?? ""}`, issue);
+    }
+  }
 
   // Compute metadata.timestamp = max(scope_components.updatedAt) across active
   // rows. Falls back to scope.lastScanCompletedAt or scope.createdAt if for
@@ -428,6 +755,22 @@ export async function buildCuratedSbomJsonForScope(
         properties.push({ name: "sastbot:llm_evidence_path", value: llmEvidenceBlob.path });
       }
     }
+    // A5: EOL / lifecycle properties — appended before D4 sort.
+    const eolIssue = eolByKey.get(`${sc.name}@${sc.version ?? ""}`);
+    if (eolIssue) {
+      if (eolIssue.latestEolDate) {
+        properties.push({
+          name: "sastbot:eol_date",
+          value: eolIssue.latestEolDate.toISOString().slice(0, 10),
+        });
+        properties.push({
+          name: "sastbot:lifecycle_state",
+          value: eolIssue.latestEolDate < now ? "eol" : "active",
+        });
+      } else if (eolIssue.latestFindingType === "deprecated") {
+        properties.push({ name: "sastbot:lifecycle_state", value: "deprecated" });
+      }
+    }
     // D4: sort properties by (name asc, value asc) — eliminates "stable by
     // source-code accident" fragility without reorganising the conditional blocks.
     if (properties.length > 0) {
@@ -440,6 +783,11 @@ export async function buildCuratedSbomJsonForScope(
 
     return c;
   });
+
+  // Build vulnerabilities[] — all sca_issues for this scope, sorted by id.
+  const vulnerabilities: CycloneDxVulnerability[] = scaIssues
+    .map((issue) => buildVulnerabilityFromIssue(issue, purlByKey))
+    .sort((a, b) => a.id.localeCompare(b.id));
 
   return {
     bomFormat: "CycloneDX",
@@ -458,6 +806,7 @@ export async function buildCuratedSbomJsonForScope(
       },
     },
     components,
+    ...(vulnerabilities.length > 0 ? { vulnerabilities } : {}),
   };
 }
 

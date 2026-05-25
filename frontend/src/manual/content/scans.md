@@ -32,11 +32,12 @@ Phases, in order, with typical wall-clock cost on a medium repo:
 | `cloning` | seconds–minutes | Clone or refresh the retained clone. |
 | `cdxgen` | seconds–minutes | Anchore cdxgen → raw SBOM. |
 | `llm_sbom` | 30s–5min | LLM augmentation (keep / drop / add). |
-| `sbom_emit` | sub-second | Write curated SBOM artifact to disk. |
-| `sbom_ingest` | seconds | Re-read into `sbom_components`. |
+| `sbom_persist` | sub-second | Write sbom_components rows from in-memory finalComponents. |
+| `llm_sbom_recheck` | seconds–minutes | Verify ambiguous-component dispositions. |
 | `osv` | seconds | Batched OSV.dev queries with cache. |
 | `nvd` | seconds | NVD enrichment for C/C++ components. |
 | `eol` | seconds | EOL lookup for runtime / framework packages. |
+| `sbom_emit` | sub-second | Write comprehensive CycloneDX SBOM artifact (components + vulnerabilities + lifecycle) to disk. |
 | `llm_detection` | 10–30 min | LLM agent walks source for SAST + reachability. |
 | `sarif_emit` | sub-second | Write SARIF v2.1.0 to disk. |
 | `sast_ingest` | seconds | Persist SAST issues with fingerprints. |

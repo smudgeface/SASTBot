@@ -429,7 +429,7 @@ export const ScanRunOutSchema = z.object({
    *  cleared on terminal status. */
   current_phase: z.enum([
     "cloning", "cdxgen", "llm_sbom", "llm_sbom_recheck",
-    "sbom_emit", "sbom_ingest",
+    "sbom_persist", "sbom_emit",
     "osv", "nvd", "eol",
     "llm_detection", "llm_recheck", "sarif_emit", "sast_ingest",
     "sca_summaries", "finalizing",

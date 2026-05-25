@@ -4,6 +4,117 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-25 — M11: comprehensive SBOM + phase reorder (v0.11.0)
+
+The per-scan SBOM artifact graduates from "list of components" to a
+CRA-grade evidence document — components, vulnerabilities, AND
+component-level lifecycle/EOL data, all in one CycloneDX 1.7 file. The
+trigger was a passing remark while reading the M10 user manual: the
+existing artifact was emitted *before* osv/nvd/eol ran, so it
+structurally couldn't include CVEs or lifecycle data. Spent one
+session (this one) writing a plan doc, auditing it on Opus, locking
+decisions, and then delegating six implementation steps to Sonnet
+subagents.
+
+**What shipped.**
+
+- **Worker phase reorder.** `sbom_ingest` is gone. `sbom_persist`
+  (new — writes `sbom_components` rows directly from in-memory
+  `finalComponents`, no file round-trip) runs early. `sbom_emit` was
+  moved to run AFTER `osv`/`nvd`/`eol`, so when the artifact file is
+  written it has full vulnerability + lifecycle data to embed.
+  New phase order:
+  `cloning → cdxgen → llm_sbom → sbom_persist → llm_sbom_recheck → osv → nvd → eol → sbom_emit → llm_detection → sarif_emit → sast_ingest → llm_recheck → sca_summaries → finalizing`.
+- **`persistComponentsFromMemory` in `sbomIngest.ts`** — mirrors
+  `ingestSbomFromArtifact`'s row shape without the file round-trip.
+  The dormant `ingestSbomFromArtifact` stays in tree for the future
+  operator-uploaded-SBOM path (Stream B7).
+- **Comprehensive CycloneDX 1.7 builder.** Extended the DB-reading
+  builders `buildCuratedSbomJson(scanRunId)` and
+  `buildCuratedSbomJsonForScope(scopeId)` in `sbomCurated.ts`. Both
+  now emit a top-level `vulnerabilities[]` array, sourced from
+  `sca_issues`. Each vulnerability carries `id`, `source` (OSV or
+  NVD), `ratings[]` (CVSS score + severity + method + vector),
+  `advisories[]`, `references[]` (aliases — GHSA, GO-, RUSTSEC, etc.),
+  `affects[]` (matched to component `bom-ref` via a
+  `(name, version) → purl` map), `analysis.state` (mapped from
+  `dismissedStatus`: `fixed → resolved`, `suppressed → not_affected`,
+  `false_positive → false_positive`, others → `in_triage`), and
+  ISO `firstIssued`/`lastUpdated`. EOL findings produce additional
+  per-component `sastbot:eol_date` + `sastbot:lifecycle_state`
+  properties.
+- **Per-scan vs scope-level semantics preserved.** The scan-level
+  builder filters sca_issues by `lastSeenScanRunId === scanRunId`
+  (snapshot of THIS scan's findings). The scope-level builder pulls
+  all sca_issues for the scope (operator-edited truth set, including
+  findings from prior scans that haven't been re-detected).
+- **CRA-evidence completeness.** Dismissed findings stay in the
+  artifact — disposition is surfaced via `analysis.state`, not
+  filtered. Locked early in the audit pass: hiding suppressed /
+  false_positive findings from a CRA evidence document would cook
+  the books.
+- **Determinism preserved.** Every new array sorted: `vulnerabilities[]`
+  by `id`, `ratings[]` by `(source.name, method, score)`,
+  `advisories[]` by `url`, `references[]` by `id`, `affects[]` by
+  `ref`. Per-component properties fall through the existing D4
+  comparator. New deterministic test: build twice with full vuln +
+  EOL data, assert byte-identical bytes.
+- **18 new backend tests** across `sbomCurated.test.ts` (vuln shape +
+  analysis.state mapping table-driven + EOL property emission),
+  `sbomIngest.test.ts` (`persistComponentsFromMemory` cases),
+  `sbomCurated.deterministic.test.ts` (vuln+EOL byte stability).
+  All 344 tests pass.
+- **Frontend types regenerated.** New `sbom_persist` enum value
+  flows through `schema.d.ts` via `npm run gen:types`. Phase label
+  updated in `frontend/src/api/types.ts`.
+- **Manual updates.** Four sections touched (`overview.md`,
+  `scans.md`, `components-sbom.md`, `sca-issues.md`) — the new phase
+  order in two phase tables, an extended "What's in the SBOM" example
+  JSON showing `vulnerabilities[]` and per-component lifecycle
+  properties, and a cross-link from the SCA-issues pipeline narrative
+  to the SBOM endpoint as a single-download CRA artifact.
+- **Version bumped 0.10.0 → 0.11.0** (MINOR — operator-visible
+  artifact-shape change) across all three surfaces +
+  `frontend/package-lock.json`.
+
+**What we learned.**
+
+- **Audit the plan doc before delegating.** The first draft (written
+  at the end of the prior session) had real gaps: it was silent on
+  vulnerability scoping (active vs dismissed), light on sort-key
+  details for the new arrays, fuzzy about which builder to extend,
+  and didn't address `affects[].ref` linkage. Catching these on Opus
+  during a deliberate plan-audit pass saved 2–3 round-trips of
+  subagent rework downstream. Plan-as-PR is the right mental model —
+  review it like you'd review code, then commit, then implement.
+- **The "stale comment" gotcha.** `persistAugmentedComponents` was
+  referenced in seven `//` comments across the codebase but didn't
+  exist as a function — it had been refactored away when E1
+  file-first landed. The actual row-building logic lived inside
+  `buildAugmentationSbom` (build-the-file) → `ingestSbomFromArtifact`
+  (round-trip-back-to-rows). Easy to assume a function exists when
+  comments reference it. Lesson: when picking a name for the new
+  function, grep for it both as a function AND as a comment-reference
+  to make sure you're not stepping on stale documentation.
+- **Per-scan vs per-scope SBOM semantics are surprisingly meaningful.**
+  Both endpoints serve the same shape, but the scoping query is
+  fundamentally different. Per-scan = "what THIS run found"
+  (`lastSeenScanRunId === scanRunId`). Per-scope = "operator-edited
+  current truth set" (all active sca_issues for the scope, including
+  findings from prior scans). The plan didn't spell this out and
+  Step 3's first implementation accidentally collapsed them into
+  "all scope-level issues" for both endpoints; caught during diff
+  review and patched in-session before tests ran.
+- **Build the audit decisions into the plan doc, not the briefs.**
+  Step-by-step subagent briefs got short (~150 lines each instead of
+  the usual 300) because the audit section in the plan doc was the
+  single source of truth. The brief could say "see plan §A1" instead
+  of re-explaining the disposition-mapping table six times. Future
+  milestones should follow this pattern: audit-first, plan-doc as
+  the contract, then concise briefs that reference it.
+
+---
+
 ## M9 Stream E2 — SAST file-first pipeline — v0.9.1 (2026-05-22)
 
 Architectural refactor that makes the per-scan SARIF artifact file the canonical record of SAST findings. After this commit, `sast_issues` rows are derived from the SARIF file, not written inline during streaming. Closes M9 Stream E (file-first scan artifact pipeline). Removes the 🏗 Stream E pin from CLAUDE.md.

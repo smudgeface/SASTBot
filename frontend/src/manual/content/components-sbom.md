@@ -85,12 +85,15 @@ parsed into `{path, line: N}` objects.
 Two distinct endpoints, both serving CycloneDX 1.7:
 
 - `GET /api/scans/:id/sbom` — per-scan, immutable.
-  - Built once at scan time by the `sbom_emit` phase and written to
-    `${ARTIFACT_DIR}/sbom/${scanRunId}.json`.
+  - Built once at scan time by the `sbom_emit` phase (which runs AFTER
+    osv/nvd/eol) and written to `${ARTIFACT_DIR}/sbom/${scanRunId}.json`.
+  - Embeds `vulnerabilities[]` (every sca_issue detected in this scan,
+    with disposition) and per-component lifecycle/EOL properties — a
+    complete, self-contained CRA evidence document.
   - Reflects what *that scan* observed. Doesn't reflect operator edits
     made after the scan.
-  - Legacy scans (run before M9 Stream B) have no artifact file and
-    the endpoint returns 404 with a re-run hint.
+  - Legacy scans (run before M11) have no `vulnerabilities[]` in their
+    file — re-scan the scope to produce a comprehensive artifact.
 - `GET /api/scopes/:id/sbom-json` — per-scope, on-demand.
   - Built fresh on every request from the current `scope_components`
     rows.
@@ -131,29 +134,59 @@ Top-level structure (CycloneDX 1.7):
   "components": [
     {
       "type": "library",
-      "name": "axios",
-      "version": "1.6.0",
-      "purl": "pkg:npm/axios@1.6.0",
-      "bom-ref": "pkg:npm/axios@1.6.0",
-      "licenses": [{ "license": { "id": "MIT" } }],
-      "evidence": {
-        "occurrences": [{ "location": "src/api.ts#12" }]
-      },
+      "name": "lodash",
+      "version": "4.17.20",
+      "purl": "pkg:npm/lodash@4.17.20",
+      "bom-ref": "pkg:npm/lodash@4.17.20",
       "properties": [
-        { "name": "sastbot:discovery_method", "value": "manifest" }
+        { "name": "sastbot:discovery_method", "value": "manifest" },
+        { "name": "sastbot:eol_date", "value": "2023-09-30" },
+        { "name": "sastbot:lifecycle_state", "value": "eol" }
       ]
     }
     // …
+  ],
+  "vulnerabilities": [
+    {
+      "bom-ref": "CVE-2021-23337",
+      "id": "CVE-2021-23337",
+      "source": { "name": "OSV.dev", "url": "https://osv.dev/vulnerability/CVE-2021-23337" },
+      "ratings": [
+        { "source": { "name": "OSV.dev" }, "score": 7.2, "severity": "high",
+          "method": "CVSSv31", "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H" }
+      ],
+      "advisories": [{ "url": "https://osv.dev/vulnerability/CVE-2021-23337" }],
+      "affects": [{ "ref": "pkg:npm/lodash@4.17.20" }],
+      "analysis": {
+        "state": "in_triage",
+        "firstIssued": "2024-08-12T09:31:00Z",
+        "lastUpdated": "2024-08-12T09:31:00Z"
+      }
+    }
   ]
 }
 ```
 
-A few non-obvious things:
+A few non-obvious things about the comprehensive SBOM shape:
 
+- **`analysis.state`** surfaces the operator's disposition
+  (`in_triage`, `resolved`, `not_affected`, `false_positive`).
+  Dismissed findings stay in the artifact for CRA evidence completeness
+  — they are not silently hidden.
+- The per-scan SBOM (`/scans/:id/sbom`) includes only findings this
+  scan detected. The scope-level SBOM (`/api/scopes/:id/sbom-json`)
+  includes every active sca_issue for the scope, including those from
+  previous scans that haven't been marked removed.
+- **Reachability verdicts and LLM summaries are NOT in the SBOM.** Both
+  are added to sca_issues after `sbom_emit` runs (by `llm_detection`
+  and `sca_summaries` respectively). They remain visible on the scope
+  detail page. If reachability-in-SBOM is needed in a future milestone,
+  the phase can be moved to immediately before `finalizing`.
 - The output is **deterministic** byte-for-byte: keys sorted, arrays
-  sorted, no clock-dependent fields. Two reads of the same SBOM
-  produce identical bytes (Stream D6 invariant). This matters for
-  ETag stability and for CRA-evidence equivalence.
+  sorted (vulnerabilities by `id`, affects[] by `ref`), no
+  clock-dependent fields. Two reads of the same SBOM produce identical
+  bytes (Stream D6 invariant). This matters for ETag stability and for
+  CRA-evidence equivalence.
 - `sastbot:llm_evidence_path`, `sastbot:llm_rationale`, and
   `sastbot:llm_excerpt` are emitted on LLM-augmented components to
   carry the rationale for downstream auditors.

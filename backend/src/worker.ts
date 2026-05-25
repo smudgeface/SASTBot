@@ -22,10 +22,10 @@ import { backfillReachability } from "./services/reachabilityService.js";
 import { generateIssueSummary } from "./services/llmClient.js";
 import { toRepoRelative } from "./services/scopePath.js";
 import { buildSastSarifFromDetection } from "./services/sarifService.js";
-import { buildAugmentationSbom, stableStringify } from "./services/sbomCurated.js";
-import { ingestSbomFromArtifact } from "./services/sbomIngest.js";
+import { emitSbomArtifact } from "./services/sbomCurated.js";
+import { ingestSbomFromArtifact, persistComponentsFromMemory } from "./services/sbomIngest.js";
 import { ingestSastFromArtifact } from "./services/sastIngest.js";
-import { sarifPathFor, sbomPathFor, writeArtifact } from "./services/artifactStore.js";
+import { sarifPathFor, writeArtifact } from "./services/artifactStore.js";
 import {
   applyRecheckVerdicts,
   cleanupTmp as cleanupLlmTmp,
@@ -172,12 +172,12 @@ type ScanPhase =
   | "cloning"
   | "cdxgen"
   | "llm_sbom"
+  | "sbom_persist"   // M11: write sbom_components rows from in-memory finalComponents
   | "llm_sbom_recheck"
-  | "sbom_emit"      // B1: write canonical CycloneDX artifact to disk
-  | "sbom_ingest"    // B2: ingest SBOM from disk (no-op for cdxgen flow)
   | "osv"
   | "nvd"
   | "eol"
+  | "sbom_emit"      // M11: write canonical CycloneDX artifact (incl. vulns + EOL) to disk
   | "llm_detection"
   | "llm_recheck"
   | "sarif_emit"     // B4: write SARIF artifact to disk from in-memory detection
@@ -1425,52 +1425,41 @@ const worker = new Worker<ScanJobData>(
         await cleanupSbomTmp(scanRunId);
       }
 
-      // ── Step 3.9: emit canonical SBOM artifact (file-first, E1) ─────────────
-      // Build the CycloneDX 1.7 document in memory from the post-augmentation
-      // component list, then write it to disk. This is the canonical source of
-      // truth for what this scan directly observed (manifest + llm_augmentation).
-      // No recheck-recovery rows appear at this point — those are scope-level only.
-      await setPhase(scanRunId, "sbom_emit");
+      // ── Step 3.9: persist sbom_components from in-memory finalComponents (M11) ──
+      // Writes sbom_components rows directly from the post-augmentation in-memory
+      // component list — no file round-trip. This is the immutable direct-observation
+      // record for this scan. All subsequent phases read from sbom_components; none
+      // write to it. sbom_emit is deliberately deferred until after osv/nvd/eol so
+      // the artifact file includes vulnerabilities and per-component EOL data (A4, A8).
+      //
+      // Contract for persistComponentsFromMemory (implemented in sbomIngest.ts, Step 2):
+      //   export async function persistComponentsFromMemory(input: {
+      //     scanRunId: string;
+      //     scanDir: string;
+      //     scopePath: string;
+      //     components: CdxComponent[];
+      //     sbomEvidenceMap: Map<string, { path: string; excerpt: string | null; llmReason: string }>;
+      //     sbomCpeMap: Map<string, string>;
+      //     sbomIdentityMap: Map<string, { componentRoot: string | null; evidence: Array<{ path: string; line: number | null }> }>;
+      //   }): Promise<{ inserted: number }>
+      await setPhase(scanRunId, "sbom_persist");
       try {
-        const sbomEmitDoc = await buildAugmentationSbom({
+        const { inserted } = await persistComponentsFromMemory({
           scanRunId,
-          scopeId: run.scopeId,
-          scopePath,
           scanDir,
+          scopePath,
           components: finalComponents,
           sbomEvidenceMap,
           sbomCpeMap,
           sbomIdentityMap,
-          startedAt: run.startedAt ?? null,
-          finishedAt: null, // not finished yet
-          repoName: repo.name,
-          repoDefaultBranch: repo.defaultBranch,
         });
-        await writeArtifact(sbomPathFor(scanRunId), stableStringify(sbomEmitDoc, 2));
-        log.info({ components: sbomEmitDoc.components.length }, "[worker] SBOM artifact written");
+        log.info({ inserted }, "[worker] sbom_components populated from in-memory finalComponents");
       } catch (err) {
-        log.error({ err: (err as Error).message }, "[worker] sbom_emit failed");
+        log.error({ err: (err as Error).message }, "[worker] sbom_persist failed");
         await appendWarning(scanRunId, {
-          code: "sbom_emit_failed",
+          code: "sbom_persist_failed",
           severity: "error",
-          message: `Failed to write SBOM artifact: ${(err as Error).message}`,
-        });
-      }
-
-      // ── Step 3.92: ingest SBOM from artifact file ─────────────────────────
-      // Reads the just-written file and populates sbom_components + componentCount.
-      // After this, sbom_components is the immutable direct-observation record
-      // for this scan. All subsequent phases read from it; none write to it.
-      await setPhase(scanRunId, "sbom_ingest");
-      try {
-        await ingestSbomFromArtifact(scanRunId);
-        log.info("[worker] sbom_components populated from artifact file");
-      } catch (err) {
-        log.error({ err: (err as Error).message }, "[worker] sbom_ingest failed");
-        await appendWarning(scanRunId, {
-          code: "sbom_ingest_failed",
-          severity: "error",
-          message: `Failed to ingest SBOM artifact: ${(err as Error).message}`,
+          message: `Failed to persist SBOM components: ${(err as Error).message}`,
         });
       }
 
@@ -1669,6 +1658,27 @@ const worker = new Worker<ScanJobData>(
       log.info({ eolFindings: eolFindings.length }, "[worker] EOL findings persisted");
 
       const findings = [...cveFindings, ...nvdFindings, ...eolFindings];
+
+      // ── Step 5.5: emit comprehensive SBOM artifact (M11) ─────────────────
+      // Runs AFTER osv/nvd/eol so the artifact embeds vulnerabilities and
+      // per-component lifecycle/EOL data (audit decisions A4 and A8).
+      // Collapses to a single call — emitSbomArtifact reads sbom_components
+      // + sca_issues from the DB and writes the comprehensive CycloneDX 1.7
+      // file. The artifact intentionally excludes reachability verdicts and
+      // latestLlmSummary (added by subsequent phases) — those are operator-UX
+      // helpers, not CRA-required fields. Document in components-sbom.md.
+      await setPhase(scanRunId, "sbom_emit");
+      try {
+        await emitSbomArtifact(scanRunId);
+        log.info("[worker] SBOM artifact written");
+      } catch (err) {
+        log.error({ err: (err as Error).message }, "[worker] sbom_emit failed");
+        await appendWarning(scanRunId, {
+          code: "sbom_emit_failed",
+          severity: "error",
+          message: `Failed to write SBOM artifact: ${(err as Error).message}`,
+        });
+      }
 
       // ── Step 6: SAST (LLM-mode only — Opengrep removed in M6g) ───────────
       // The LLM pass also emits reachability verdicts and vendored-library

@@ -1,11 +1,19 @@
 /**
- * Unit tests for buildCuratedSbomJsonForScope (M9 Stream C3).
+ * Unit tests for buildCuratedSbomJsonForScope (M9 Stream C3 + M11 Step 3).
  *
  * Strategy:
  *   - Mock prisma so the function never touches a real DB.
  *   - Assert the function reads scope_components, not sbom_components.
  *   - Assert operator-edited name appears in the JSON output.
  *   - Assert serialNumber derives from the scope id.
+ *
+ * M11 Step 3 additions:
+ *   - Vulnerability emitted with all required fields when sca_issue has full CVSS data.
+ *   - analysis.state mapped correctly for each dismissedStatus (table-driven).
+ *   - affects[].ref populated when (name, version) matches a component; empty when no match.
+ *   - references[] populated and sorted lex when latestAliases non-empty; absent otherwise.
+ *   - Per-component EOL properties: eol_date + lifecycle_state=eol for past dates,
+ *     active for future, deprecated when latestFindingType==='deprecated' and no eol date.
  */
 
 import { randomBytes } from "node:crypto";
@@ -162,6 +170,382 @@ describe("buildCuratedSbomJsonForScope", () => {
 
     const doc = await buildCuratedSbomJsonForScope("nonexistent-id");
     expect(doc).toBeNull();
+
+    vi.restoreAllMocks();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M11 Step 3 — vulnerability + EOL property assertions
+// ---------------------------------------------------------------------------
+
+/** Minimal ScaIssue shape accepted by the buildCuratedSbomJsonForScope spy. */
+function makeScaIssue(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "issue-0001-0000-0000-000000000001",
+    osvId: "GHSA-abcd-1234-efgh",
+    latestCveId: "CVE-2024-12345",
+    source: "osv",
+    latestCvssScore: 9.1,
+    latestCvssVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+    latestSeverity: "critical",
+    latestSummary: "Remote code execution in axios",
+    latestAliases: ["GHSA-abcd-1234-efgh", "CVE-2024-12345"],
+    dismissedStatus: "pending",
+    dismissedReason: null,
+    notes: null,
+    firstSeenAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: new Date("2026-05-01T00:00:00Z"),
+    packageName: "axios",
+    latestPackageVersion: "1.6.0",
+    latestEolDate: null,
+    latestFindingType: "vulnerability",
+    ...overrides,
+  };
+}
+
+describe("buildCuratedSbomJsonForScope — vulnerabilities[] (M11 Step 3)", () => {
+  it("emits a vulnerability entry with all required CycloneDX 1.7 fields", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow() as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue([
+      makeScopeComponentBase() as Parameters<
+        typeof prisma.scopeComponent.findMany
+      >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+    ]);
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
+      makeScaIssue() as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+    ]);
+
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+
+    expect(doc).not.toBeNull();
+    expect(doc!.vulnerabilities).toBeDefined();
+    expect(doc!.vulnerabilities!).toHaveLength(1);
+
+    const vuln = doc!.vulnerabilities![0];
+    // Required fields per CycloneDX 1.7
+    expect(vuln["bom-ref"]).toBe("CVE-2024-12345");
+    expect(vuln.id).toBe("CVE-2024-12345");
+    expect(vuln.source).toBeDefined();
+    expect(vuln.source.name).toBe("OSV.dev");
+    expect(vuln.analysis).toBeDefined();
+    expect(vuln.analysis.state).toBe("in_triage");
+    expect(vuln.analysis.firstIssued).toBe("2026-01-01T00:00:00.000Z");
+    expect(vuln.analysis.lastUpdated).toBe("2026-05-01T00:00:00.000Z");
+    // Optional but populated
+    expect(vuln.ratings).toBeDefined();
+    expect(vuln.ratings![0].score).toBe(9.1);
+    expect(vuln.ratings![0].method).toBe("CVSSv31");
+    expect(vuln.description).toBe("Remote code execution in axios");
+
+    vi.restoreAllMocks();
+  });
+
+  it("analysis.state is mapped correctly for every dismissedStatus value", async () => {
+    const { prisma } = await import("../src/db.js");
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+
+    const cases: Array<{ dismissedStatus: string; expectedState: string }> = [
+      { dismissedStatus: "fixed", expectedState: "resolved" },
+      { dismissedStatus: "suppressed", expectedState: "not_affected" },
+      { dismissedStatus: "false_positive", expectedState: "false_positive" },
+      { dismissedStatus: "pending", expectedState: "in_triage" },
+      { dismissedStatus: "confirmed", expectedState: "in_triage" },
+      { dismissedStatus: "planned", expectedState: "in_triage" },
+    ];
+
+    for (const { dismissedStatus, expectedState } of cases) {
+      vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValueOnce(
+        makeScopeRow() as ReturnType<typeof makeScopeRow>,
+      );
+      vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValueOnce([
+        makeScopeComponentBase() as Parameters<
+          typeof prisma.scopeComponent.findMany
+        >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+      ]);
+      vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValueOnce([
+        makeScaIssue({ dismissedStatus }) as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+      ]);
+
+      const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+      const state = doc!.vulnerabilities![0].analysis.state;
+      expect(state, `dismissedStatus=${dismissedStatus}`).toBe(expectedState);
+    }
+
+    vi.restoreAllMocks();
+  });
+
+  it("affects[].ref matches the component purl when name+version aligns", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    // Component is axios@1.6.0 with purl pkg:npm/axios@1.6.0.
+    // ScaIssue packageName=axios, latestPackageVersion=1.6.0 → should match.
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow() as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue([
+      makeScopeComponentBase() as Parameters<
+        typeof prisma.scopeComponent.findMany
+      >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+    ]);
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
+      makeScaIssue() as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+    ]);
+
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+
+    const affects = doc!.vulnerabilities![0].affects;
+    expect(affects).toHaveLength(1);
+    expect(affects[0].ref).toBe("pkg:npm/axios@1.6.0");
+
+    vi.restoreAllMocks();
+  });
+
+  it("affects[] is empty when component name+version does not match any component", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    // Issue references lodash@4.0.0 but the only component is axios@1.6.0.
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow() as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue([
+      makeScopeComponentBase() as Parameters<
+        typeof prisma.scopeComponent.findMany
+      >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+    ]);
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
+      makeScaIssue({ packageName: "lodash", latestPackageVersion: "4.0.0" }) as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+    ]);
+
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+
+    const affects = doc!.vulnerabilities![0].affects;
+    expect(affects).toHaveLength(0);
+
+    vi.restoreAllMocks();
+  });
+
+  it("references[] is sorted lexicographically when latestAliases is non-empty", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow() as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue([
+      makeScopeComponentBase() as Parameters<
+        typeof prisma.scopeComponent.findMany
+      >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+    ]);
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
+      makeScaIssue({
+        latestAliases: ["CVE-2024-12345", "GHSA-abcd-1234-efgh"],
+      }) as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+    ]);
+
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+
+    const refs = doc!.vulnerabilities![0].references;
+    expect(refs).toBeDefined();
+    const ids = refs!.map((r) => r.id);
+    // CVE sorts before GHSA lexicographically
+    expect(ids).toEqual([...ids].sort());
+    expect(ids).toContain("CVE-2024-12345");
+    expect(ids).toContain("GHSA-abcd-1234-efgh");
+
+    vi.restoreAllMocks();
+  });
+
+  it("references[] is absent when latestAliases is empty", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow() as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue([
+      makeScopeComponentBase() as Parameters<
+        typeof prisma.scopeComponent.findMany
+      >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+    ]);
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
+      makeScaIssue({ latestAliases: [] }) as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+    ]);
+
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+
+    expect(doc!.vulnerabilities![0].references).toBeUndefined();
+
+    vi.restoreAllMocks();
+  });
+
+  it("no vulnerabilities[] key when scaIssues list is empty", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow() as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue([
+      makeScopeComponentBase() as Parameters<
+        typeof prisma.scopeComponent.findMany
+      >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+    ]);
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
+
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+
+    expect(doc).not.toBeNull();
+    expect(doc!.vulnerabilities).toBeUndefined();
+
+    vi.restoreAllMocks();
+  });
+});
+
+describe("buildCuratedSbomJsonForScope — per-component EOL properties (M11 Step 3)", () => {
+  it("emits sastbot:eol_date and lifecycle_state=eol for a past EOL date", async () => {
+    const { prisma } = await import("../src/db.js");
+    const pastDate = new Date("2025-01-01T00:00:00Z"); // in the past
+
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow() as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue([
+      makeScopeComponentBase() as Parameters<
+        typeof prisma.scopeComponent.findMany
+      >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+    ]);
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
+      makeScaIssue({
+        latestEolDate: pastDate,
+        latestFindingType: "eol",
+      }) as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+    ]);
+
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+
+    const comp = doc!.components.find((c) => c.name === "axios")!;
+    const props = Object.fromEntries((comp.properties ?? []).map((p) => [p.name, p.value]));
+    expect(props["sastbot:eol_date"]).toBe("2025-01-01");
+    expect(props["sastbot:lifecycle_state"]).toBe("eol");
+
+    vi.restoreAllMocks();
+  });
+
+  it("emits lifecycle_state=active for a future EOL date", async () => {
+    const { prisma } = await import("../src/db.js");
+    const futureDate = new Date("2099-12-31T00:00:00Z");
+
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow() as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue([
+      makeScopeComponentBase() as Parameters<
+        typeof prisma.scopeComponent.findMany
+      >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+    ]);
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
+      makeScaIssue({
+        latestEolDate: futureDate,
+        latestFindingType: "eol",
+      }) as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+    ]);
+
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+
+    const comp = doc!.components.find((c) => c.name === "axios")!;
+    const props = Object.fromEntries((comp.properties ?? []).map((p) => [p.name, p.value]));
+    expect(props["sastbot:eol_date"]).toBe("2099-12-31");
+    expect(props["sastbot:lifecycle_state"]).toBe("active");
+
+    vi.restoreAllMocks();
+  });
+
+  it("emits lifecycle_state=deprecated when latestFindingType=deprecated and no eol date", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow() as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue([
+      makeScopeComponentBase() as Parameters<
+        typeof prisma.scopeComponent.findMany
+      >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+    ]);
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
+      makeScaIssue({
+        latestEolDate: null,
+        latestFindingType: "deprecated",
+      }) as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+    ]);
+
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+
+    const comp = doc!.components.find((c) => c.name === "axios")!;
+    const props = Object.fromEntries((comp.properties ?? []).map((p) => [p.name, p.value]));
+    expect(props["sastbot:lifecycle_state"]).toBe("deprecated");
+    expect(props["sastbot:eol_date"]).toBeUndefined();
+
+    vi.restoreAllMocks();
+  });
+
+  it("emits no EOL properties for a component with only a plain vulnerability issue", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
+      makeScopeRow() as ReturnType<typeof makeScopeRow>,
+    );
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue([
+      makeScopeComponentBase() as Parameters<
+        typeof prisma.scopeComponent.findMany
+      >[0] extends undefined ? never : Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>[number],
+    ]);
+    vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
+      makeScaIssue({
+        latestEolDate: null,
+        latestFindingType: "vulnerability",
+      }) as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
+    ]);
+
+    const { buildCuratedSbomJsonForScope } = await import(
+      "../src/services/sbomCurated.js"
+    );
+    const doc = await buildCuratedSbomJsonForScope(SCOPE_ID);
+
+    const comp = doc!.components.find((c) => c.name === "axios")!;
+    const propNames = (comp.properties ?? []).map((p) => p.name);
+    expect(propNames).not.toContain("sastbot:eol_date");
+    expect(propNames).not.toContain("sastbot:lifecycle_state");
 
     vi.restoreAllMocks();
   });
