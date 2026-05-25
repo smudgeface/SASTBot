@@ -521,9 +521,17 @@ export async function runCdxgen(workingDir: string, excludes: string[] = []): Pr
       // The evidence section + occurrences[] are emitted anyway for the
       // project types we care about (npm, nuget, .csproj, .vcxproj, etc.).
       // Verified empirically on Gocator Classic / scope (M6q follow-up).
+      //
+      // --exclude-type bazel: vendored libraries (e.g. googletest) often
+      // ship BUILD.bazel + WORKSPACE files. cdxgen treats those as project
+      // markers and tries to invoke the `bazel` binary, which fails because
+      // the worker container doesn't have bazel installed. Excluding the
+      // bazel project type from auto-detection avoids the false positive
+      // without losing real first-party SBOM data — cdxgen continues to
+      // analyse npm / nuget / etc. as before.
       await execFileAsync(
         cdxgenBin,
-        ["-o", outputPath, ...excludeArgs, "."],
+        ["-o", outputPath, "--exclude-type", "bazel", ...excludeArgs, "."],
         {
           cwd: workingDir,           // ← M6q: scope dir is the process root
           timeout: 5 * 60 * 1000, // 5-minute hard cap

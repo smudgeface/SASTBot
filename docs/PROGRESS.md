@@ -4,6 +4,35 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-25 — M12 follow-up: cdxgen `--exclude-type bazel` (v0.12.1)
+
+First scan on GoPxL BE failed with `cdxgen_failed` because cdxgen
+found `extern/googletest/package/BUILD.bazel` + `WORKSPACE` in the
+vendored googletest sources and tried to invoke the `bazel` binary
+(not installed in the worker container). Vendored libraries shipping
+bazel files is common enough that excluding the bazel project type
+from cdxgen's auto-detection is the right default — we don't need
+cdxgen to introspect vendored build systems; we only care about the
+first-party manifest data it extracts (npm, nuget, .csproj, .vcxproj,
+etc.). The vendored libs themselves still show up in the SBOM via
+content-based extraction; we just skip the bazel-specific code path.
+
+**What shipped.** `backend/src/services/sbomService.ts:runCdxgen` now
+passes `--exclude-type bazel`. Smoke-tested against a synthetic
+BUILD.bazel/WORKSPACE directory — cdxgen no longer tries to invoke
+the bazel binary.
+
+**Operational note.** The worker uses `tsx src/worker.ts` (no
+`--watch`), so file edits don't auto-reload. Always
+`docker compose ... restart worker` after worker-side code changes.
+The backend container uses `tsx watch` and auto-reloads. Worth
+unifying eventually (worker would benefit from the same DX) — for
+now, the restart is a one-liner.
+
+**Version bumped 0.12.0 → 0.12.1** (PATCH — bug fix).
+
+---
+
 ## 2026-05-25 — M12: errors mark scan failed; failed scans don't affect the scope (v0.12.0)
 
 Spun out of an M11 shake-out: a fresh FSS scan finished `status=success`
