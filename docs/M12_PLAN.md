@@ -59,28 +59,45 @@ SCA-impacting, SAST-impacting, or BOTH. A new helper
 `subsystemImpact(warningCode) → { sca: boolean; sast: boolean }`
 centralises the mapping.
 
-| Code | SCA | SAST |
-|---|---|---|
-| `scope_path_missing` | ✓ | ✓ |
-| `remote_unreachable` | ✓ | ✓ |
-| `auth_failed` | ✓ | ✓ |
-| `branch_not_found` | ✓ | ✓ |
-| `clone_failed` | ✓ | ✓ |
-| `cdxgen_failed` | ✓ | ✓ |
-| `cdxgen_zero_components` | ✓ | (no — SAST has its own LLM-driven path) |
-| `llm_sbom_augmentation_failed` | ✓ | ✓ |
-| `llm_sbom_parse_errors` (error sev) | ✓ | (no) |
-| `llm_sbom_recheck_failed` | ✓ | (no) |
-| `llm_sbom_recheck_partial` (error sev) | ✓ | (no) |
-| `sbom_persist_failed` | ✓ | ✓ |
-| `sbom_emit_failed` | (no — artifact-only) | (no — artifact-only) |
-| `llm_sast_detection_failed` | (no) | ✓ |
-| `llm_sast_parse_errors` (error sev) | (no) | ✓ |
-| `llm_recheck_failed` | (no) | ✓ |
-| `llm_recheck_parse_errors` (error sev) | (no) | ✓ |
-| `sarif_emit_failed` | (no — artifact-only) | (no — artifact-only) |
-| `sast_ingest_failed` | (no) | ✓ |
-| `nvd_query_failed` (info sev today) | (no — info, not error) | (no) |
+Audited against `worker.ts` 2026-05-25 — every code below was found at
+the line indicated. Error-severity codes are the only ones that ever
+enter the impact calculation (helpers filter on `severity === "error"`),
+but info-severity codes are listed here too so future maintainers can
+see they were considered and intentionally classified as no-impact.
+
+| Code | Severity | Source | SCA | SAST |
+|---|---|---|---|---|
+| `scope_path_missing` | error | worker.ts:1274 | ✓ | ✓ |
+| `remote_unreachable` | error | worker.ts:1830 | ✓ | ✓ |
+| `auth_failed` | error | worker.ts:1843 | ✓ | ✓ |
+| `branch_not_found` | error | worker.ts:1840 | ✓ | ✓ |
+| `clone_failed` | error | worker.ts:1846 | ✓ | ✓ |
+| `cdxgen_failed` | error | worker.ts:1305 | ✓ | ✓ |
+| `cdxgen_zero_components` | error | worker.ts:1323 | ✓ | (no — SAST has its own LLM-driven path) |
+| `llm_sbom_augmentation_failed` | error | worker.ts:1416 | ✓ | ✓ |
+| `llm_sbom_parse_errors` | error \| info | worker.ts:1382 | ✓ (when error) | (no) |
+| `llm_sbom_recheck_failed` | error | worker.ts:1602, 1610 | ✓ | (no) |
+| `llm_sbom_recheck_partial` | error \| info | worker.ts:1577 | ✓ (when error) | (no) |
+| `sbom_persist_failed` | error | worker.ts:1460 | ✓ | ✓ |
+| `sbom_emit_failed` | error | worker.ts:1677 | (no — artifact-only) | (no — artifact-only) |
+| `llm_sast_detection_failed` | error | worker.ts:373, 399 | (no) | ✓ |
+| `llm_sast_parse_errors` | error \| info | worker.ts:382 | (no) | ✓ (when error) |
+| `llm_recheck_failed` | error | worker.ts:628 | (no) | ✓ |
+| `llm_recheck_parse_errors` | error \| info | worker.ts:637 | (no) | ✓ (when error) |
+| `sarif_emit_failed` | error | worker.ts:461 | (no — artifact-only) | (no — artifact-only) |
+| `sast_ingest_failed` | error | worker.ts:491 | (no) | ✓ |
+| `nvd_query_failed` | info | worker.ts:1647 | (no — info, not error) | (no) |
+| `llm_sast_detection_retry` | info | worker.ts:359 | (no — info) | (no — info) |
+| `llm_recheck_retry` | info | worker.ts:617 | (no — info) | (no — info) |
+| `sast_duplicates_merged` | info | worker.ts:677 | (no — info) | (no — info) |
+| `recheck_capped` | info | worker.ts:1564 | (no — info) | (no — info) |
+
+Codes with `error | info` are dual-severity: the worker calls
+`parseErrorSeverity(accepted, parseErrors)` which returns `error` when
+the drop rate is at or above the trustworthiness threshold, `info`
+otherwise. The classification table column captures the
+**when-error-severity** impact; `info`-severity emissions of those
+same codes never enter the helper.
 
 Two helpers replace today's single `hasErrorWarnings`:
 
@@ -91,6 +108,18 @@ export async function hasSastImpactingErrorWarnings(scanRunId: string): Promise<
 
 The existing scalar `hasErrorWarnings` stays (other callers depend on
 it for the `lastScanRunId` advance gate — see A4).
+
+**Location: new module `backend/src/services/scanWarnings.ts`.** Three
+sites consume these helpers (`worker.ts`, `llmSastService.ts`,
+`services/mappers.ts`); putting them on a leaf module avoids the
+circular-dep risk of importing from `worker.ts`. The existing
+`hasErrorWarnings` (currently defined in worker.ts:153) moves to the
+same file in the same change; worker.ts re-imports from the new
+location instead of relying on the local function. `subsystemImpact`
+takes the warning code (string) and returns `{ sca: boolean; sast:
+boolean }`. The dual-severity codes resolve at the helper level: each
+`has*ImpactingErrorWarnings` filters the warnings array first by
+`severity === "error"`, then by the relevant subsystem bit.
 
 ### A2. `scan_runs.trustworthy` — computed exposure
 
@@ -116,20 +145,31 @@ miss it:
 
 1. **Scope detail page header (`/scopes/:id`).** Amber banner directly
    under the title row when `latest_scan.trustworthy_overall === false`.
-   Copy: *"Most recent scan completed with errors. Findings shown
-   reflect the last fully-trustworthy scan from <date>. Click for
-   details."* Click expands a panel listing each error warning + its
-   subsystem impact.
+   Insert at the spot where `ScanProgressBanner` renders today
+   (`ScopeDetailPage.tsx:2095`); coexists with the live-progress
+   banner during an active scan. Copy: *"Most recent scan completed
+   with errors. Findings shown reflect the last fully-trustworthy
+   scan from <date>. Click for details."* Click expands a panel
+   listing each error warning + its subsystem impact. **Style after
+   the existing warnings Card on `ScanDetailPage.tsx:935-983`** —
+   amber-bordered Card with `AlertTriangle` icon and per-warning
+   message rows. Re-use the per-warning detail rendering pattern
+   (raw payloads collapsible) for consistency.
 
 2. **Scopes list row (`/scopes`).** Small amber chip next to the
    scope name when latest scan was untrustworthy. Tooltip on hover
    names the failing subsystems.
 
 3. **Scan rows (audit list `/scans` + recent-scans drawer on the
-   scope page).** Existing trustworthiness chip already exists per
-   PROGRESS.md M9 — verify it's wired to `trustworthy_overall` and
-   not just `status==="success"`. Extend the chip's hover/click to
-   list which subsystems were affected.
+   scope page).** **No trustworthiness chip exists today** — the
+   original plan's "verify wired" claim was wrong (M9 added the
+   `lastScanRunId` advance gate and the scan-detail warnings banner;
+   no per-row chip was added). M12 ADDS an amber chip on each scan
+   row when `trustworthy_overall === false`. Surface on:
+   - `ScansPage.tsx` table row (next to `ScanStatusBadge`)
+   - `ScopeDetailPage.tsx` recent-scans drawer
+     (`RecentScansSection`, ~line 1884) next to the status dot
+   Tooltip lists the failing subsystems.
 
 ### A4. Per-subsystem auto-fix gating — symmetric
 
@@ -171,6 +211,15 @@ behavior visible. M13 removes the filter entirely.
   call out which warning codes are SCA-only vs SAST-only.
 - `frontend/src/manual/content/scopes.md` — describe the new amber
   banner and what it means for the displayed counts.
+- `frontend/src/manual/content/sca-issues.md` — one-line
+  cross-reference: "If the SCA Issues tab unexpectedly shows zero
+  rows, check for an amber trustworthiness banner on the scope page;
+  it indicates the most recent scan's SCA pipeline failed and counts
+  reflect the last trustworthy scan." Reduces operator confusion when
+  arriving at the tab from a deep link without seeing the banner
+  first.
+- `frontend/src/manual/content/sast-issues.md` — same one-line
+  cross-reference, SAST-specific wording.
 - `CLAUDE.md` — update the "Trustworthiness gate" pin to mention the
   per-subsystem split and the helpers (`hasScaImpactingErrorWarnings`
   / `hasSastImpactingErrorWarnings`).
