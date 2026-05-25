@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ShieldCheck } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { BookOpen, ShieldCheck } from "lucide-react";
 
 import { useLogin, useMe } from "@/api/queries/auth";
 import { ApiError } from "@/api/client";
@@ -147,6 +147,13 @@ export default function LoginPage() {
                   : "Sign in"}
             </Button>
           </form>
+          <div className="mt-4 border-t border-border pt-3 text-center text-xs text-muted-foreground">
+            New here?{" "}
+            <Link to="/manual/quick-start" className="inline-flex items-center gap-1 text-primary hover:underline">
+              <BookOpen className="h-3 w-3" />
+              Read the quick-start guide
+            </Link>
+          </div>
         </CardContent>
       </Card>
     </div>

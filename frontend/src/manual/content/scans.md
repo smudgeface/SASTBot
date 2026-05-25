@@ -1,0 +1,144 @@
+# Scans
+
+A scan is one execution of the pipeline against one scope. Every
+trigger — operator click on the Scopes page, future scheduled cron — is
+recorded as a `scan_runs` row from the moment it's enqueued.
+
+## Triggering a scan
+
+The canonical entry points:
+
+- **Scopes page** — the run icon at the right end of each row.
+- **Scope detail page** — the run button in the header.
+- **REST API** — `POST /api/scans` with `{ scope_id }`. See the
+  [API reference](api-reference) for the exact shape.
+
+The endpoint returns immediately with the new `scan_run_id` and a
+`status: "queued"`. The worker picks the job up from BullMQ on Redis and
+starts processing.
+
+## Watching progress
+
+While a scan is `running`, the worker updates
+`scan_runs.current_phase` and `scan_runs.phase_progress` at every phase
+boundary. The frontend polls `/api/scopes` every 3s for in-flight
+scopes; the Scopes page row and the scope detail header refresh in
+near-real-time.
+
+Phases, in order, with typical wall-clock cost on a medium repo:
+
+| Phase | Cost | What happens |
+|---|---|---|
+| `cloning` | seconds–minutes | Clone or refresh the retained clone. |
+| `cdxgen` | seconds–minutes | Anchore cdxgen → raw SBOM. |
+| `llm_sbom` | 30s–5min | LLM augmentation (keep / drop / add). |
+| `sbom_emit` | sub-second | Write curated SBOM artifact to disk. |
+| `sbom_ingest` | seconds | Re-read into `sbom_components`. |
+| `osv` | seconds | Batched OSV.dev queries with cache. |
+| `nvd` | seconds | NVD enrichment for C/C++ components. |
+| `eol` | seconds | EOL lookup for runtime / framework packages. |
+| `llm_detection` | 10–30 min | LLM agent walks source for SAST + reachability. |
+| `sarif_emit` | sub-second | Write SARIF v2.1.0 to disk. |
+| `sast_ingest` | seconds | Persist SAST issues with fingerprints. |
+| `llm_recheck` | 2–10 min | Verify each non-detected issue is still fixed. |
+| `sca_summaries` | seconds–minute | Short LLM-written summaries per SCA issue. |
+| `finalizing` | sub-second | Update denorms; advance scope pointers if trustworthy. |
+
+A typical FSS-class repo runs in 15–25 minutes; a large monorepo with
+the `xhigh` SAST effort can take 45+ minutes. Token spend dominates the
+LLM phases — see [Settings page](admin-settings) for per-repo token
+budget controls.
+
+## Scans (audit) page
+
+The **Scans (audit)** page (left sidebar) is a flat, chronological list
+of all scan runs across all scopes:
+
+- Status badge (queued, running, success, failed, cancelled).
+- Scope + repo.
+- Started, finished, duration.
+- Trigger (user, schedule, api).
+- Trustworthiness chip — green if no error warnings, amber if degraded.
+
+Pagination is 50 per page. Filters: status, repo, date range.
+
+The page is intentionally an **audit view** — it's not where you do
+day-to-day triage (that's the scope page). It's the page you open when
+you need to understand *what ran when*, e.g. for a CRA audit or to
+investigate a regression.
+
+## Scan detail page (/scans/:id)
+
+Drilling into a scan run gives you:
+
+- **Header** — scope link, repo, branch, status, duration, trigger,
+  trustworthiness chip.
+- **Phase timeline** — every phase with its start/end timestamps.
+- **Warnings panel** — every `scan_warnings` row in chronological
+  order, with severity chip. The full warning body is shown inline.
+- **Token usage** — per-pass input/output tokens, request count,
+  estimated cost.
+- **Tabs**: Components (per-scan SBOM), Findings (combined SCA + SAST
+  list as seen by this scan), SAST view, and SBOM / SARIF viewers.
+
+The scan detail page is intentionally light on triage — it shows what
+*this scan* observed. Issues are de-duped at the scope level, so
+running triage from here is risky (you might dismiss a row that the
+next scan re-creates with a different fingerprint).
+
+## Trustworthiness
+
+A scan that emitted any `error`-severity warning is **untrustworthy**.
+Untrustworthy scans:
+
+- Still write all their findings, artifacts, and audit rows.
+- Do NOT advance the scope's `lastScanRunId` pointer.
+- Are excluded from the SCA auto-fix sweep (no issue is silently
+  closed because a degraded scan didn't see it).
+
+The trustworthiness chip in the audit page and on the scope banner
+makes this visible. See [Troubleshooting](troubleshooting) for the
+common warning codes and how to resolve them.
+
+## Scan warnings
+
+Common warning codes you'll see in the wild:
+
+- `info` severity:
+  - `llm_sast_detection_retry` — first detection attempt failed; auto-retry succeeded.
+  - `llm_*_parse_errors` (drop ratio < 50%) — some LLM records were unparseable.
+  - `recheck_capped` — SBOM recheck hit the per-scan hard cap.
+- `error` severity:
+  - `cdxgen_failed` — Anchore cdxgen exited non-zero.
+  - `llm_sast_detection_failed` — claude-p exited non-zero or was killed.
+  - `llm_sbom_augmentation_failed` — SBOM augmentation pass crashed.
+  - `llm_*_parse_errors` with drop ratio ≥ 50% — the LLM lost half its records.
+  - `clone_failed`, `auth_failed`, `branch_not_found`, `remote_unreachable`.
+  - `scope_path_missing` — configured scan path doesn't exist in the clone.
+
+## Cancelling and re-running
+
+A scan can be cancelled while it's queued or running via the scope-page
+action or `POST /api/scans/:id/cancel`. The worker checks for the
+cancel flag at phase boundaries; expect the scan to terminate within
+the current phase, not instantly.
+
+There's no "rerun this scan" action by design — every run is a fresh
+unit. To rerun, click the run button on the scope.
+
+## Deleting a scan
+
+The audit page supports per-row delete (admin only). Deleting a scan:
+
+- Removes the `scan_runs` row.
+- Removes the per-scan artifact files (`sbom/`, `sarif/`) from disk.
+- Removes the `sbom_components` rows for that scan (cascaded by FK).
+- Does **not** remove `sca_issues` / `sast_issues` rows — those are
+  scope-level. If the deleted scan was the `last_seen_scan_run_id` of
+  any issue, the next scan that touches the issue advances the pointer
+  again.
+
+Deleting a scan is the right answer when an experimental run produced
+garbage and you want it out of the audit trail. It's not the right
+answer for normal cleanup — old scans don't cost much and they're your
+history.

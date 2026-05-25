@@ -16,11 +16,21 @@ import ReposPage from "@/routes/admin/ReposPage";
 import SettingsPage from "@/routes/admin/SettingsPage";
 import CredentialsPage from "@/routes/admin/CredentialsPage";
 import NotFoundPage from "@/routes/NotFoundPage";
+import { ManualLayout } from "@/routes/manual/ManualLayout";
+import { ManualSection } from "@/routes/manual/ManualSection";
 
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+
+      {/* Manual route — public (no auth wall). Operators need to read
+          quick-start before they have a session. */}
+      <Route path="/manual" element={<ManualLayout />}>
+        <Route index element={<ManualSection />} />
+        <Route path=":slug" element={<ManualSection />} />
+      </Route>
+
 
       <Route
         element={

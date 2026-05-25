@@ -2689,3 +2689,98 @@ async-loaded option list" — worth remembering for the next
 fetched-options form. Doubles as a reminder that visual E2E (in our
 case Chrome DevTools state walks) catches what unit tests can't:
 mock-DOM tests didn't exercise Radix's internal scheduling.
+
+## 2026-05-24 — M10: in-app user manual + protocol reference (v0.10.0)
+
+First operator-visible feature in the 0.10 line: a complete user
+manual hosted by the existing frontend container (no new service) at
+`/manual`, plus a live-rendered protocol reference driven by
+`/openapi.json` so the docs cannot drift from the backend.
+
+**What shipped.**
+
+- **17 manual sections** under `frontend/src/manual/content/*.md`,
+  imported at build time via Vite's `?raw` query. Coverage:
+  - Welcome / Quick start / How SASTBot works
+  - Repositories / Scopes / Scans / SCA findings / SAST findings /
+    Components & SBOM / Jira integration (day-to-day workflows)
+  - Credentials / Settings page / Backup & restore / Versioning &
+    upgrades / Deployment (administration — depth equal to day-to-day
+    sections because LMI operators administer their own deployments)
+  - Troubleshooting / API reference (reference)
+- **Manual viewer** at `frontend/src/routes/manual/ManualLayout.tsx`
+  with a TOC sidebar grouped by section type. `ManualSection.tsx`
+  feeds the markdown body through `react-markdown` + `remark-gfm`
+  with a Tailwind-styled component map for h1..h4, p, ul/ol/li, code
+  (inline + fenced), pre, table, blockquote, hr, and image. Internal
+  links use bare slugs and rewrite to in-app SPA routes; external
+  links open in new tabs.
+- **API reference** at `frontend/src/routes/manual/ApiReferencePage.tsx`
+  — fetches `/openapi.json` via React Query at view time, groups
+  endpoints by `tags[0]`, allows free-text search + method-pill
+  filtering, each row expandable for parameters / request body /
+  response shapes. No swagger-ui dependency.
+- **Two entry points**: question-mark icon in the top-right of the
+  sidebar header (next to the SASTBot brand mark), plus a "Manual"
+  link in the bottom-of-sidebar footer block. LoginPage also gets a
+  "Read the quick-start guide" link so first-boot operators with no
+  session can find the manual.
+- **Public route** — `/manual` and `/manual/:slug` are mounted
+  OUTSIDE the `RequireAuth` wrapper. Verified end-to-end in Chrome
+  DevTools: after `POST /api/auth/logout`, navigating to
+  `/manual/quick-start` still renders the full manual; `/api/auth/me`
+  returns 401; the footer's nav-back link changes from "Back to
+  SASTBot" to "Sign in".
+- **Three high-value screenshots** under
+  `frontend/src/manual/assets/`: scopes overview, scope-detail SCA
+  tab, and SARIF viewer. Embedded into the matching markdown sections
+  via a custom `:::asset:<name>:::` substitution token that
+  ManualSection rewrites to the Vite-bundled URL at render time
+  (keeps the .md files free of build-tool-specific imports — they're
+  plain markdown that any human can read on disk).
+- **CLAUDE.md pin** — a 📖 reminder in "For AI agents" alongside the
+  🔖 versioning pin: "Keep the user manual current. When a code
+  change is operator-visible, update the matching section under
+  `frontend/src/manual/content/`. Manual drift is a worse bug than a
+  stub manual."
+
+**Two dependencies added.** `react-markdown` (~30 kB gz) and
+`remark-gfm` (GitHub-flavored markdown for tables, strikethrough, task
+lists). Did NOT add `@tailwindcss/typography` or `swagger-ui-react`:
+the markdown component map is ~30 lines of Tailwind-styled JSX, and
+the API reference renderer is ~280 lines of custom React — both stay
+inside the existing design system. Bundle stays small.
+
+**Browser smoke-test.** Walked every slug via Chrome DevTools'
+`evaluate_script`: 17 of 17 sections rendered with no errors, valid
+H1s, and substantive content. The API reference loaded successfully
+against the live `/openapi.json` (initially failed because I'd written
+`/api/openapi.json` — `/openapi.json` is at root per the CLAUDE.md
+routing rule; fixed in-session).
+
+**Version bump.** 0.9.8 → 0.10.0 (MINOR — new feature, backwards-
+compatible). All three surfaces moved together per policy.
+
+**What we learned.**
+
+- The `/openapi.json` mistake was instructive: tags + summaries on
+  Fastify routes ARE the protocol documentation now. Treat them like
+  user-facing strings: review on every PR, not just "tags help
+  Swagger." A future improvement is to ESLint-check that every route
+  has a `tags: [...]` of length 1 — would have caught the few `Misc`
+  endpoints the API reference page surfaces today.
+- Vite's `?raw` import for bundled markdown is the right call here.
+  Tried both that and `frontend/public/manual/*.md` static-asset
+  approaches; `?raw` wins because (a) the build picks up missing
+  files immediately, (b) markdown source ships as part of the SPA so
+  there's no "is the proxy serving these?" question in prod, and (c)
+  HMR works for free.
+- Public routes outside `RequireAuth` need their own theme bootstrap.
+  `AppShell.tsx` applies the persisted dark/light class on mount; for
+  the unauthenticated `/manual` path that shell never mounts, so
+  `ManualLayout.tsx` duplicates the `document.documentElement.classList`
+  effect. Worth lifting to a top-level provider eventually.
+- Browser E2E surfaces what unit tests can't: the `/openapi.json`
+  fetch-path bug would have passed every unit test but produced a
+  blank API reference page in production. The same lesson keeps
+  coming up — keep building this muscle.

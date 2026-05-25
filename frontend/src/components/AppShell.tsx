@@ -1,7 +1,9 @@
 import { useEffect } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
+  BookOpen,
   FileSearch,
+  HelpCircle,
   Home,
   KeyRound,
   Layers,
@@ -69,6 +71,14 @@ export function AppShell() {
         <div className="flex h-14 items-center gap-2 border-b border-border px-4">
           <ShieldCheck className="h-5 w-5 text-primary" />
           <span className="text-sm font-semibold tracking-tight">SASTBot</span>
+          <Link
+            to="/manual"
+            className="ml-auto rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            aria-label="Open user manual"
+            title="User manual"
+          >
+            <HelpCircle className="h-4 w-4" />
+          </Link>
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3">
@@ -91,6 +101,13 @@ export function AppShell() {
           <div className="mb-2 truncate text-muted-foreground" title={user?.email}>
             {user?.email ?? "—"}
           </div>
+          <Link
+            to="/manual"
+            className="mb-2 flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs hover:bg-accent"
+          >
+            <BookOpen className="h-3.5 w-3.5" />
+            <span>Manual</span>
+          </Link>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
