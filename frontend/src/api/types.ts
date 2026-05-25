@@ -650,4 +650,5 @@ export interface ScanRunSummary {
   current_phase: ScanPhase | null;
   phase_progress: { done: number; total: number; label?: string } | null;
   created_at: string;
+  warnings: ScanWarning[];
 }

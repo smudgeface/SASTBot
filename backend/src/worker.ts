@@ -48,6 +48,7 @@ import {
 } from "./services/llmSbomService.js";
 import { persistScanComponentsToScopeState, materializeRecoveredComponents } from "./services/scopeComponentService.js";
 import { runSbomRecheck } from "./services/llmSbomRecheckService.js";
+import { hasErrorWarnings } from "./services/scanWarnings.js";
 import type { ScanWarning } from "./schemas.js";
 import { Prisma } from "@prisma/client";
 
@@ -145,18 +146,6 @@ async function appendWarning(scanRunId: string, warning: ScanWarning): Promise<v
     where: { id: scanRunId },
     data: { warnings: [...current, warning] as unknown as Prisma.InputJsonValue },
   });
-}
-
-/** Returns true iff any error-severity warning has been recorded on this
- *  scan. Gates remediation actions (SCA auto-fix sweep, etc.) so a scan
- *  with a degraded data path doesn't silently destroy real findings. */
-async function hasErrorWarnings(scanRunId: string): Promise<boolean> {
-  const run = await prisma.scanRun.findUnique({
-    where: { id: scanRunId },
-    select: { warnings: true },
-  });
-  const list = Array.isArray(run?.warnings) ? (run!.warnings as ScanWarning[]) : [];
-  return list.some((w) => w.severity === "error");
 }
 
 // ---------------------------------------------------------------------------
@@ -602,16 +591,10 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         },
         "[worker] LLM recheck finished",
       );
-      const apply = await applyRecheckVerdicts(prisma, {
-        scanRunId,
-        scopeId: run.scopeId,
-        scopeDir: scanDir,
-        scopePath,
-        inputIssues: recheckIssues,
-        verdicts: recheck.verdicts,
-      });
-      log.info(apply, "[worker] LLM recheck applied");
-
+      // Emit recheck warnings BEFORE applyRecheckVerdicts so the
+      // hasErrorWarnings gate inside the apply call sees recheck-phase
+      // errors (otherwise a partial-recheck "fixed" verdict could
+      // silently close a real finding). M12.
       if (recheck.wasRetry) {
         await appendWarning(scanRunId, {
           code: "llm_recheck_retry",
@@ -642,6 +625,21 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
               : `LLM recheck emitted ${recheck.parseErrors.length} unparseable record(s).`,
           details: truncateParseErrors(recheck.parseErrors),
         });
+      }
+
+      const untrustworthy = await hasErrorWarnings(scanRunId);
+      const apply = await applyRecheckVerdicts(prisma, {
+        scanRunId,
+        scopeId: run.scopeId,
+        scopeDir: scanDir,
+        scopePath,
+        inputIssues: recheckIssues,
+        verdicts: recheck.verdicts,
+        untrustworthy,
+      });
+      log.info(apply, "[worker] LLM recheck applied");
+      if (untrustworthy) {
+        log.warn("[worker] SAST recheck cleanup branches skipped — scan has error warnings (will be marked failed at finalize)");
       }
 
       // Add recheck token usage on top of detection's.
@@ -1751,9 +1749,9 @@ const worker = new Worker<ScanJobData>(
       // finding as fixed. The operator can manually trigger remediation
       // after diagnosing the failure.
       await setPhase(scanRunId, "finalizing");
-      const untrustworthy = await hasErrorWarnings(scanRunId);
-      if (untrustworthy) {
-        log.warn("[worker] skipping SCA auto-fix sweep — scan has error-severity warnings");
+      const finalizeUntrustworthy = await hasErrorWarnings(scanRunId);
+      if (finalizeUntrustworthy) {
+        log.warn("[worker] skipping SCA auto-fix sweep — scan has error warnings (will be marked failed)");
       } else {
         const TERMINAL_STATUSES = ["fixed", "suppressed", "false_positive"];
         await prisma.scaIssue.updateMany({
@@ -1790,11 +1788,18 @@ const worker = new Worker<ScanJobData>(
         else if (i.latestSeverity === "low") counts.low++;
       }
 
+      // Final trustworthiness check. Error-severity warnings flip the scan
+      // to status=failed and prevent ANY scope writes — failed scans don't
+      // affect the scope. The per-scan data (sca_issues, sast_issues,
+      // sbom_components) is preserved for audit; the scope's default
+      // filter pivots off lastScanRunId, which doesn't advance, so the
+      // operator sees the last successful scan's findings.
+      const finalUntrustworthy = await hasErrorWarnings(scanRunId);
       const finishedAt = new Date();
       await prisma.scanRun.update({
         where: { id: scanRunId },
         data: {
-          status: "success",
+          status: finalUntrustworthy ? "failed" : "success",
           finishedAt,
           criticalCount: counts.critical,
           highCount: counts.high,
@@ -1805,20 +1810,18 @@ const worker = new Worker<ScanJobData>(
         },
       });
 
-      // Update scope denorm. `lastScanCompletedAt` always advances (operators
-      // want to see "Last scan: just now" even when the scan was degraded —
-      // it's the operational truth). `lastScanRunId` is the pivot point for
-      // "which run defines current findings" used by the SCA/SAST default
-      // filters, so it ONLY advances when the scan is trustworthy. A degraded
-      // run doesn't earn the pointer; previous good run keeps it.
-      await prisma.scanScope.update({
-        where: { id: run.scopeId },
-        data: untrustworthy
-          ? { lastScanCompletedAt: finishedAt }
-          : { lastScanRunId: scanRunId, lastScanCompletedAt: finishedAt },
-      });
+      // Scope writes only on success. lastScanCompletedAt is also
+      // success-only — the Scopes list "Last scan" column shows the last
+      // time we *successfully* scanned, not the last attempt. Failed
+      // attempts are visible on /scans only.
+      if (!finalUntrustworthy) {
+        await prisma.scanScope.update({
+          where: { id: run.scopeId },
+          data: { lastScanRunId: scanRunId, lastScanCompletedAt: finishedAt },
+        });
+      }
 
-      log.info({ ...counts, untrustworthy }, "[worker] scan complete");
+      log.info({ ...counts, status: finalUntrustworthy ? "failed" : "success" }, "[worker] scan complete");
     } catch (err) {
       // Map known error classes to operator-friendly messages + typed
       // warnings so the GUI surfaces something useful instead of a

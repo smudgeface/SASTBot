@@ -87,19 +87,32 @@ The scan detail page is intentionally light on triage — it shows what
 running triage from here is risky (you might dismiss a row that the
 next scan re-creates with a different fingerprint).
 
-## Trustworthiness
+## Scan failure
 
-A scan that emitted any `error`-severity warning is **untrustworthy**.
-Untrustworthy scans:
+A scan that emits any `error`-severity warning is marked
+**`status = failed`** at finalize. Failed scans do not affect the
+scope: `lastScanRunId` does not advance, `lastScanCompletedAt` does
+not advance, the SCA auto-fix sweep is skipped, and the SAST recheck
+cleanup branches no-op.
 
-- Still write all their findings, artifacts, and audit rows.
-- Do NOT advance the scope's `lastScanRunId` pointer.
-- Are excluded from the SCA auto-fix sweep (no issue is silently
-  closed because a degraded scan didn't see it).
+The per-scan rows the worker wrote *before* the failure (SBOM
+components, OSV/NVD findings, any SAST records that made it past
+detection) are kept in the database for audit. They're visible on
+the failed scan's detail page (`/scans/:id`) but not on the scope
+page — the scope's default issue filters pivot off `lastScanRunId`,
+which still points at the last successful scan.
 
-The trustworthiness chip in the audit page and on the scope banner
-makes this visible. See [Troubleshooting](troubleshooting) for the
-common warning codes and how to resolve them.
+The Scopes list "Last scan" column reflects the last *successful*
+scan only. Failed attempts are visible on the **Scans (audit)**
+page.
+
+To recover after a failure: fix the underlying cause (LLM endpoint
+health, network, credentials, etc.) and re-run the scan. A
+successful re-run advances the pointer and the new scan's findings
+become visible.
+
+See [Troubleshooting](troubleshooting) for the common warning codes
+and how to resolve them.
 
 ## Scan warnings
 

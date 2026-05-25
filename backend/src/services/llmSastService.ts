@@ -1132,6 +1132,13 @@ export interface ApplyRecheckInput {
    *  emitted" cases where the model silently dropped one. */
   inputIssues: RecheckIssueInput[];
   verdicts: RecheckVerdictRecord[];
+  /** When true, the scan has at least one error-severity warning and
+   *  will be marked status=failed at finalize. The "fixed" and
+   *  "file_deleted" verdict branches no-op (counted as missingVerdict)
+   *  so a degraded scan can't silently close real findings. The
+   *  "still_present" and "duplicate_of" branches are unaffected — they
+   *  don't represent destructive state changes. M12. */
+  untrustworthy?: boolean;
 }
 
 export interface ApplyRecheckResult {
@@ -1170,6 +1177,7 @@ export async function applyRecheckVerdicts(
 ): Promise<ApplyRecheckResult> {
   const db = client as PrismaClient;
   const verdictsById = new Map(input.verdicts.map((v) => [v.id, v]));
+  const untrustworthy = input.untrustworthy ?? false;
   const result: ApplyRecheckResult = {
     stillPresent: 0,
     fixed: 0,
@@ -1232,6 +1240,12 @@ export async function applyRecheckVerdicts(
       });
       result.stillPresent++;
     } else if (v.verdict === "fixed") {
+      if (untrustworthy) {
+        // Scan has error warnings and will be marked failed — don't close
+        // real findings. Count as missing so the operator sees the gap. (M12)
+        result.missingVerdict++;
+        continue;
+      }
       await db.sastIssue.update({
         where: { id: issue.id },
         data: {
@@ -1243,6 +1257,12 @@ export async function applyRecheckVerdicts(
       });
       result.fixed++;
     } else if (v.verdict === "file_deleted") {
+      if (untrustworthy) {
+        // Scan has error warnings and will be marked failed — don't close
+        // real findings. Count as missing so the operator sees the gap. (M12)
+        result.missingVerdict++;
+        continue;
+      }
       await db.sastIssue.update({
         where: { id: issue.id },
         data: {

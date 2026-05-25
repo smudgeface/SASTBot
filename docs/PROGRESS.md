@@ -4,6 +4,116 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-25 — M12: errors mark scan failed; failed scans don't affect the scope (v0.12.0)
+
+Spun out of an M11 shake-out: a fresh FSS scan finished `status=success`
+despite the LLM SAST detection subprocess being killed by the
+stdout-staleness watchdog. The M6i overall trustworthiness gate held
+`scope.lastScanRunId` at the prior trustworthy scan correctly — but the
+scope-detail default filter then hid every legitimate finding from the
+new scan, leaving the operator staring at *"0 SCA · 0 SAST · No open
+issues"* with zero indication that anything had gone wrong.
+
+This session went through two design iterations. The first attempt
+shipped per-subsystem trustworthiness with UI chips and banners.
+After live review the product owner pushed back: a separate
+"untrustworthy" UX layer felt like extra complexity on top of the
+lifecycle status. The right model is simpler — if a scan has errors,
+mark it `failed`; failed scans never affect the scope. The commit was
+amended in place (not pushed yet) to reflect this cleaner contract.
+
+**What shipped.**
+
+- **`backend/src/services/scanWarnings.ts`** — one helper:
+  `hasErrorWarnings(scanRunId)` returns true iff any
+  `severity: "error"` warning has been recorded. (M12 v1 had a full
+  per-subsystem classification table here; v2 dropped it as
+  unnecessary once the contract became "any error → failed scan
+  doesn't touch the scope.")
+- **`worker.ts` finalize logic.** After all phases complete, check
+  `hasErrorWarnings`. If true: `status = "failed"` AND skip the
+  scope writes entirely — neither `lastScanRunId` nor
+  `lastScanCompletedAt` advances. If false: `status = "success"` and
+  the scope writes go through as before. The earlier-phase
+  destructive gates (SCA auto-fix sweep, SAST recheck cleanup
+  branches) ALSO check `hasErrorWarnings` so they no-op early
+  rather than racing the final status update.
+- **SAST recheck cleanup gate.** `applyRecheckVerdicts` gained an
+  `untrustworthy: boolean` parameter. When true, the `fixed` and
+  `file_deleted` verdict branches no-op (counted as
+  `missingVerdict`). `still_present` and `duplicate_of` are
+  unaffected — neither is destructive. The recheck warning emission
+  was reordered to BEFORE `applyRecheckVerdicts` so the gate's
+  `hasErrorWarnings` query sees recheck-phase failures too.
+- **Audit data is preserved.** A failed scan still writes its
+  `sbom_components`, `sca_issues`, `sast_issues` rows (with
+  `lastSeenScanRunId = failed_scan_id`). They're visible on the
+  failed scan's detail page (`/scans/:id`) for investigation. They're
+  NOT visible on the scope page — the scope's default issue filter
+  pivots off `lastScanRunId`, which still points at the last
+  successful scan.
+- **`lastScanCompletedAt` semantics changed.** It used to advance
+  on every terminal scan (M6i "operational truth — operator just
+  tried"). Now it only advances on success. The Scopes list "Last
+  scan" column reflects the last *successful* attempt. Failed
+  attempts are visible on the Scans (audit) page only.
+- **No new UI.** No banner, no chip, no per-subsystem booleans on
+  responses. The lifecycle `status` is the single signal.
+- **CLAUDE.md pin** rewritten to describe the new contract for AI
+  agents: any error warning marks the scan failed; failed scans
+  don't touch the scope.
+- **Manual `scans.md`** got a new "Scan failure" section explaining
+  the contract: errors → status=failed → scope unaffected; audit
+  data preserved; how to recover.
+
+**Version bumped 0.11.1 → 0.12.0** (MINOR — new lifecycle semantics
+visible to operators) across all four surfaces (`backend/package.json`,
+`frontend/package.json`, `frontend/package-lock.json`, `APP_VERSION` in
+`backend/src/routes/version.ts`).
+
+**What we learned.**
+
+- **The product owner re-frame mid-implementation was the most
+  important moment of this session.** M12 v1 designed a careful
+  per-subsystem trust model with classification tables, banners,
+  and chips — all internally consistent, all backed by unit tests
+  and live verification. Then the operator looked at it and said
+  "if a scan is untrustworthy, it should just be failed." That
+  collapsed two concepts into one and removed three UI surfaces
+  with no loss of operator information. The lesson: a design that
+  works correctly is not the same as a design that's right.
+  Spending the extra implementation time to ship and then look at
+  v1 in the browser was what made the simpler model visible.
+- **`lastScanCompletedAt` always advancing was load-bearing for the
+  wrong reason.** The M6i comment said "operational truth: operator
+  just tried" justifying always advancing. In practice, "did
+  SASTBot just try" is a question best answered from `/scans`, not
+  from the scope row. Tying the timestamp to success only makes the
+  scope row cleaner — "Last scan" means "last *successful* scan"
+  matches operator intuition.
+- **Status-driven contracts compose better than parallel concepts.**
+  `status="failed"` is something every operator and every
+  downstream system (audit page, /scans list, monitoring) already
+  understands. Layering `trustworthy_overall=false` on top added a
+  second axis nothing else used. Collapsing into status meant the
+  rest of the system needed zero changes.
+- **Reverting a same-session commit is cheap when nothing's
+  pushed.** The M12 commit was rewritten in place via
+  `git commit --amend` after all the v2 work landed locally.
+  Branches that don't have remote upstreams cost very little to
+  rewrite — try to keep that property until the design has
+  settled.
+
+Out-of-scope (deferred for now, see [[m13]]): the per-issue
+`maybe_fixed` state machine that was originally Phase B of the M12
+plan. The lifecycle-status reframe doesn't address how to handle
+"this issue wasn't detected this run — is it fixed or hiding?" —
+that's a separate question. Today, terminal SAST/SCA states (fixed,
+suppressed, false_positive) don't auto-revert on re-detection;
+M13 (or its equivalent) will address that.
+
+---
+
 ## 2026-05-25 — M11 follow-up: API reference response schemas (v0.11.1)
 
 User shake-out caught a gap in the M10/M11 API reference page: response
