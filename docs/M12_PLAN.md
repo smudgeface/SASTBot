@@ -131,18 +131,30 @@ miss it:
    not just `status==="success"`. Extend the chip's hover/click to
    list which subsystems were affected.
 
-### A4. Per-subsystem auto-fix gating
+### A4. Per-subsystem auto-fix gating — symmetric
 
-`worker.ts:1754` currently uses `hasErrorWarnings(scanRunId)` as the
-single gate for the SCA auto-fix sweep. Replace with
-`hasScaImpactingErrorWarnings(scanRunId)`. When SAST fails but SCA was
-clean, the SCA sweep still runs.
+Gating must be symmetric: SCA stalls can block SAST cleanup just as
+much as SAST stalls block SCA cleanup. Both directions get explicit
+gates.
+
+| Auto-resolve path | Currently gated on | After M12 |
+|---|---|---|
+| SCA sweep (`worker.ts:1759`) | `hasErrorWarnings(scanRunId)` (overall) | `hasScaImpactingErrorWarnings(scanRunId)` |
+| SAST recheck `fixed`/`file_deleted` verdicts (`llmSastService.ts:applyRecheckVerdicts`) | (no explicit gate) | `hasSastImpactingErrorWarnings(scanRunId)` |
+
+The SAST recheck path doesn't have an explicit gate today; in practice
+if SAST detection fails the recheck also produces no verdicts.
+M12 makes this explicit: if a SAST-impacting error fired before
+`applyRecheckVerdicts` runs, the "fixed" and "file_deleted" branches
+no-op (verdict counted as `missingVerdict` and the issue stays at its
+current `triageStatus`). The `still_present` branch is always safe to
+apply — confirming an existing issue isn't a destructive operation.
 
 `scope.lastScanRunId` advance gate (also tied to `hasErrorWarnings`):
 **keep using the overall gate for now.** Per-subsystem advance is more
 work — splits `lastScanRunId` into `lastScaScanRunId` + `lastSastScanRunId`
-or similar. M13 retires the gate's role entirely (see B4), so deferring
-the per-subsystem split is correct.
+or similar. M13 retires the gate's visibility role entirely (see B6),
+so deferring the per-subsystem split is correct.
 
 ### A5. Scope-detail count query
 
@@ -179,6 +191,8 @@ fields in OpenAPI).
   `trustworthy_sca` / `trustworthy_sast`. Zod schema updated. Frontend
   schema.d.ts regenerated.
 - [ ] SCA auto-fix gate switched to `hasScaImpactingErrorWarnings`.
+- [ ] SAST recheck `fixed`/`file_deleted` branches gated on
+  `hasSastImpactingErrorWarnings` (symmetric with SCA).
 - [ ] Amber banner renders on `/scopes/:id` when latest scan
   untrustworthy. Click expands warnings list.
 - [ ] Scopes list row chip + scan rows chip wired to
@@ -186,11 +200,119 @@ fields in OpenAPI).
 - [ ] Manual sections updated. Browser-checked.
 - [ ] Live FSS scan that simulates a SAST stall (kill claude-p) shows
   the banner correctly. SCA sweep still runs.
+- [ ] Live FSS scan that simulates an SCA stall (force cdxgen_failed)
+  shows the banner correctly. SAST recheck cleanup branches no-op
+  but `still_present` verdicts still apply.
 - [ ] Version bump, PROGRESS.md entry.
 
 ---
 
 ## Phase B — `maybe_fixed` state machine (M13)
+
+### B0. Triage field unification (pre-step for the state machine work)
+
+Today the two issue tables have asymmetric, partially-misleading
+triage-related field names. Pre-1.0 is the right time to fix it; the
+state-machine work in B1+ is easier on top of a coherent base.
+
+**The asymmetry today:**
+
+| Concept | `sca_issues` | `sast_issues` |
+|---|---|---|
+| Operator triage state | `dismissed_status` | `triage_status` |
+| Operator action timestamp | `dismissed_at` | `suppressed_at` (misnamed — used for any non-pending status) |
+| Operator who acted | `dismissed_by_user_id` | `suppressed_by_user_id` (misnamed — same) |
+| Operator's short reason | `dismissed_reason` | `suppressed_reason` (misnamed — same) |
+| Free-text operator notes | `notes` | *(missing)* |
+| LLM-set reasoning narrative | *(n/a — no LLM triage on SCA)* | `triage_reasoning` |
+| LLM telemetry | *(n/a)* | `triage_confidence`, `triage_model`, `triage_input_tokens`, `triage_output_tokens` |
+
+Two problems:
+1. **Same concept, different names across tables.** Fixed by aligning
+   on the `triage*` prefix (better than `dismissed*` because operator
+   actions include confirming and planning, not just dismissing).
+2. **`suppressed*` on SAST is misleading.** The fields are stamped on
+   every non-pending operator action, not just suppression — calling
+   them `suppressedAt` is actively wrong for a `confirmed` or
+   `planned` operator action. Confused me; will confuse the next
+   contributor.
+
+**The target schema (both tables):**
+
+```
+triage_status         text   default 'pending'
+triaged_at            timestamptz null
+triaged_by_user_id    uuid   null
+triage_reason         text   null     -- operator's short reason
+notes                 text   null     -- free-text operator notes
+```
+
+Plus on `sast_issues` only (LLM-specific, kept as-is but the polysemy
+in `triage_reasoning` gets resolved):
+
+```
+llm_triage_reasoning  text   null     -- rename of triage_reasoning;
+                                      -- LLM-set narrative only
+triage_confidence     float  null     -- LLM-set, unchanged
+triage_model          text   null     -- LLM-set, unchanged
+triage_input_tokens   int    null
+triage_output_tokens  int    null
+```
+
+**Migration steps:**
+
+1. New migration `unify_triage_fields`:
+   - On `sca_issues`: rename `dismissed_status` → `triage_status`,
+     `dismissed_at` → `triaged_at`, `dismissed_by_user_id` →
+     `triaged_by_user_id`, `dismissed_reason` → `triage_reason`.
+   - On `sast_issues`: rename `suppressed_at` → `triaged_at`,
+     `suppressed_by_user_id` → `triaged_by_user_id`,
+     `suppressed_reason` → `triage_reason`, `triage_reasoning` →
+     `llm_triage_reasoning`. Add `notes` (nullable text).
+   - Update indexes that reference the renamed columns
+     (`@@index([scopeId, triageStatus])` on both, already exists for
+     SAST under that name; SCA's `@@index([scopeId, dismissedStatus])`
+     gets recreated).
+2. Update `schema.prisma` field declarations + `@map` directives.
+3. Generate Prisma client.
+4. Find-and-replace across `backend/src/` for the renamed identifiers
+   (predictable scope — every reference is in the SCA route handler,
+   issueService, mappers, scaIssueToOut, the dismiss endpoint, tests).
+5. Update Zod schemas:
+   - Drop `ScaDismissedStatusSchema`; alias `ScaTriageStatusSchema =
+     SastTriageStatusSchema` (or just have one shared
+     `IssueTriageStatusSchema` and use it both sides).
+   - `ScaIssueDismissBodySchema` → `ScaIssueTriageBodySchema` (and
+     align field names with the SAST body).
+6. Rename the endpoint `POST /api/sca-issues/:id/dismiss` →
+   `POST /api/sca-issues/:id/triage` for symmetry with the SAST
+   endpoint. There are no external integrations yet (pre-1.0), so
+   breaking the URL is acceptable. Mention in PROGRESS.md so the
+   change is discoverable for anyone with a curl bookmark.
+7. Frontend: regenerate `schema.d.ts`; update the SCA mutation
+   call-sites that hit `/dismiss` to hit `/triage` with the unified
+   body shape; rename any `dismissedStatus` references in components.
+8. Update manual sections: `sca-issues.md` and `sast-issues.md`
+   reference the new field names + endpoint.
+
+**Why include this in M13:**
+
+- B1's new `maybe_fixed` value applies to ONE column. Doing the
+  rename first means we add the value once, not in two namespaces
+  that need to converge later.
+- B4's re-detection auto-revert logic in
+  `upsertScaIssueFromDetection` is cleaner when the field name
+  matches the SAST side (the code pattern is genuinely identical).
+- B5's two new endpoints can adopt the unified naming from day one.
+
+**What this does NOT change:**
+
+- The two underlying tables stay separate. SCA findings and SAST
+  findings have genuinely different data models (CVE/package/severity
+  vs file/line/CWE); a single `issues` table would be wrong.
+- LLM telemetry stays on SAST only. SCA doesn't use an LLM for
+  triage today.
+- Existing data: no row content changes, just column renames.
 
 ### B1. New state value
 
@@ -355,6 +477,9 @@ new schema column).
 
 ### Phase B exit criteria
 
+- [ ] Migration `unify_triage_fields` committed (B0). SCA + SAST
+  field renames applied. All call sites updated. `/api/sca-issues/:id/dismiss`
+  renamed to `/api/sca-issues/:id/triage`.
 - [ ] Migration `add_prior_status` committed.
 - [ ] Schemas updated with `maybe_fixed`; OpenAPI regenerated.
 - [ ] SCA worker sweep emits `maybe_fixed` + captures `priorStatus`.
