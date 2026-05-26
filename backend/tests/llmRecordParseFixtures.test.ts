@@ -498,6 +498,43 @@ describe("LLM reachability record schema — call_sites string shorthand", () =>
     }
   });
 
+  // Regression: 2026-05-26 GoPxL BE v0.12.3 scan. All 25 captured parse-error
+  // samples used `"kind":"sca_reachability"` instead of `"kind":"reachability"`.
+  // The union discriminator rejected before any field-level alias could run.
+  it("accepts kind:'sca_reachability' as alias for 'reachability'", () => {
+    const result = ReachabilityRecord.safeParse({
+      kind: "sca_reachability",
+      sca_issue_id: "abc",
+      reachable: false,
+      reasoning: "not in firmware path",
+      call_sites: [],
+      confidence: 0.9,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.kind).toBe("reachability");
+    }
+  });
+
+  it("DetectionRecord union narrows sca_reachability to ReachabilityRecord", async () => {
+    // The union of (SastRecord, SastAbsenceRecord, ReachabilityRecord, CompleteRecord)
+    // must pick the reachability branch when given the alias kind.  Imported here
+    // since the simple ReachabilityRecord test doesn't exercise the union path.
+    const { DetectionRecord } = await import("../src/services/llmSastService.js");
+    const result = DetectionRecord.safeParse({
+      kind: "sca_reachability",
+      sca_issue_id: "abc",
+      reachable: false,
+      reasoning: "...",
+      call_sites: [],
+    });
+    expect(result.success).toBe(true);
+    if (result.success && "sca_issue_id" in result.data) {
+      expect(result.data.kind).toBe("reachability");
+      expect(result.data.sca_issue_id).toBe("abc");
+    }
+  });
+
   it("still accepts the canonical {file_path, line} object form", () => {
     const result = ReachabilityRecord.safeParse({
       kind: "reachability",

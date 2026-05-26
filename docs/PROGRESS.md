@@ -4,6 +4,90 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-26 — `sca_reachability` discriminator drift + scan healed-by-context (v0.12.4)
+
+Second re-run after v0.12.3 (GoPxL BE, scan `08f2bb07`) was a partial
+win: every fix from v0.12.2 and v0.12.3 held, but a new drift class
+emerged that the field-level aliases couldn't catch.
+
+**What we saw.**
+
+- **All v0.12.3 fixes worked.** Detection emitted zero `cwe_id` records,
+  zero string-confidence records, and the SBOM augmentation phase
+  finished cleanly (`exitCode: 0`, 50 records, parseErrors: 0) — fully
+  recovering from the prior `exit 1` crash. SBOM recheck, OSV, EOL all
+  green.
+- **One new drift shape, uniform across the failure.** Detection
+  emitted 39 / 57 records (68%) with `"kind":"sca_reachability"` instead
+  of the schema-canonical `"kind":"reachability"`. The model coined a
+  more descriptive name ("reachability for an SCA finding"). All 25
+  persisted samples — the freshly-bumped 25-sample cap was load-bearing
+  here, would have hidden the uniformity at 5 — showed the same shape.
+- **The trustworthiness gates fired correctly.** 68% > 25% threshold AND
+  39 > 10 absolute-count guard → warning escalated to `error`, scan
+  marked `failed`, SCA auto-fix sweep skipped, recheck `fixed` and
+  `file_deleted` branches no-op'd. The 18 records that DID parse were
+  persisted to `sast_issues` for audit but the scope did not pivot to
+  them. M12 contract held.
+- **The 25-sample cap was the diagnostic win.** Eight scans into this
+  drift-chase loop, we now know: drift shapes tend to be uniform within
+  a run. The 5-cap previously hid that uniformity behind partial views;
+  the 25-cap reveals it in one shot, so a single failed scan is enough
+  to identify the drift and ship the alias. Cost: 50 KB max in the
+  warning JSONB. Worth it.
+
+**What shipped.**
+
+- **`ReachabilityRecord.kind`** now accepts both `"reachability"` and
+  `"sca_reachability"` via `z.union([z.literal(...), z.literal(...)]).transform(...)`,
+  collapsing to canonical `"reachability"` after parse. The transform
+  preserves the downstream contract — no change needed in
+  `persistDetection` or `persistReachabilityRecords` because they see
+  the canonical kind. This is the first **discriminator-level** alias
+  we've shipped — different from the field-level alias pattern because
+  the union has to narrow correctly before any `.refine` runs.
+- **Prompt pinning.** Added a short paragraph in `sast_detection.md`
+  enumerating the four valid kind values (`sast` / `sast_absence` /
+  `reachability` / `complete`) and explicitly calling out the
+  reachability vs sca_reachability drift.
+- **Two new tests** in `tests/llmRecordParseFixtures.test.ts`: one
+  exercising `ReachabilityRecord.safeParse` on the alias kind, one
+  exercising the `DetectionRecord` union narrowing path (since z.union
+  picks ReachabilityRecord by trying each branch — confirming the alias
+  doesn't accidentally collide with another branch).
+- **Version bump 0.12.3 → 0.12.4 (PATCH).**
+
+**What we learned.**
+
+- **The drift surface is wider than field names.** v0.12.2/v0.12.3
+  aliased fields *within* a record; v0.12.4 aliases the discriminator
+  that picks *which* record schema to use. Both are LLM-drift defenses
+  but at different layers. Both deserve "translation layer at the LLM
+  boundary" treatment.
+- **The model's drift names tend to be descriptive.** `cwe_id`,
+  `sca_reachability` — these are reasonable names a human reviewer
+  would understand. The prompt is the source of authority on the
+  *exact* spelling, but the LLM keeps drifting toward
+  community/descriptive conventions on long-running tasks. The
+  schema-as-translation-layer approach handles this gracefully.
+- **`exit 1` on the prior run's SBOM augmentation phase quietly
+  self-healed.** Same prompt, same model, same scope, same input — but
+  v0.12.3's run succeeded where v0.12.2's run crashed. We never
+  diagnosed the prior crash (stderr wasn't captured); the
+  intermittent-failure pattern suggests an upstream LLM/network issue
+  rather than a code path. Worth wiring up the stderr-on-nonzero-exit
+  logging if it happens again (queued in [[project_pending_features]]).
+
+**Next-session direction.** User raised the right strategic question:
+instead of chasing aliases reactively, give the LLM a record-validator
+tool it can invoke during its session so it self-corrects in real time.
+Plan and prototype that in a fresh session — handoff doc captures the
+tradeoffs and concrete first step. The alias chase converges, but each
+unseen drift shape costs a failed scan (~$8). Self-validation flips
+that to proactive.
+
+---
+
 ## 2026-05-26 — Two more LLM drift shapes: confidence-as-string + summary-less absence (v0.12.3)
 
 First re-run after v0.12.2 (GoPxL BE, scan `121d8e56`) dropped 14/25 SAST

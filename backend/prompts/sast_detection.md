@@ -128,6 +128,11 @@ scans — the JSON examples below are authoritative.
 as a fallback but the canonical shape is a 0..1 float — that's what the
 schema and the downstream UI expect. This applies to every record kind.
 
+**The `kind` field must be one of `"sast"`, `"sast_absence"`, `"reachability"`,
+or `"complete"` — nothing else.** In particular, reachability records use
+`"kind":"reachability"`, NOT `"sca_reachability"`. The parser tolerates that
+alias but the canonical name is what every example below uses.
+
 **Every `sast_absence` MUST emit a `summary`** in addition to `reasoning`.
 The summary is the one-line title an operator reads in the list view;
 `reasoning` is the multi-sentence detail. Don't conflate the two — the

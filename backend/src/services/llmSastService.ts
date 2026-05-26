@@ -211,7 +211,17 @@ function parseCallSiteShorthand(s: string): { file_path: string; line: number } 
 }
 
 export const ReachabilityRecord = z.object({
-  kind: z.literal("reachability"),
+  // Accept canonical "reachability" and LLM-drift "sca_reachability".
+  // 2026-05-26 GoPxL BE v0.12.3 scan emitted 39/57 records with
+  // `"kind":"sca_reachability"` — the model coined a more descriptive
+  // name ("reachability for an SCA finding") and the strict z.literal
+  // rejected at the union discriminator level, BEFORE any field-level
+  // alias could help. The transform collapses both to "reachability"
+  // so downstream code (persistDetection, persistReachabilityRecords)
+  // doesn't need to know about the alias.
+  kind: z
+    .union([z.literal("reachability"), z.literal("sca_reachability")])
+    .transform(() => "reachability" as const),
   sca_issue_id: z.string(),
   reachable: z.boolean(),
   confidence: ConfidenceSchema,
