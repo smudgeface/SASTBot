@@ -89,3 +89,16 @@ discarded as noise.
 
 When you have nothing to report, emit a single `{"kind":"complete", ...}` record
 and exit. Do not summarize what you didn't find.
+
+# Output schema (authoritative)
+
+Each JSON-Lines record you emit must validate against the schema below.
+Field names are case-sensitive. Use the **canonical** names exactly as
+listed — aliases (`cwe_id`, `file`, `title`, `description`, string-label
+confidence, `sca_reachability`) are not part of the contract. Required
+fields must always be present. The schema is a `union` (`anyOf`) over the
+record types this phase emits — match exactly one branch per line.
+
+```json
+{{OUTPUT_SCHEMA}}
+```

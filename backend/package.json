@@ -1,6 +1,6 @@
 {
   "name": "sastbot-backend",
-  "version": "0.12.4",
+  "version": "0.12.5",
   "private": true,
   "description": "SASTBot backend — Fastify + Prisma + BullMQ",
   "type": "module",
@@ -43,7 +43,8 @@
     "pino": "^8.20.0",
     "prisma": "^5.12.1",
     "yaml": "^2.8.3",
-    "zod": "^3.22.4"
+    "zod": "^3.22.4",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

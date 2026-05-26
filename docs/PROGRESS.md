@@ -4,6 +4,122 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-26 — M13 Phase A: derived JSON Schema embedded in system prompts (v0.12.5)
+
+First step of the M13 pivot away from the reactive alias chase. Through
+v0.12.0 → v0.12.4 we shipped seven Zod aliases as drift was discovered,
+each at the cost of one $7-8 failed scan. M13's premise is to enforce
+the canonical shape at the API boundary with `claude -p --json-schema`
+(Phase B). Phase A is the cheap, additive groundwork: a clean
+structural schema, derived from Zod, embedded into the system prompts
+so the model sees the contract on every call.
+
+**What shipped.**
+
+- `backend/src/services/jsonSchema.ts` — canonical-only Zod schemas
+  (no `.refine()` / `.transform()` alias machinery) and six builder
+  functions:
+  - `buildDetectionRecordSchema()`, `buildRecheckRecordSchema()`,
+    `buildSbomRecordSchema()` — per-JSONL-line unions used by Phase A
+    prompt embedding (each line matches one branch of `anyOf`).
+  - `buildDetectionSchema()`, `buildRecheckSchema()`,
+    `buildSbomAugmentationSchema()` — wrapper schemas
+    (`{findings, complete}` / `{verdicts, complete}` / `{keeps, drops,
+    adds}`) for Phase B when `--json-schema` consumes one final JSON
+    value rather than a stream. Phase A doesn't pass these anywhere
+    yet; they exist so Phase B can pick them up without re-derivation.
+- `zod-to-json-schema` (~3 KB, MIT, no security history) added to
+  the backend; configured with `$refStrategy: "none"` so every
+  subschema is inlined — Claude prohibits recursive `$ref`.
+- `validateClaudeFeatures()`, `countOptionalProperties()`,
+  `countAnyOfBranches()` helpers walk a generated schema and check
+  it against Claude's structured-output feature list (no `oneOf`,
+  no `$ref`, `additionalProperties:false` on every object, no
+  `minItems > 1`, ≤24 optional params, ≤16 anyOf branches).
+- Two new template tokens: `{{OUTPUT_SCHEMA}}` in
+  `backend/prompts/sast_system.md` and `backend/prompts/sbom_system.md`.
+  The three callers (`runDetection`, `runRecheck`,
+  `runSbomAugmentation`) pass the appropriate per-record schema.
+- `backend/tests/jsonSchema.test.ts` — 40 unit tests covering both
+  schema shapes, the feature-list compliance walk, and the canonical
+  field-name assertions (cwe required, not cwe_id; kind=reachability,
+  not sca_reachability; etc.). Full suite green at **407/407**.
+
+**Two-schema shape — and why.** The plan originally specified a single
+wrapper schema per phase. While writing Phase A I realised the wrapper
+describes the **Phase B output value** (`{findings: [...], complete:
+{...}}`) — but Phase A still emits **JSONL**. Embedding a wrapper into
+a prompt that says "emit each record as a JSONL line, the orchestrator
+collects them" is muddled: JSON Schema describes a single JSON value,
+not a stream of values. The fix was to expose two schemas per phase:
+the per-record union for Phase A's prompt embedding, the wrapper for
+Phase B's `--json-schema`. Same Zod building blocks; different
+top-level composition.
+
+**Verification — all four constraints clean.**
+
+- `validateClaudeFeatures()` returns `[]` for every produced schema.
+- No `oneOf` — `zod-to-json-schema` compiles `z.union(...)` to `anyOf`.
+- `additionalProperties: false` is emitted by default for both
+  `z.object({...})` (strip mode) and `z.object({...}).strict()` —
+  verified by smoke test before writing builders.
+- Complexity caps: detection record schema has 9 optional params and
+  4 anyOf branches; recheck has 7/2; sbom has 8/3. Well under
+  Claude's 24/16 ceilings.
+
+**Three-file version bump per policy.** `backend/package.json` and
+`frontend/package.json` (+ lockfile) and `APP_VERSION` in
+`backend/src/routes/version.ts` all moved 0.12.4 → 0.12.5. Verified
+with `curl -s http://localhost:8000/version | jq .app` after restart.
+
+**What we learned.**
+
+- **Prompt embedding ≠ API enforcement, and the difference matters
+  for the schema shape.** Phase B's wrapper schema is the right thing
+  to pass to `--json-schema`, but it's the wrong thing to teach the
+  model in a prompt that documents a JSONL protocol. Two builders is
+  worth the small duplication; one would have been misleading.
+- **`additionalProperties: false` is the load-bearing constraint
+  here.** Without it, the model can keep emitting `cwe_id` alongside
+  `cwe` and the schema would happily accept the record. With it,
+  Claude's structured-output validator rejects the record and forces
+  a retry. The seven Zod aliases stay as defense-in-depth for the
+  dry-run CLI and unit tests, but the API path no longer has any
+  reason to fall back on them.
+- **Smoke-test the schema-generation library before the rest of the
+  module.** Before writing builders I confirmed via a one-shot Node
+  REPL that `zod-to-json-schema` defaults to `additionalProperties:
+  false`, emits `anyOf` for unions, and inlines correctly with
+  `$refStrategy: "none"`. Skipping that and writing a wrapper to
+  post-process the output would have been a few hours of dead work.
+- **PR-style ordering.** Phase A is shipping alone, with no functional
+  output change — the goal is to observe whether the in-prompt schema
+  alone reduces parse errors on the next GoPxL BE re-run, BEFORE
+  spending Phase B's effort. If parse errors drop to near-zero from
+  Phase A alone, Phase B's API-side enforcement becomes belt + suspenders
+  rather than the primary mitigation. Either outcome is informative.
+
+**Next.** Smoke test on FSS (cheap, $3-4) to confirm the prompt
+expansion doesn't break basic operation; then queue a GoPxL BE re-run
+to gather Phase A's drift-reduction signal. Phase B (`--json-schema`
+for detection) is the next ship; Phase C (recheck + SBOM augmentation)
+folds in after.
+
+**Files touched.**
+
+- `backend/package.json`, `backend/pnpm-lock.yaml` — new dep.
+- `frontend/package.json`, `frontend/package-lock.json` — version sync.
+- `backend/src/routes/version.ts` — `APP_VERSION = "0.12.5"`.
+- `backend/src/services/jsonSchema.ts` — new module.
+- `backend/src/services/llmSastService.ts`,
+  `backend/src/services/llmSbomService.ts` — schema injection at the
+  three `loadPrompt(...)` call sites.
+- `backend/prompts/sast_system.md`, `backend/prompts/sbom_system.md` —
+  new "Output schema (authoritative)" section.
+- `backend/tests/jsonSchema.test.ts` — 40 unit tests.
+
+---
+
 ## 2026-05-26 — `sca_reachability` discriminator drift + scan healed-by-context (v0.12.4)
 
 Second re-run after v0.12.3 (GoPxL BE, scan `08f2bb07`) was a partial

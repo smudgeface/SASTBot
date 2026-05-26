@@ -144,3 +144,16 @@ file exactly — copy it verbatim. Do not normalise or reformulate it.
 
 Do not emit a record for components you haven't assessed. Do not emit a
 `complete` sentinel — the orchestrator treats session end as completion.
+
+# Output schema (authoritative)
+
+Each JSON-Lines record you emit must validate against the schema below.
+Field names are case-sensitive. Use the **canonical** names exactly as
+listed — legacy aliases (`evidence_paths`, `evidence_path`) are not part
+of the contract. Required fields must always be present. The schema is a
+`union` (`anyOf`) over the three record types (`keep`, `drop`, `add`) —
+match exactly one branch per line.
+
+```json
+{{OUTPUT_SCHEMA}}
+```

@@ -30,6 +30,7 @@ import { loadConfig } from "../config.js";
 import { decodeCredential } from "./credentialService.js";
 import { getOrCreateSettings } from "./settingsService.js";
 import { loadPrompt } from "./promptLoader.js";
+import { buildSbomRecordSchema } from "./jsonSchema.js";
 import type { CdxComponent } from "./sbomService.js";
 import {
   matchComponent,
@@ -458,7 +459,9 @@ export async function runSbomAugmentation(
       ? input.vendoredDirs.map((d) => `  - ${d}`).join("\n")
       : "  (none configured)";
 
-  const systemPrompt = loadPrompt("sbom_system", {});
+  const systemPrompt = loadPrompt("sbom_system", {
+    OUTPUT_SCHEMA: JSON.stringify(buildSbomRecordSchema(), null, 2),
+  });
   const userPrompt = loadPrompt("sbom_augmentation", {
     SBOM_FILE: sbomFilePath,
     SCOPE_PATH: input.scopeDir,

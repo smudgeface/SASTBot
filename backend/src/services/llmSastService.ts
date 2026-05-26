@@ -22,6 +22,7 @@ import { readSourceSnippet } from "./sourceSnippet.js";
 import { toRepoRelative, toScopeRelative } from "./scopePath.js";
 import { getOrCreateSettings } from "./settingsService.js";
 import { loadPrompt } from "./promptLoader.js";
+import { buildDetectionRecordSchema, buildRecheckRecordSchema } from "./jsonSchema.js";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
@@ -794,7 +795,9 @@ export async function runDetection(input: RunDetectionInput): Promise<RunDetecti
   const ignorePathsBlock = input.ignorePaths.length > 0
     ? input.ignorePaths.map((p) => `  - ${p}`).join("\n")
     : "  (none)";
-  const systemPrompt = loadPrompt("sast_system", {});
+  const systemPrompt = loadPrompt("sast_system", {
+    OUTPUT_SCHEMA: JSON.stringify(buildDetectionRecordSchema(), null, 2),
+  });
   const userPrompt = loadPrompt("sast_detection", {
     SCOPE_PATH: input.scopeDir,
     REPO_NAME: input.repoName,
@@ -1087,7 +1090,9 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
     : "";
   await fs.writeFile(duplicateTargetsPath, targetsJsonl, { encoding: "utf8", mode: 0o644 });
 
-  const systemPrompt = loadPrompt("sast_system", {});
+  const systemPrompt = loadPrompt("sast_system", {
+    OUTPUT_SCHEMA: JSON.stringify(buildRecheckRecordSchema(), null, 2),
+  });
   const userPrompt = loadPrompt("sast_recheck", {
     SCOPE_PATH: input.scopeDir,
     TOKEN_BUDGET: String(input.tokenBudget),
