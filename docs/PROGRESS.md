@@ -105,6 +105,56 @@ to gather Phase A's drift-reduction signal. Phase B (`--json-schema`
 for detection) is the next ship; Phase C (recheck + SBOM augmentation)
 folds in after.
 
+**Smoke test result — GoPxL BE re-run, scan `fa75432e`.** Skipped FSS
+per user direction; went straight to GoPxL BE because that repo
+surfaced every drift class we shipped aliases for. **Zero parse errors
+across all four LLM phases** — 663 records emitted, 0 dropped:
+
+| Phase | Records | Parse errors | Cost |
+|---|---|---|---|
+| SBOM augmentation | 500 (1 keep / 484 drop / 15 add) | 0 | $4.35 |
+| SBOM recheck | 100 candidates | 0 | $1.25 |
+| SAST detection | 45 records | 0 | $8.21 |
+| SAST recheck | 18 verdicts | 0 | $0.83 |
+| **Total** | **663** | **0** | **$14.64** |
+
+The 24 reachability records all parsed cleanly, confirming the model
+used the canonical `kind: "reachability"` rather than the v0.12.4
+`sca_reachability` drift (which would have been collapsed by the
+defense-in-depth Zod alias, but would not have produced 24 cleanly
+parsed records of that specific kind otherwise). Same shape for
+`cwe` vs `cwe_id`, `file_path` vs `file`, etc. — none of the seven
+aliases were exercised at the API boundary on this scan.
+
+Cost is ~1.9× the prior $7-8 baseline. The embedded schema adds
+~3-5 KB of input tokens per LLM round-trip, and the agentic SAST
+phase made 169 requests — that's where the input-token cost shows
+up. Detection alone went $5 → $8.21. This is above the plan's
+"within 1.5×" Phase B target. Two ways to read it:
+
+1. The schema-in-prompt is a sledgehammer for the drift problem.
+   Phase B's `--json-schema` will move the schema from input-token
+   payload into the SDK's validation envelope (still input tokens,
+   but only once per call, not embedded in the every-turn system
+   prompt), AND remove the need for SASTBot to do Zod-level alias
+   handling on the production path. Cost should come down, not up.
+2. If Phase B's structured-output mode is more expensive than the
+   schema-in-prompt approach (which we won't know until we measure),
+   we'd need to choose between drift-resistance and cost. The
+   current evidence is that Phase A alone gets us to zero drift —
+   Phase B becomes risk-mitigation insurance rather than the
+   primary mitigation.
+
+Scan duration: 49 min (cdxgen 30s, llm_sbom ~16 min, llm_sbom_recheck
+~5 min, llm_detection ~24 min, llm_recheck ~2 min, rest seconds).
+Comparable to prior GoPxL BE runs.
+
+The trustworthiness gates didn't fire — no error-severity warnings
+emitted, scan finalized as `success`. The only warnings were two
+info-severity entries (`recheck_capped` from the existing 100-item
+SBOM recheck cap, and a benign `sast_duplicates_merged` for one
+de-duplicated SAST issue). Trustworthy result.
+
 **Files touched.**
 
 - `backend/package.json`, `backend/pnpm-lock.yaml` — new dep.
