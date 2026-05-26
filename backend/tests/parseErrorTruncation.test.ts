@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  PARSE_ERROR_ABSOLUTE_FAILURE_COUNT,
   PARSE_ERROR_FAILURE_THRESHOLD,
   PARSE_ERROR_RAW_MAX_BYTES,
   parseErrorSeverity,
@@ -85,7 +86,7 @@ describe("truncateParseErrors", () => {
   });
 });
 
-describe("parseErrorSeverity — M9 followups Issue 10", () => {
+describe("parseErrorSeverity — M9 followups Issue 10 + 2026-05-26 tightening", () => {
   it("escalates to error when 100% of records failed to parse", () => {
     // The closure-gate FSS scan dropped 74 / 74 SAST records this way.
     expect(parseErrorSeverity(0, 74)).toBe("error");
@@ -95,20 +96,23 @@ describe("parseErrorSeverity — M9 followups Issue 10", () => {
     expect(parseErrorSeverity(99, 1)).toBe("info");
   });
 
-  it("keeps info severity at 5% drop", () => {
+  it("keeps info severity at 5% drop (under both guards)", () => {
+    // 5 < absolute guard (10) AND 5/100 = 0.05 < ratio threshold (0.25).
     expect(parseErrorSeverity(95, 5)).toBe("info");
   });
 
-  it("escalates to error at exactly the threshold (50% by default)", () => {
-    expect(parseErrorSeverity(50, 50)).toBe("error");
+  it("escalates to error at exactly the ratio threshold (25% by default)", () => {
+    // Use small totals to isolate the ratio guard from the absolute-count guard.
+    // 5/20 = 0.25, exactly at threshold.
+    expect(parseErrorSeverity(15, 5)).toBe("error");
   });
 
-  it("keeps info just below the threshold (49.5%)", () => {
-    // 99/200 = 0.495 — just under the default 0.5 threshold.
-    expect(parseErrorSeverity(101, 99)).toBe("info");
+  it("keeps info just below the ratio threshold (~23.8%)", () => {
+    // 5/21 = 0.238 — under 0.25, and 5 < absolute guard.
+    expect(parseErrorSeverity(16, 5)).toBe("info");
   });
 
-  it("escalates to error above the threshold (60%)", () => {
+  it("escalates to error well above the ratio threshold (60%)", () => {
     expect(parseErrorSeverity(40, 60)).toBe("error");
   });
 
@@ -119,18 +123,52 @@ describe("parseErrorSeverity — M9 followups Issue 10", () => {
   });
 
   it("uses the constant PARSE_ERROR_FAILURE_THRESHOLD as the default", () => {
-    // Boundary case at the configured threshold should fire as error.
-    const errors = Math.ceil(PARSE_ERROR_FAILURE_THRESHOLD * 100);
-    const accepted = 100 - errors;
+    // Pick a small-scale fixture where the absolute-count guard doesn't fire,
+    // so we genuinely exercise the ratio threshold.  parseErrorCount strictly
+    // less than PARSE_ERROR_ABSOLUTE_FAILURE_COUNT keeps the absolute guard out
+    // of the way.
+    const errors = PARSE_ERROR_ABSOLUTE_FAILURE_COUNT - 1; // e.g. 9
+    const accepted = Math.ceil(errors / PARSE_ERROR_FAILURE_THRESHOLD) - errors;
+    // accepted+errors total satisfies (errors / total) >= threshold.
     expect(parseErrorSeverity(accepted, errors)).toBe("error");
-    // One fewer error should drop back to info.
+    // One fewer error keeps ratio below threshold AND keeps absolute under guard.
     expect(parseErrorSeverity(accepted + 1, errors - 1)).toBe("info");
   });
 
   it("respects a custom threshold override", () => {
-    // Stricter threshold (10%): 5/100 drop ratio is still info.
+    // Stricter threshold (10%): 5/100 drop ratio is still info AND under absolute guard.
     expect(parseErrorSeverity(95, 5, 0.1)).toBe("info");
-    // But 11/100 trips it.
+    // 11/100: above 10% ratio and absolute count crosses 10.
     expect(parseErrorSeverity(89, 11, 0.1)).toBe("error");
+  });
+
+  // Absolute-count guard — added 2026-05-26 (GoPxL BE post-mortem).
+  // The ratio-only model under-fires on large scans that drop a meaningful
+  // absolute count of findings (10+ dropped is concerning even at 1% ratio).
+
+  it("absolute-count guard: 10 dropped on a huge scan still escalates to error", () => {
+    // 10/1010 = 0.0099 — well under the 0.25 ratio threshold.  The absolute
+    // guard catches this so a large scan that quietly loses 10 real findings
+    // is treated as degraded rather than rubber-stamped.
+    expect(parseErrorSeverity(1000, 10)).toBe("error");
+  });
+
+  it("absolute-count guard: 9 dropped on a huge scan stays info", () => {
+    // 9/1009 = 0.0089 — under both guards.
+    expect(parseErrorSeverity(1000, 9)).toBe("info");
+  });
+
+  it("absolute-count guard: respects a custom absolute override", () => {
+    // 5 dropped, threshold 0.5 (loose), absolute set to 5 — fires on absolute.
+    expect(parseErrorSeverity(95, 5, 0.5, 5)).toBe("error");
+    // 4 dropped under the same overrides — neither guard fires.
+    expect(parseErrorSeverity(96, 4, 0.5, 5)).toBe("info");
+  });
+
+  it("absolute-count guard: 0 dropped never escalates regardless of low absolute", () => {
+    // Defensive: even if the absolute guard is tuned absurdly low, 0 drops
+    // can't fire it (caller is expected to short-circuit on parseErrorCount===0
+    // anyway, but the helper shouldn't surprise the caller).
+    expect(parseErrorSeverity(100, 0, 0.25, 1)).toBe("info");
   });
 });

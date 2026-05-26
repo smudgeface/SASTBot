@@ -68,23 +68,34 @@ export const PARSE_ERROR_RAW_MAX_BYTES = 2048;
  * the scan is treated as untrustworthy: the M6i `hasErrorWarnings` gate flips
  * to true, blocking the SCA auto-fix sweep and the `lastScanRunId` advance.
  *
- * Picked at 0.5 because:
- *   - It captures the worst-case "LLM returned nothing parseable" outcome
- *     (ratio = 1.0) that the closure-gate run surfaced (M9 followups Issue 10).
- *   - It tolerates one or two unparseable records on a large scan (ratio < 0.05)
- *     without burning the trustworthiness gate on minor drift.
- *   - 50% is an obvious operator-explainable line: "more than half the records
- *     were lost → don't trust the scan".
+ * Tightened from 0.5 → 0.25 on 2026-05-26 after the GoPxL BE scan dropped 24
+ * real SAST findings (29%) under a `cwe_id` vs `cwe` schema mismatch. The
+ * 0.5 ceiling let the scan complete as `success` with the misleading `info`
+ * warning, so the SCA sweep ran against a partial detection set. 0.25 is the
+ * lowest ratio that still tolerates 1–2 stray-line parse errors on a large
+ * scan without burning the trustworthiness gate.
  *
  * Operator-tunable in code only — this is a quality threshold, not a user knob.
  */
-export const PARSE_ERROR_FAILURE_THRESHOLD = 0.5;
+export const PARSE_ERROR_FAILURE_THRESHOLD = 0.25;
+
+/**
+ * Absolute-count guard for `llm_*_parse_errors`: at or above this many dropped
+ * records the warning escalates to `error` regardless of drop ratio. Catches
+ * small-scope cases where `total` is small enough that the ratio guard alone
+ * is too permissive (e.g. 9 accepted / 9 dropped is exactly the 0.5 ratio but
+ * only 9 dropped findings — still concerning) AND large-scope cases where the
+ * ratio drifts below threshold but the absolute count is large enough that the
+ * scan should still be treated as degraded.
+ */
+export const PARSE_ERROR_ABSOLUTE_FAILURE_COUNT = 10;
 
 /**
  * Decide the severity of an `llm_*_parse_errors` warning from the relative size
  * of the accepted and rejected record sets. Escalates to `error` when the LLM
- * dropped a critical fraction of its emitted records — see
- * `PARSE_ERROR_FAILURE_THRESHOLD` for rationale.
+ * dropped a critical fraction of its emitted records, OR when the absolute
+ * count of dropped records crosses `PARSE_ERROR_ABSOLUTE_FAILURE_COUNT` —
+ * whichever fires first.
  *
  * `acceptedCount` is the number of records that survived Zod parsing.
  * `parseErrorCount` is the number that failed. The caller is expected to skip
@@ -96,9 +107,11 @@ export function parseErrorSeverity(
   acceptedCount: number,
   parseErrorCount: number,
   threshold: number = PARSE_ERROR_FAILURE_THRESHOLD,
+  absoluteCount: number = PARSE_ERROR_ABSOLUTE_FAILURE_COUNT,
 ): "error" | "info" {
   const total = acceptedCount + parseErrorCount;
   if (total === 0) return "info";
+  if (parseErrorCount >= absoluteCount) return "error";
   const dropRatio = parseErrorCount / total;
   return dropRatio >= threshold ? "error" : "info";
 }

@@ -39,7 +39,15 @@ const SeverityEnum = z.enum(["critical", "high", "medium", "low", "info"]);
 
 export const SastRecord = z.object({
   kind: z.literal("sast"),
-  cwe: z.string(),
+  // Accept canonical name and LLM-drift alias.
+  cwe: z.string().optional(),
+  /** LLM-drift alias for cwe — normalized to cwe by .transform().
+   *  Observed on the 2026-05-25 GoPxL BE scan: all 5 stored parse-error
+   *  samples (out of 24 dropped records, 29% of detection output) emitted
+   *  "cwe_id":"CWE-321" instead of "cwe":"CWE-321" — the OWASP/CWE
+   *  community field-name convention. Records were otherwise complete
+   *  and well-formed; the schema's required `cwe` field was the only gap. */
+  cwe_id: z.string().optional(),
   severity: SeverityEnum,
   cvss_vector: z.string().optional(),
   // Accept canonical name and LLM-drift alias.
@@ -62,6 +70,9 @@ export const SastRecord = z.object({
   description: z.string().optional(),
   reasoning: z.string().optional(),
 }).refine(
+  (r) => !!(r.cwe || r.cwe_id),
+  { message: "must provide cwe or cwe_id" },
+).refine(
   (r) => !!(r.file_path || r.file),
   { message: "must provide file_path or file" },
 ).refine(
@@ -69,6 +80,7 @@ export const SastRecord = z.object({
   { message: "must provide summary or title" },
 ).transform((r) => ({
   ...r,
+  cwe: (r.cwe ?? r.cwe_id)!,
   file_path: (r.file_path ?? r.file)!,
   summary: (r.summary ?? r.title)!,
   reasoning: r.reasoning ?? r.description ?? "",
@@ -77,7 +89,11 @@ export type SastRecord = z.infer<typeof SastRecord>;
 
 export const SastAbsenceRecord = z.object({
   kind: z.literal("sast_absence"),
-  cwe: z.string(),
+  // Accept canonical name and LLM-drift alias (mirrors SastRecord — see the
+  // GoPxL BE 2026-05-25 cwe_id drift note above).
+  cwe: z.string().optional(),
+  /** LLM-drift alias for cwe — normalized to cwe by .transform(). */
+  cwe_id: z.string().optional(),
   severity: SeverityEnum,
   summary: z.string().optional(),
   /** LLM-drift alias for summary. */
@@ -98,10 +114,14 @@ export const SastAbsenceRecord = z.object({
   /** LLM-drift alias for reasoning. */
   description: z.string().optional(),
 }).refine(
+  (r) => !!(r.cwe || r.cwe_id),
+  { message: "must provide cwe or cwe_id" },
+).refine(
   (r) => !!(r.summary || r.title),
   { message: "must provide summary or title" },
 ).transform((r) => ({
   ...r,
+  cwe: (r.cwe ?? r.cwe_id)!,
   summary: (r.summary ?? r.title)!,
   // Internal field names kept as evidence_file/evidence_line so downstream
   // worker / SARIF / ingest code (which reads these by name across many

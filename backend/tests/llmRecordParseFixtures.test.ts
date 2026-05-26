@@ -101,6 +101,58 @@ describe("LLM SAST detection record schema — defensive aliases", () => {
       expect(result.data.reasoning).toBe("");     // default
     }
   });
+
+  // Regression: 2026-05-25 GoPxL BE scan emitted 24/82 records with the
+  // OWASP/CWE community field name `cwe_id` instead of the prompt-canonical
+  // `cwe`. The records were otherwise complete and well-formed (real
+  // CWE-321/CWE-798 hardcoded-credential findings on a production firmware
+  // codebase), but the schema rejected every one — a 29% drop with no
+  // surfaced parse-error sample shape that was clearly malformed.
+  it("normalizes cwe_id → cwe after parse (2026-05-25 GoPxL BE drift)", () => {
+    const result = SastRecord.safeParse({
+      kind: "sast",
+      cwe_id: "CWE-321",
+      severity: "high",
+      file_path: "src/secrets.cpp",
+      start_line: 19,
+      end_line: 23,
+      title: "Hardcoded symmetric cipher key",
+      description: "Static AES key baked into firmware.",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.cwe).toBe("CWE-321");
+    }
+  });
+
+  it("rejects a sast record with neither cwe nor cwe_id", () => {
+    const result = SastRecord.safeParse({
+      kind: "sast",
+      severity: "high",
+      file_path: "src/foo.cpp",
+      start_line: 1,
+      end_line: 1,
+      summary: "test",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("canonical cwe wins over cwe_id when both are present", () => {
+    const result = SastRecord.safeParse({
+      kind: "sast",
+      cwe: "CWE-79",
+      cwe_id: "CWE-WRONG",
+      severity: "high",
+      file_path: "src/foo.cpp",
+      start_line: 1,
+      end_line: 1,
+      summary: "test",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.cwe).toBe("CWE-79");
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -202,6 +254,21 @@ describe("LLM SAST absence record schema — canonical + legacy field-name alias
       expect(result.data.evidence_file).toBe("src/net.cpp");
       expect(result.data.evidence_line).toBe(12);
       expect(result.data.summary).toBe("No TLS anywhere");
+    }
+  });
+
+  it("normalizes cwe_id → cwe after parse (2026-05-25 GoPxL BE drift)", () => {
+    const result = SastAbsenceRecord.safeParse({
+      kind: "sast_absence",
+      cwe_id: "CWE-352",
+      severity: "high",
+      summary: "No CSRF protection",
+      file_path: "src/server.cpp",
+      start_line: 193,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.cwe).toBe("CWE-352");
     }
   });
 

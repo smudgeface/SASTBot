@@ -4,6 +4,92 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-26 — LLM SAST parse-error root cause: `cwe_id` field-name drift (v0.12.2)
+
+The 2026-05-25 GoPxL BE failed scan dropped 24/82 SAST detection
+records (29%). Initial hypothesis from worker-log triage was buffer /
+concat truncation (the 300-char log preview made the records look
+mid-word truncated). Wrong. The persisted warning details — read out
+of `scan_runs.warnings` JSONB after the fact — showed all 5 captured
+`raw` strings ending cleanly with `}` and containing balanced,
+structurally valid JSON. The Zod `"schema: : Invalid input"` reason
+(empty-path, top-level) was the union-mismatch error: every dropped
+record emitted `"cwe_id":"CWE-321"` (the OWASP/CWE community field
+name) instead of the prompt-canonical `"cwe":"CWE-321"` the schema
+requires. The buffer/concat path was a red herring — the existing
+`appendBlockText` + `extractJsonObjects` walker is correct and these
+records flowed through it intact, only to be rejected at the
+`SastRecord.safeParse` boundary downstream.
+
+**What shipped.**
+
+- **Schema alias for `cwe_id`** added to `SastRecord` and
+  `SastAbsenceRecord` in `backend/src/services/llmSastService.ts`,
+  mirroring the existing `file`/`file_path`, `title`/`summary`, and
+  `description`/`reasoning` alias pattern. `cwe` becomes optional;
+  either field is accepted; a new `.refine` rejects records with
+  neither; `.transform` normalizes to `cwe`. Five sanitized
+  regression cases in `backend/tests/llmRecordParseFixtures.test.ts`
+  exercise the drift shape and the boundary refines.
+- **Trustworthiness gate tightened.**
+  `PARSE_ERROR_FAILURE_THRESHOLD` in `backend/src/worker.ts:81`
+  dropped from `0.5` → `0.25`. The 0.5 ceiling let the GoPxL BE
+  scan complete as `success` with the misleading `info` warning, so
+  the SCA sweep ran against a partial detection set. 0.25 is the
+  lowest ratio that still tolerates 1–2 stray-line parse errors on
+  a large scan.
+- **Absolute-count guard added.** New
+  `PARSE_ERROR_ABSOLUTE_FAILURE_COUNT = 10` constant + an extra
+  `parseErrorCount >= absoluteCount` check in `parseErrorSeverity`.
+  Catches large-scan cases where the ratio drifts below 25% but the
+  absolute count is large enough that the scan should still be
+  treated as degraded (e.g. 10 / 1010 → ratio 1% but 10 real
+  findings lost is still a problem). Tests in
+  `backend/tests/parseErrorTruncation.test.ts` exercise both the
+  ratio path and the absolute-count path independently.
+- **Version bump 0.12.1 → 0.12.2 (PATCH — bug fix, no operator-
+  visible behavior change beyond fewer false-negative drops).**
+
+**What we learned.**
+
+- **Verify before fixing.** The prior session's diagnosis ("model
+  hitting per-message output cap, raw fields end mid-string with no
+  closing quote") was built on the 300-char preview in the worker
+  log line — a display truncation, not a content truncation. The
+  full `raw` strings persisted in `scan_runs.warnings.details`
+  ended at `}` cleanly. Cost of capturing the persisted records up
+  front: one psql query. Cost of acting on the wrong hypothesis:
+  potentially refactoring a sound streaming parser. The persisted
+  warning details (5 entries × 2KB each, ratified in M9) earned
+  their keep on exactly this debugging path — without them the
+  records were gone by the time the operator looked.
+- **Schema strictness vs LLM drift is a recurring shape.** The
+  M6 record schemas now carry four alias pairs:
+  `file`/`file_path`, `title`/`summary`, `description`/`reasoning`,
+  `cwe`/`cwe_id`. Plus the M9 reachability `call_sites` string
+  shorthand. Each was discovered the same way: a real production
+  scan dropped records, the persisted raw payloads revealed the
+  drift shape, an alias landed in the schema. Treating Zod
+  schemas at LLM boundaries as "translation layers" rather than
+  "strict contracts" is the pattern that holds up. The prompt
+  still teaches the canonical names, but the schema accepts
+  community-conventional aliases without burning a parse error.
+- **Two distinct failure modes need two distinct guards.** The
+  ratio-only model under-fires on large scans (10 lost findings
+  out of 1000 looks like 1% drift but is 10 real CVEs) and
+  over-fires on small scans (5 out of 10 looks dramatic but might
+  be 5 stray prose lines). The absolute-count guard catches the
+  former; the ratio guard catches the latter. Both are needed.
+- **Still TODO for the next pass.** The GoPxL BE failed scan also
+  surfaced `llm_sbom_augmentation_failed` (claude-p exit 1, zero
+  records, no stderr surfaced) — that's a separate investigation
+  queued in [[project_pending_features]]. Separately, the
+  `truncateParseErrors` 5-entry cap held up here but could grow
+  to 15–20 if drift shapes keep multiplying — operator triage of
+  drift needs more samples to be confident.
+
+---
+
 ## 2026-05-25 — M12 follow-up: cdxgen `--exclude-type bazel` (v0.12.1)
 
 First scan on GoPxL BE failed with `cdxgen_failed` because cdxgen
