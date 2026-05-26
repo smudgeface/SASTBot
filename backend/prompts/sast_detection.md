@@ -117,6 +117,12 @@ on its own. Do NOT wrap output in markdown code fences. Do NOT prefix or
 suffix records with prose. Stream records as you confirm them. Allowed
 shapes (shown below; emit on one line):
 
+**Field names are literal — spell them exactly as shown in the examples.**
+The parser reads `cwe` (not `cwe_id`), `file_path` (not `file`), `summary`
+(not `title`), `reasoning` (not `description`). Several open-source CWE
+datasets use `cwe_id` and that drift has cost us real findings on prior
+scans — the JSON examples below are authoritative.
+
 ### `kind: "sast"` — per-location finding
 
 ```
