@@ -4,6 +4,73 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-26 — Two more LLM drift shapes: confidence-as-string + summary-less absence (v0.12.3)
+
+First re-run after v0.12.2 (GoPxL BE, scan `121d8e56`) dropped 14/25 SAST
+records — the new 25% threshold + absolute-count guard fired correctly
+and marked the scan `failed`. The `cwe_id` alias eliminated that class
+of drift entirely (zero `cwe_id` errors), but two new shapes surfaced
+in the 5 persisted samples:
+
+- **`reachability` records with `"confidence":"high"` (string).** The
+  schema required a `0..1` number. Community convention is qualitative
+  labels (high/medium/low), and the model drifted to that.
+- **`sast_absence` records with `reasoning` but no `summary`/`title`.**
+  The schema required at least one of `summary` or `title`. The model
+  considered the long `reasoning` paragraph self-explanatory and omitted
+  the short summary.
+
+The 5-sample DB cap meant the other 9 dropped records were invisible,
+forcing an iterative fix-and-rerun cycle. Raised the cap to 25 so the
+next failure surfaces every shape at once (≤ 50 KB worst-case in the
+warning JSONB at PARSE_ERROR_RAW_MAX_BYTES = 2 KB each).
+
+**What shipped.**
+
+- **`ConfidenceSchema`** — a shared Zod schema in `llmSastService.ts`
+  that accepts either a `0..1` number (canonical) or a qualitative
+  string label, and normalizes to a number via `CONFIDENCE_LABEL_MAP`
+  (`high→0.9`, `medium→0.5`, `low→0.2`, `very high→0.95`, etc.).
+  Unknown labels fall back to `0.5`. Applied to `SastRecord`,
+  `SastAbsenceRecord`, and `ReachabilityRecord` — all three already
+  carry `confidence`, all three are at equal risk of the string drift.
+- **`SastAbsenceRecord` synthesizes a summary from reasoning** when
+  both `summary` and `title` are absent.  New `deriveSummaryFromReasoning`
+  helper returns the first sentence (up to 160 chars). The refine is
+  relaxed to require any one of summary/title/reasoning/description.
+- **`truncateParseErrors` default cap raised 5 → 25.**
+- **Prompt hardening** in `backend/prompts/sast_detection.md` —
+  two new short paragraphs in the "Output format" section: one pinning
+  `confidence` as a number not a label, one pinning sast_absence to
+  always emit a `summary` alongside `reasoning`.
+- **Tests.** Six new tests in `tests/llmRecordParseFixtures.test.ts`
+  (3 confidence-string variants across all three records, 1
+  summary-synthesis from reasoning, 1 fully-empty rejection, 1
+  numeric-confidence unchanged). One test in `tests/parseErrorTruncation.test.ts`
+  updated for the 25-entry cap, plus a new under-cap-passthrough test.
+- **Version 0.12.2 → 0.12.3 (PATCH).**
+
+**What we learned.**
+
+- **The 5-sample DB cap was a diagnostic bottleneck.** Two shapes
+  visible, three (or more) shapes invisible, forcing iterative scans
+  at ~$8 each.  Raising to 25 is a 5× improvement at ~50 KB worst-
+  case — negligible relative to the diagnostic cost.
+- **Schema alias families compound.** We now have alias rules for
+  `cwe`/`cwe_id`, `file`/`file_path`, `title`/`summary`,
+  `description`/`reasoning`, `evidence_*`/`file_*`, `call_sites` as
+  string-vs-object, and now `confidence` as number-vs-label. Each was
+  discovered by a production scan dropping records. The pattern of
+  "schema as translation layer at LLM boundaries" keeps paying back
+  more than "schema as strict contract" would.
+- **The new threshold/absolute-count guards correctly escalated this
+  failure.** Without v0.12.2 the 14/25 drop (56%) would have completed
+  as `success` with an `info` warning. Operator sees `failed` now and
+  knows to investigate. The schema fixes go above this guard — the
+  goal is zero drops, the guard is the safety net.
+
+---
+
 ## 2026-05-26 — LLM SAST parse-error root cause: `cwe_id` field-name drift (v0.12.2)
 
 The 2026-05-25 GoPxL BE failed scan dropped 24/82 SAST detection

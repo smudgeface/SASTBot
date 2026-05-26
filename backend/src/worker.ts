@@ -128,7 +128,13 @@ const TRUNCATION_SUFFIX = "…[truncated]";
  */
 export function truncateParseErrors(
   parseErrors: ReadonlyArray<{ raw: string; reason: string }>,
-  limit = 5,
+  // Raised 5 → 25 on 2026-05-26 after the GoPxL BE re-run dropped 14
+  // records: the 5-sample cap surfaced only 2 of the (at least) 3 drift
+  // shapes present in the run, forcing iterative diagnostic scans. With
+  // PARSE_ERROR_RAW_MAX_BYTES = 2 KB per entry the worst case is ~50 KB
+  // in the warning JSONB — within JSONB's comfortable range and a one-
+  // off cost only when the scan actually has drops.
+  limit = 25,
 ): Array<{ raw: string; reason: string }> {
   return parseErrors.slice(0, limit).map((e) => {
     const enc = new TextEncoder().encode(e.raw);

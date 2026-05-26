@@ -37,16 +37,28 @@ describe("truncateParseErrors", () => {
     expect(result[0].reason).toBe("too long");
   });
 
-  it("caps the number of entries to 5 by default", () => {
+  it("caps the number of entries to 25 by default", () => {
+    // Cap raised 5 → 25 on 2026-05-26 so a single failed scan can surface
+    // every drift shape the LLM exhibited rather than truncating diagnosis.
+    const input = Array.from({ length: 30 }, (_, i) => ({
+      raw: `line ${i}`,
+      reason: `reason ${i}`,
+    }));
+    const result = truncateParseErrors(input);
+    expect(result).toHaveLength(25);
+    // Verify order is preserved.
+    expect(result[0].raw).toBe("line 0");
+    expect(result[24].raw).toBe("line 24");
+  });
+
+  it("returns all entries unchanged when input is under the cap", () => {
     const input = Array.from({ length: 8 }, (_, i) => ({
       raw: `line ${i}`,
       reason: `reason ${i}`,
     }));
     const result = truncateParseErrors(input);
-    expect(result).toHaveLength(5);
-    // Verify order is preserved.
-    expect(result[0].raw).toBe("line 0");
-    expect(result[4].raw).toBe("line 4");
+    expect(result).toHaveLength(8);
+    expect(result[7].raw).toBe("line 7");
   });
 
   it("respects a custom limit", () => {

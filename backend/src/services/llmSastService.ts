@@ -37,6 +37,58 @@ const CLAUDE_GID = 1001;
 
 const SeverityEnum = z.enum(["critical", "high", "medium", "low", "info"]);
 
+/**
+ * Map qualitative confidence labels to numeric confidence values.
+ * Observed drift on the 2026-05-26 GoPxL BE re-run: reachability records
+ * emitted `"confidence":"high"` (string) instead of `"confidence":0.9`
+ * (number). The community convention is qualitative labels; the schema
+ * canonicalizes to numeric so downstream comparisons stay correct. The
+ * mapping is intentionally conservative — anything we don't recognize
+ * falls back to 0.5 (neither high-confidence nor low-confidence).
+ */
+const CONFIDENCE_LABEL_MAP: Record<string, number> = {
+  "very high": 0.95, highest: 0.95, max: 0.95,
+  high: 0.9,
+  "medium-high": 0.7, "moderate-high": 0.7,
+  medium: 0.5, moderate: 0.5, med: 0.5,
+  "medium-low": 0.3, "low-medium": 0.3,
+  low: 0.2,
+  "very low": 0.1, lowest: 0.1,
+  unknown: 0.5,
+};
+
+/**
+ * Defensive confidence schema: accepts either a 0..1 number (canonical)
+ * or a qualitative string label (drift). Normalizes to a number.
+ * Defaults to 0.5 when absent.
+ */
+const ConfidenceSchema = z
+  .union([
+    z.number().min(0).max(1),
+    z.string(),
+  ])
+  .optional()
+  .default(0.5)
+  .transform((c) => {
+    if (typeof c === "number") return c;
+    return CONFIDENCE_LABEL_MAP[c.toLowerCase().trim()] ?? 0.5;
+  });
+
+/**
+ * Derive a short summary from a longer reasoning paragraph when the LLM
+ * omits both `summary` and `title`.  First sentence (up to a period,
+ * exclamation, or question mark, or 160 chars — whichever comes first).
+ * Returns "" when reasoning is empty.  Observed on 2026-05-26 GoPxL BE
+ * re-run: 3 sast_absence records emitted with reasoning but no summary.
+ */
+function deriveSummaryFromReasoning(reasoning: string): string {
+  const trimmed = reasoning.trim();
+  if (!trimmed) return "";
+  const sentenceEnd = trimmed.search(/[.!?](\s|$)/);
+  if (sentenceEnd > 0 && sentenceEnd <= 160) return trimmed.slice(0, sentenceEnd + 1);
+  return trimmed.length > 160 ? trimmed.slice(0, 157) + "..." : trimmed;
+}
+
 export const SastRecord = z.object({
   kind: z.literal("sast"),
   // Accept canonical name and LLM-drift alias.
@@ -65,7 +117,7 @@ export const SastRecord = z.object({
   // the model emits it (back-compat / chatty models) but never trust it.
   snippet: z.string().optional(),
   // Soft fields — sensible defaults if the LLM didn't emit them.
-  confidence: z.number().min(0).max(1).default(0.5),
+  confidence: ConfidenceSchema,
   /** LLM-drift alias for reasoning — accepted but not required. */
   description: z.string().optional(),
   reasoning: z.string().optional(),
@@ -109,7 +161,7 @@ export const SastAbsenceRecord = z.object({
   file: z.string().optional(),
   start_line: z.number().int().nonnegative().optional(),
   evidence_line: z.number().int().nonnegative().optional(),
-  confidence: z.number().min(0).max(1).default(0.5),
+  confidence: ConfidenceSchema,
   reasoning: z.string().optional(),
   /** LLM-drift alias for reasoning. */
   description: z.string().optional(),
@@ -117,20 +169,30 @@ export const SastAbsenceRecord = z.object({
   (r) => !!(r.cwe || r.cwe_id),
   { message: "must provide cwe or cwe_id" },
 ).refine(
-  (r) => !!(r.summary || r.title),
-  { message: "must provide summary or title" },
-).transform((r) => ({
-  ...r,
-  cwe: (r.cwe ?? r.cwe_id)!,
-  summary: (r.summary ?? r.title)!,
-  // Internal field names kept as evidence_file/evidence_line so downstream
-  // worker / SARIF / ingest code (which reads these by name across many
-  // files) doesn't need a coordinated rename. The transform normalizes
-  // every input shape to the existing internal layout.
-  evidence_file: r.evidence_file ?? r.file_path ?? r.file ?? "",
-  evidence_line: r.evidence_line ?? r.start_line ?? 0,
-  reasoning: r.reasoning ?? r.description ?? "",
-}));
+  // Accept reasoning/description as a summary fallback. 2026-05-26 GoPxL BE
+  // re-run dropped 3 sast_absence records that had a long `reasoning` field
+  // but no explicit summary — the model considered the reasoning to be
+  // self-explanatory. We synthesize the summary from reasoning in the
+  // transform; this refine just guards against records with NO descriptive
+  // text at all.
+  (r) => !!(r.summary || r.title || r.reasoning || r.description),
+  { message: "must provide summary, title, reasoning, or description" },
+).transform((r) => {
+  const reasoning = r.reasoning ?? r.description ?? "";
+  const summary = r.summary ?? r.title ?? deriveSummaryFromReasoning(reasoning);
+  return {
+    ...r,
+    cwe: (r.cwe ?? r.cwe_id)!,
+    summary,
+    // Internal field names kept as evidence_file/evidence_line so downstream
+    // worker / SARIF / ingest code (which reads these by name across many
+    // files) doesn't need a coordinated rename. The transform normalizes
+    // every input shape to the existing internal layout.
+    evidence_file: r.evidence_file ?? r.file_path ?? r.file ?? "",
+    evidence_line: r.evidence_line ?? r.start_line ?? 0,
+    reasoning,
+  };
+});
 export type SastAbsenceRecord = z.infer<typeof SastAbsenceRecord>;
 
 /**
@@ -152,7 +214,7 @@ export const ReachabilityRecord = z.object({
   kind: z.literal("reachability"),
   sca_issue_id: z.string(),
   reachable: z.boolean(),
-  confidence: z.number().min(0).max(1).default(0.5),
+  confidence: ConfidenceSchema,
   // call_sites accepts THREE shapes:
   //   1. Canonical: {file_path, line, snippet?}
   //   2. Legacy file alias: {file, line, snippet?} (mirrors SastRecord)

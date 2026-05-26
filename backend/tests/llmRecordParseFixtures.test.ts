@@ -272,6 +272,37 @@ describe("LLM SAST absence record schema — canonical + legacy field-name alias
     }
   });
 
+  // Regression: 2026-05-26 GoPxL BE re-run. The model emitted 3
+  // sast_absence records with `reasoning` but no `summary` and no `title`.
+  // The schema now synthesizes summary from reasoning (first sentence).
+  it("synthesizes summary from reasoning when summary+title both absent", () => {
+    const result = SastAbsenceRecord.safeParse({
+      kind: "sast_absence",
+      cwe: "CWE-319",
+      severity: "high",
+      file_path: "GoRest/GoRest/Net/HttpServer/GrHttpServer.cpp",
+      start_line: 61,
+      confidence: 0.85,
+      reasoning: "Default port is 80 (plain HTTP) at L61 and no kHttpsServer / TLS handshake / certificate-loading code exists in the GoRest tree. Authentication, firmware-upload, and tool-locking traffic all flow over cleartext HTTP.",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.summary.length).toBeGreaterThan(0);
+      expect(result.data.summary).toContain("plain HTTP");
+    }
+  });
+
+  it("rejects sast_absence with no summary, title, reasoning, OR description", () => {
+    const result = SastAbsenceRecord.safeParse({
+      kind: "sast_absence",
+      cwe: "CWE-319",
+      severity: "high",
+      file_path: "src/x.cpp",
+      start_line: 1,
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("canonical file_path takes precedence over legacy evidence_file when both present", () => {
     // Defensive: if a producer sends both names (e.g. transitional output
     // during a prompt-version mixup), the legacy field wins — see transform
@@ -300,6 +331,91 @@ describe("LLM SAST absence record schema — canonical + legacy field-name alias
 // ---------------------------------------------------------------------------
 // Reachability call_sites — string shorthand drift (2026-05-23 FSS scan)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Reachability + SAST confidence string-label drift (2026-05-26 GoPxL BE)
+// ---------------------------------------------------------------------------
+
+describe("LLM record schemas — string-label confidence drift", () => {
+  // Regression: 2026-05-26 GoPxL BE re-run. Reachability records emitted
+  // `"confidence":"high"` (string) instead of `"confidence":0.9` (number).
+  // Schema now accepts both and maps qualitative labels to numbers.
+  it("ReachabilityRecord accepts confidence as 'high' string label", () => {
+    const result = ReachabilityRecord.safeParse({
+      kind: "reachability",
+      sca_issue_id: "33c35d52-22b2-4ff6-9fab-23f21d5901ac",
+      reachable: false,
+      reasoning: "Not in first-party code path.",
+      call_sites: [],
+      confidence: "high",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.confidence).toBe(0.9);
+    }
+  });
+
+  it("ReachabilityRecord accepts numeric confidence unchanged", () => {
+    const result = ReachabilityRecord.safeParse({
+      kind: "reachability",
+      sca_issue_id: "abc",
+      reachable: true,
+      confidence: 0.85,
+      call_sites: [],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.confidence).toBe(0.85);
+    }
+  });
+
+  it("ReachabilityRecord maps unknown confidence labels to 0.5", () => {
+    const result = ReachabilityRecord.safeParse({
+      kind: "reachability",
+      sca_issue_id: "abc",
+      reachable: false,
+      call_sites: [],
+      confidence: "ish",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.confidence).toBe(0.5);
+    }
+  });
+
+  it("SastRecord accepts confidence label", () => {
+    const result = SastRecord.safeParse({
+      kind: "sast",
+      cwe: "CWE-79",
+      severity: "high",
+      file_path: "src/x.cpp",
+      start_line: 1,
+      end_line: 1,
+      summary: "test",
+      confidence: "medium",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.confidence).toBe(0.5);
+    }
+  });
+
+  it("SastAbsenceRecord accepts confidence label", () => {
+    const result = SastAbsenceRecord.safeParse({
+      kind: "sast_absence",
+      cwe: "CWE-352",
+      severity: "high",
+      summary: "no CSRF",
+      file_path: "src/x.cpp",
+      start_line: 1,
+      confidence: "very high",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.confidence).toBe(0.95);
+    }
+  });
+});
 
 describe("LLM reachability record schema — call_sites string shorthand", () => {
   it("parses real rejected records from the 2026-05-23 FSS scan (call_sites as string[])", () => {

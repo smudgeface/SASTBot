@@ -123,6 +123,18 @@ The parser reads `cwe` (not `cwe_id`), `file_path` (not `file`), `summary`
 datasets use `cwe_id` and that drift has cost us real findings on prior
 scans — the JSON examples below are authoritative.
 
+**`confidence` is a number, not a label.** Emit `"confidence":0.9`, not
+`"confidence":"high"`. The parser tolerates the qualitative string form
+as a fallback but the canonical shape is a 0..1 float — that's what the
+schema and the downstream UI expect. This applies to every record kind.
+
+**Every `sast_absence` MUST emit a `summary`** in addition to `reasoning`.
+The summary is the one-line title an operator reads in the list view;
+`reasoning` is the multi-sentence detail. Don't conflate the two — the
+schema synthesizes a summary from `reasoning` as a fallback, but the
+result is just the first sentence of your reasoning, which is rarely the
+right title.
+
 ### `kind: "sast"` — per-location finding
 
 ```
