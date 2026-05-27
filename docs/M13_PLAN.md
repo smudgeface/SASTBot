@@ -122,13 +122,35 @@ Drop the JSON Schema into `sast_system.md` and `sbom_system.md` so the model see
 
 ### Phase B — `--json-schema` for detection (the meat)
 
-- Add `buildDetectionSchema()` if Phase A didn't already.
-- Refactor `spawnClaudeAndStream` to accept a `responseShape: "stream-jsonl-records" | "structured-output"` parameter. Default keeps current behavior; detection caller passes `"structured-output"`.
+**Revised 2026-05-26 after empirical probe.** The original plan said "replace
+`--output-format stream-json` with `--output-format json` and drop `--verbose`."
+A probe with `claude` CLI 2.1.144 (`backend/src/cli/probe-claude-structured-output.ts`)
+showed two things that change the design:
+
+1. **`--output-format json` emits ZERO events before the final blob.** Every
+   tool-use / assistant / progress signal disappears. `setPhase` mid-phase
+   progress would freeze for the whole LLM phase (~24 min for GoPxL BE
+   detection). Documented as Open Question #3 — answered: yes, progress is
+   completely lost.
+2. **`--json-schema` works with `--output-format stream-json --verbose`.** The
+   schema is enforced by exposing a NEW built-in tool called `StructuredOutput`
+   to the model. The model invokes that tool with the schema-validated payload;
+   the SDK acknowledges with `"Structured output provided successfully"`; the
+   final `result` event carries the same payload under `structured_output`.
+   Schema enforcement happens inside the agent loop, not as a re-prompt cycle.
+
+**Revised approach.** Keep `--output-format stream-json --verbose`. Add
+`--json-schema <inline JSON>`. Read the validated payload from the final
+`result` event's `structured_output` field. Almost everything else stays.
+
+- Add `buildDetectionSchema()` if Phase A didn't already. ✓ (done in A)
+- Refactor `spawnClaudeAndStream` to accept a `responseShape: "stream-jsonl-records" | "structured-output"` parameter and an optional `jsonSchema: object`. Default keeps current behavior; detection caller passes `"structured-output"` plus the wrapper schema.
 - For `"structured-output"`:
-  - Args: replace `--output-format stream-json` with `--output-format json`, add `--json-schema "$(cat /tmp/schema-${scanRunId}.json)"` (or use a file). Drop `--verbose` (no streaming events needed).
-  - Write the rendered schema to `/tmp/sastbot-${scanRunId}/detection-schema.json` so the path is per-scan and auditable.
-  - On process close, parse stdout as one JSON object. Pull out `structured_output` if present; if the result message has `subtype: "error_max_structured_output_retries"`, treat it as a parse-error scenario (one synthetic warning entry, escalate via the existing severity helper).
-- Update `runDetection` to convert the validated `findings` array directly into `DetectionRecord[]` — they should already match because the Zod aliases accept all canonical names.
+  - Args: KEEP `--output-format stream-json --verbose`. Add `--json-schema <JSON.stringify(schema)>`. Schema goes INLINE on argv — CLI 2.1.144 expects an inline JSON string, NOT a file path (a file-path argument was tested and silently produced empty stdout). Linux ARG_MAX (≥128 KB) easily handles the 3-5 KB schemas we generate.
+  - On the existing `result` event, capture `structured_output` (the schema-validated payload, equivalent to invoking the wrapper schema). Also capture `subtype` — `error_max_structured_output_retries` means the SDK gave up after retries; map to one synthetic parse-error entry so M12's trustworthiness gate fires.
+  - The existing JSONL-from-assistant-text extraction can stay; it just produces zero records in structured-output mode because the model uses the `StructuredOutput` tool instead of emitting text. The `records[]` array gets populated from `result.structured_output.findings`.
+- Update `runDetection` to convert the validated `findings` array directly into `DetectionRecord[]`. The Zod aliases stay as defense-in-depth (dry-run CLI + legacy callers).
+- **`setPhase` progress survives** because the `--verbose --output-format stream-json` flow still emits `assistant` events with per-turn token usage. Open Question #3 is resolved without a regression.
 
 **Ship as v0.13.0 (MINOR — new feature, backwards-compatible API but new internal architecture).**
 
@@ -150,9 +172,11 @@ Same pattern. Each phase has its own schema builder, each caller passes `"struct
 
 ## Decisions locked
 
-### Schema delivery: file path, not inline argv
+### Schema delivery: inline argv (revised)
 
-`--json-schema` accepts an inline string per the docs, but: schemas are large (~5-10 KB each), shell argv has platform limits, and an inline blob in `ps` output is ugly to debug. Write to `/tmp/sastbot-${scanRunId}/<phase>-schema.json` and pass the file path. Auditable, debuggable, no shell-escaping risk.
+Originally planned to write to `/tmp/sastbot-${scanRunId}/<phase>-schema.json` and pass the file path. **Empirically that doesn't work.** CLI 2.1.144 treated a file-path argument as a literal JSON string, failed to parse it, and silently produced zero stdout. The CLI's `--json-schema` help shows an inline JSON example with no file-path syntax mentioned. Linux `ARG_MAX` is ≥128 KB on every supported platform and our derived schemas are 3-5 KB — well within limits.
+
+Pass as inline JSON via `JSON.stringify(schema)`. The argv blob in `ps` is uglier than a path but the alternative (silent failure) is worse.
 
 ### Keep Zod aliases in place
 
@@ -195,15 +219,15 @@ Each SDK retry is a fresh API turn with full conversation context. The doc doesn
 - The trustworthiness gates (`PARSE_ERROR_FAILURE_THRESHOLD`, `PARSE_ERROR_ABSOLUTE_FAILURE_COUNT`).
 - The streaming-progress events that drive setPhase — those come from the agent's tool-use events, which `--output-format json` still emits before the final result. Verify in smoke test.
 
-## Open questions (verify before / during implementation)
+## Open questions — all resolved 2026-05-26
 
-1. **Does `zod-to-json-schema` produce a schema Claude accepts?** Specifically: `additionalProperties: false` on every object, `anyOf` for unions (not `oneOf`), no recursive `$ref`, no `minItems > 1`. **Verify** by running it on `DetectionRecord` and validating the output against Claude's schema-feature list before wiring it into the CLI args.
+1. **Does `zod-to-json-schema` produce a schema Claude accepts?** **Resolved (Phase A).** Yes. Defaults emit `anyOf` for unions, `additionalProperties: false` on every object, no recursive `$ref` when `$refStrategy: "none"`. All Phase A canonical schemas pass `validateClaudeFeatures()`.
 
-2. **What does the `result` message look like with `--output-format json`?** The doc shows the SDK delivers `structured_output` on the result message. The CLI may flatten differently. **Verify** with a minimal smoke test before refactoring `spawnClaudeAndStream`.
+2. **What does the `result` message look like with `--output-format json`?** **Resolved (Phase B probe).** Pure-json mode emits ONE 1304-byte blob: `{ type: "result", subtype: "success" | "error_max_structured_output_retries", structured_output, total_cost_usd, usage: {input_tokens, output_tokens, cache_*}, num_turns, permission_denials[], session_id, ... }`. Identical fields appear in stream-json's final `result` event.
 
-3. **How are tool-use events delivered when `--output-format json` is in play?** Today our `setPhase` progress comes from `assistant` events with `usage` data. `--output-format json` may suppress those (one final response only) — or may still stream them via stderr / a different channel. **Verify** before declaring Phase B done; if progress is lost, we'd need to add periodic polling or accept loss-of-progress as a known v0.13.0 regression.
+3. **How are tool-use events delivered when `--output-format json` is in play?** **Resolved (Phase B probe). Pure-json mode emits ZERO events before the final blob — all progress is lost.** Mitigation: use `stream-json --verbose` alongside `--json-schema` instead; the agent loop still emits every event AND the schema is enforced via the `StructuredOutput` tool. This combo is the revised Phase B direction.
 
-4. **Does claude-p surface the SDK retry count anywhere?** Useful for cost monitoring. Look for it in the `result` message; if not present, count by `usage.requestCount` deltas across the conversation.
+4. **Does claude-p surface the SDK retry count anywhere?** **Partially resolved.** `result.num_turns` counts agent turns (3 for a single Read + StructuredOutput sequence). The SDK's per-tool-call retry count for schema enforcement isn't exposed separately — but `subtype: "error_max_structured_output_retries"` is the only failure mode we need to handle.
 
 ## Smoke test sequence
 

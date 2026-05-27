@@ -114,7 +114,8 @@ SASTBot/
 │       │                        #   promptLoader (M6 — text-file prompt loader),
 │       │                        #   cvss4 (CVSS v4.0 macro-vector calculator)
 │       ├── queue/               # BullMQ queue + connection
-│       └── cli/                 # bootstrap-admin, dry-run-llm-sast (M6 dev tool)
+│       └── cli/                 # bootstrap-admin, dry-run-llm-sast (M6),
+│                                 #   probe-claude-structured-output (M13 — claude CLI behaviour probe)
 ├── frontend/                    # React + Vite + TypeScript
 │   ├── package.json
 │   ├── vite.config.ts           # proxies /auth /admin /scans /healthz to backend:8000
@@ -213,6 +214,9 @@ docker compose -f docker/compose/docker-compose.yml down -v          # stop AND 
 - Check `docs/PROGRESS.md` for the current milestone and what was learned.
 - Read `docs/M5_PLAN.md` for the M5 phase checklist (5d Scheduler + 5e Hardening still pending).
 - Orient in ≤3 tool calls: `git log --oneline -10`, `tail -40 docs/PROGRESS.md`, `docker compose ps`.
+- **Diagnostic CLIs** under `backend/src/cli/` — useful when investigating LLM or scan-pipeline behaviour without burning a full scan:
+  - `dry-run-llm-sast.ts` — run the LLM SAST detection + recheck flow against a real scope without writing to the DB. `pnpm run dry-run-llm-sast --scope-id <id>` inside the worker container.
+  - `probe-claude-structured-output.ts` — empirically verify what `claude -p` emits with `--output-format json|stream-json` and `--json-schema`. Built during M13 Phase B design to settle Open Question #3 (does `setPhase` progress survive structured-output mode?). Costs ~$0.10–0.30 per run. Invoke: `docker compose exec worker pnpm exec tsx src/cli/probe-claude-structured-output.ts [json|stream-json]`. Re-run when the `claude` CLI version changes or when adding a new SDK flag — assumptions about event ordering have already bitten this codebase once.
 - **🔖 Versioning is not optional.** Before adding a schema migration → confirm the migration folder is committed (that IS the schema version). Before cutting a release or shipping an operator-visible change → bump **all three** version surfaces in one commit: `backend/package.json`, `frontend/package.json`, and `APP_VERSION` in `backend/src/routes/version.ts`. Agents have repeatedly missed `APP_VERSION`. After bumping, `curl -s http://localhost:8000/version | jq .app` must show the new value. See the "⚠️ Versioning policy" section at the top of this file.
 - **📖 Keep the user manual current.** When a code change is operator-visible (new screen, changed flow, new env var, new endpoint, new admin action) update the matching section under `frontend/src/manual/content/`. Manual drift is a worse bug than a stub manual — users will follow stale instructions and assume the app is broken. Sections live one-per-file; the manifest is `frontend/src/manual/index.ts`. After shipping, browser-test the affected section at `/manual/<slug>`. The protocol-reference page is automatic (driven by `/openapi.json`), but the `tags` / `summary` / `description` you put on Fastify routes ARE the protocol doc — keep them accurate. The user manual is treated as code: PROGRESS.md entries should mention manual sections touched, just like they mention migrations.
 - Never commit real secrets. `.env` is gitignored; `.env.example` is the canonical source of variable names.
