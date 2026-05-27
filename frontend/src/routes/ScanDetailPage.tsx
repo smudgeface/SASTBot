@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Download,
   FileCode2,
+  Info,
   Package,
   ScanSearch,
   ShieldAlert,
@@ -934,13 +935,20 @@ export default function ScanDetailPage() {
         )}
         {s.warnings && s.warnings.length > 0 && (() => {
           const hasError = s.warnings.some((w) => w.severity === "error");
+          // Card border tracks the strongest severity present. Pure-info warnings
+          // get the default neutral border so an FYI doesn't look like a problem.
+          const cardBorder = hasError
+            ? "border-destructive/50"
+            : "";
           return (
-            <Card className={hasError ? "border-destructive/50" : "border-amber-200 dark:border-amber-900"}>
+            <Card className={cardBorder}>
               <CardContent className="p-4 space-y-2">
                 {s.warnings.map((w, i) => {
-                  const colorClass = w.severity === "error"
+                  const isError = w.severity === "error";
+                  const colorClass = isError
                     ? "text-destructive"
-                    : "text-amber-700 dark:text-amber-300";
+                    : "text-muted-foreground";
+                  const Icon = isError ? AlertTriangle : Info;
                   // Normalise details: accept an array of {raw, reason} objects.
                   const parseErrorDetails = (() => {
                     if (!Array.isArray(w.details) || w.details.length === 0) return null;
@@ -956,7 +964,7 @@ export default function ScanDetailPage() {
                   return (
                     <div key={i} className={cn("text-sm", colorClass)}>
                       <div className="flex gap-2">
-                        <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                        <Icon className="h-4 w-4 shrink-0 mt-0.5" />
                         <span>{w.message}</span>
                       </div>
                       {parseErrorDetails && (
