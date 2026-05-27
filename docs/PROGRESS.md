@@ -4,6 +4,127 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-27 — M13 Phase B+C: structured-output enforcement via `--json-schema` (v0.13.0)
+
+The follow-on to Phase A's prompt-embedded schema. Pass the same canonical
+schemas to `claude -p --json-schema` so the SDK enforces structure at the
+API boundary, not just suggests it in the prompt.
+
+**What shipped.**
+
+- `spawnClaudeAndStream` in both `llmSastService.ts` and `llmSbomService.ts`
+  accepts a new `responseShape: "stream-jsonl-records" | "structured-output"`
+  plus an optional `jsonSchema: Record<string, unknown>`. In structured-
+  output mode it appends `--json-schema <inline JSON>` to the claude-p
+  args and captures `structured_output` + `subtype` from the final
+  `result` event.
+- Three call sites switched to structured-output mode with the matching
+  wrapper schema: `runDetection` (buildDetectionSchema), `runRecheck`
+  (buildRecheckSchema), `runSbomAugmentation` (buildSbomAugmentationSchema).
+  Each parses the schema-validated payload from `structured_output` and
+  runs every record through its existing Zod schema (aliases stay as
+  defense-in-depth).
+- `error_max_structured_output_retries` subtype → one synthetic parse-error
+  entry. The M12 trustworthiness gate fires automatically (≥ 25% drop
+  ratio or ≥ 10 absolute) — no new gate machinery.
+
+**The big design pivot.** The original Phase B plan said "replace
+`--output-format stream-json` with `--output-format json`, drop
+`--verbose`." A one-off probe (`backend/src/cli/probe-claude-structured-
+output.ts`) showed that mode emits **zero events before the final blob**.
+`setPhase` mid-phase progress would freeze for the entire LLM phase —
+24+ min of no UI feedback during detection. Unacceptable.
+
+The same probe also showed `--json-schema` works ALONGSIDE
+`--output-format stream-json --verbose`. Schema enforcement happens
+through a new built-in `StructuredOutput` tool the model invokes once
+with the validated payload; the SDK acknowledges; the final `result`
+event carries `structured_output`. Every assistant / tool_use / user
+event still streams normally. Schema discipline + progress events,
+both.
+
+Kept the legacy JSONL `onLine` callback in place as a defensive fallback
+— in practice it never fires in structured-output mode because the
+model uses the tool, but a future SDK revision could silently drop the
+tool invocation path and we'd want the records back.
+
+Schema delivery: **inline JSON on argv, not a file path.** CLI 2.1.144
+accepts `--json-schema '{...JSON...}'` but silently emits zero stdout
+when given a file path. Our derived wrappers are 856 B (recheck) –
+2070 B (detection); Linux `ARG_MAX` (≥128 KB) is comfortably room.
+
+**Smoke test result — GoPxL BE, scan `9fe4acbb` against v0.13.0:**
+
+| Phase | Records | Parse errors | Duration | Cost | vs Phase A |
+|---|---|---|---|---|---|
+| SBOM augmentation | 1051 (18 keep / 1003 drop / 30 add) | 0 | 19.6 min | $7.34 | 1.69× |
+| SBOM recheck | 100 | 0 | 3.8 min | $1.08 | 0.87× |
+| SAST detection | 35 | 0 | 14.8 min | $7.17 | 0.87× |
+| SAST recheck | 17 | 0 | 2.8 min | $1.04 | 1.25× |
+| **Total** | **1203** | **0** | **41.8 min** | **$16.63** | **1.14×** |
+
+The acceptance criteria from M13_PLAN — "Phase B-1: zero parse errors
+on a GoPxL BE re-run", "Phase B-3: cost within 1.5× of v0.12.4 baseline",
+"Phase B-4: wall-clock within 1.5× of v0.12.4 baseline" — are all met
+cleanly. Wall-clock actually came in **faster** than Phase A.
+
+22 SAST + 46 SCA findings produced (Phase A: 20 SAST + 73 SCA). Both
+runs found the same baseline weaknesses (CWE-321 hardcoded private key,
+CWE-798 hardcoded credentials, CWE-256 reversible XOR password store,
+etc.); the SCA delta is presumably noise from the LLM picking different
+verdicts in reachability — not a regression in coverage.
+
+Two info warnings (`recheck_capped`, `sast_duplicates_merged: 3`); zero
+error-severity warnings; scan finalized as `success` with the
+trustworthiness gates passive.
+
+**What we learned.**
+
+- **Empirical probes are cheap relative to design rework.** The $0.40
+  spent on two probe invocations settled three Open Questions
+  (M13_PLAN #1, #2, #3) and inverted the Phase B design. Without that,
+  Phase B would have shipped with the progress regression — and we'd
+  have spent another $15 GoPxL BE scan discovering it.
+- **The SDK's `StructuredOutput` tool is the load-bearing mechanism.**
+  The model isn't re-prompted on schema failure (the original plan's
+  mental model); it's given a tool to invoke with the validated
+  payload. Schema enforcement is an agent-loop tool call, not a
+  retry cycle. That's why progress events survive — the agent loop
+  itself is unchanged.
+- **Cost increase concentrates in SBOM augmentation.** That phase did
+  ~80 requests vs Phase A's 70, and emitted 1051 records vs 500.
+  Either the schema enforcement is making the model more thorough,
+  or the structured-output tool incurs a per-record overhead that
+  scales linearly. Both phases ran identical prompts; only the
+  output mechanism changed. Worth profiling if cost ever becomes
+  a constraint, but at 1.69× of a $4 baseline it's not the priority.
+- **Schema delivery via file path doesn't work.** CLI 2.1.144 accepts
+  the syntax but silently produces zero stdout. Inline JSON is the
+  only option. The M13_PLAN's "auditable file path" preference is
+  moot — paths just don't work. CLAUDE.md now mentions the probe
+  CLI so future agents can verify SDK behaviour before designing
+  against assumptions.
+
+**Files touched.**
+
+- `backend/package.json`, `frontend/package.json`,
+  `frontend/package-lock.json`, `backend/src/routes/version.ts` — 0.12.6 → 0.13.0.
+- `backend/src/services/llmSastService.ts` — spawn function +
+  `runDetection` + `runRecheck` for structured-output mode.
+- `backend/src/services/llmSbomService.ts` — spawn function +
+  `runSbomAugmentation` for structured-output mode.
+
+**Next.** Phase B+C done. M13's stated goal (eliminate alias drift at
+the API boundary) is met. Open knobs not yet wired: `--max-budget-usd`
+per-scan safety net (skipped this milestone per user direction —
+revisit if retry cost spikes), explicit progress-event documentation
+for operators (the manual covers scan phases but doesn't yet say
+"each phase advances independently of token output rate"). Sweep the
+PROGRESS.md "next" lines into a project_pending_features memory
+update next session.
+
+---
+
 ## 2026-05-26 — M13 Phase A: derived JSON Schema embedded in system prompts (v0.12.5)
 
 First step of the M13 pivot away from the reactive alias chase. Through

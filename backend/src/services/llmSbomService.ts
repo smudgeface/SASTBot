@@ -30,7 +30,7 @@ import { loadConfig } from "../config.js";
 import { decodeCredential } from "./credentialService.js";
 import { getOrCreateSettings } from "./settingsService.js";
 import { loadPrompt } from "./promptLoader.js";
-import { buildSbomRecordSchema } from "./jsonSchema.js";
+import { buildSbomAugmentationSchema, buildSbomRecordSchema } from "./jsonSchema.js";
 import type { CdxComponent } from "./sbomService.js";
 import {
   matchComponent,
@@ -257,16 +257,29 @@ interface SpawnClaudeInput {
   effortLevel: string;
   onLine: (line: string) => void;
   onProgress?: (usage: TokenUsage) => void;
+  /** See llmSastService for full semantics. M13 Phase B knob. */
+  responseShape?: "stream-jsonl-records" | "structured-output";
+  /** Required when responseShape='structured-output'. Inline JSON Schema. */
+  jsonSchema?: Record<string, unknown>;
 }
 
 interface SpawnClaudeResult {
   exitCode: number | null;
   usage: TokenUsage;
+  /** Validated payload from result.structured_output when in structured-output mode. */
+  structuredOutput?: unknown;
+  /** result.subtype — "error_max_structured_output_retries" surfaces SDK retry exhaustion. */
+  resultSubtype?: string;
 }
 
 async function spawnClaudeAndStream(
   input: SpawnClaudeInput,
 ): Promise<SpawnClaudeResult> {
+  const responseShape = input.responseShape ?? "stream-jsonl-records";
+  if (responseShape === "structured-output" && !input.jsonSchema) {
+    throw new Error("spawnClaudeAndStream: jsonSchema is required when responseShape='structured-output'");
+  }
+
   const args = [
     "-p",
     input.userPrompt,
@@ -283,6 +296,9 @@ async function spawnClaudeAndStream(
     "--verbose",
     "--append-system-prompt",
     input.systemPrompt,
+    ...(responseShape === "structured-output" && input.jsonSchema
+      ? ["--json-schema", JSON.stringify(input.jsonSchema)]
+      : []),
   ];
 
   const childEnv: NodeJS.ProcessEnv = {
@@ -301,6 +317,9 @@ async function spawnClaudeAndStream(
     estimatedUsdCost: null,
     requestCount: 0,
   };
+
+  let structuredOutput: unknown = undefined;
+  let resultSubtype: string | undefined = undefined;
 
   const exitCode: number | null = await new Promise((resolve, reject) => {
     const proc = spawn("claude", args, {
@@ -367,6 +386,8 @@ async function spawnClaudeAndStream(
           };
           total_cost_usd?: number;
           cost_usd?: number;
+          subtype?: string;
+          structured_output?: unknown;
         };
         const u = ev.usage ?? {};
         usage.inputTokens = u.input_tokens ?? 0;
@@ -374,6 +395,8 @@ async function spawnClaudeAndStream(
         usage.cacheReadInputTokens = u.cache_read_input_tokens ?? 0;
         usage.cacheCreationInputTokens = u.cache_creation_input_tokens ?? 0;
         usage.estimatedUsdCost = ev.total_cost_usd ?? ev.cost_usd ?? null;
+        if (ev.structured_output !== undefined) structuredOutput = ev.structured_output;
+        if (ev.subtype !== undefined) resultSubtype = ev.subtype;
       }
     };
 
@@ -418,7 +441,7 @@ async function spawnClaudeAndStream(
     });
   });
 
-  return { exitCode, usage };
+  return { exitCode, usage, structuredOutput, resultSubtype };
 }
 
 // ---------------------------------------------------------------------------
@@ -488,7 +511,9 @@ export async function runSbomAugmentation(
   const records: AugmentationRecord[] = [];
   const parseErrors: ParseError[] = [];
 
-  const { exitCode, usage } = await spawnClaudeAndStream({
+  const augmentationSchema = buildSbomAugmentationSchema();
+
+  const spawnResult = await spawnClaudeAndStream({
     scanRunId: input.scanRunId,
     scopeDir: input.scopeDir,
     systemPrompt,
@@ -499,6 +524,10 @@ export async function runSbomAugmentation(
     claudeHome,
     effortLevel: input.effortLevel,
     onProgress: input.onProgress,
+    responseShape: "structured-output",
+    jsonSchema: augmentationSchema,
+    // Legacy text-line fallback. Silent in practice when --json-schema is
+    // active (model uses the StructuredOutput tool). Kept defensively.
     onLine: (line) => {
       if (!line.startsWith("{")) return;
       let parsed: unknown;
@@ -522,6 +551,39 @@ export async function runSbomAugmentation(
       records.push(result.data);
     },
   });
+  const { exitCode, usage } = spawnResult;
+
+  // M13 Phase B — primary parse path: extract keep / drop / add records
+  // from the schema-validated structured_output. Zod aliases stay as
+  // defense in depth — the SDK validates the wrapper shape (three arrays
+  // of typed records) but per-record field aliases like evidence_path /
+  // evidence_paths still flow through the legacy schemas in case a
+  // future prompt refactor reintroduces them.
+  if (spawnResult.resultSubtype === "error_max_structured_output_retries") {
+    parseErrors.push({
+      raw: JSON.stringify({ subtype: spawnResult.resultSubtype }),
+      reason: "SDK exhausted structured-output retries — see result.subtype",
+    });
+  } else if (spawnResult.structuredOutput && typeof spawnResult.structuredOutput === "object") {
+    const so = spawnResult.structuredOutput as { keeps?: unknown[]; drops?: unknown[]; adds?: unknown[] };
+    const pushAll = (list: unknown[] | undefined): void => {
+      if (!Array.isArray(list)) return;
+      for (const item of list) {
+        const result = AugmentationRecord.safeParse(item);
+        if (!result.success) {
+          parseErrors.push({
+            raw: JSON.stringify(item),
+            reason: `schema: ${result.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")}`,
+          });
+          continue;
+        }
+        records.push(result.data);
+      }
+    };
+    pushAll(so.keeps);
+    pushAll(so.drops);
+    pushAll(so.adds);
+  }
 
   const durationMs = Date.now() - startedAt;
   logger.info(

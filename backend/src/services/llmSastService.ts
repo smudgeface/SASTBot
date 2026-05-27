@@ -22,7 +22,12 @@ import { readSourceSnippet } from "./sourceSnippet.js";
 import { toRepoRelative, toScopeRelative } from "./scopePath.js";
 import { getOrCreateSettings } from "./settingsService.js";
 import { loadPrompt } from "./promptLoader.js";
-import { buildDetectionRecordSchema, buildRecheckRecordSchema } from "./jsonSchema.js";
+import {
+  buildDetectionRecordSchema,
+  buildDetectionSchema,
+  buildRecheckRecordSchema,
+  buildRecheckSchema,
+} from "./jsonSchema.js";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
@@ -421,7 +426,31 @@ interface SpawnClaudeInput {
    *  (which differs by model — xhigh on Opus 4.7, high on Sonnet 4.6 — and
    *  could change again in a future release). */
   effortLevel: string;
-  /** Called once per assistant-text line (already trimmed of the trailing newline). */
+  /**
+   * M13 Phase B — response-shape selector:
+   *   - "stream-jsonl-records" (legacy): model emits JSON-Lines from text
+   *     blocks; `onLine` is called per record. Aliases in the Zod schemas
+   *     are the only line of defense against drift.
+   *   - "structured-output": pass a JSON Schema via `--json-schema`. The
+   *     SDK exposes a `StructuredOutput` tool to the model; the model
+   *     invokes it with a schema-validated payload. The final `result`
+   *     event carries `structured_output`. `setPhase` progress still
+   *     works because `--output-format stream-json --verbose` stays.
+   * Default keeps legacy behaviour to limit blast radius.
+   */
+  responseShape?: "stream-jsonl-records" | "structured-output";
+  /**
+   * The JSON Schema to enforce when `responseShape === "structured-output"`.
+   * Required in that mode. Passed inline on argv (CLI 2.1.144 rejects file
+   * paths — the help shows JSON syntax only, file-path arguments silently
+   * produce zero stdout). Linux ARG_MAX is ≥128 KB; our wrapper schemas
+   * are 3-5 KB so we're safe.
+   */
+  jsonSchema?: Record<string, unknown>;
+  /** Called once per assistant-text line (already trimmed of the trailing newline).
+   *  No-op in structured-output mode — the model invokes a tool instead of
+   *  emitting JSONL text. Kept on the input so the legacy code path is
+   *  undisturbed. */
   onLine: (line: string) => void;
   /**
    * Called on each `assistant` stream event with the running session usage.
@@ -455,6 +484,21 @@ interface SpawnClaudeResult {
    * null        — subprocess exited on its own (natural completion or LLM error).
    */
   killedReason: "timeout" | "staleness" | null;
+  /**
+   * Populated when `responseShape === "structured-output"` and the final
+   * `result` event arrived with a `structured_output` field. The payload
+   * matches the JSON Schema passed via `--json-schema`. Callers that pass
+   * a wrapper schema (e.g. `{findings: [...], complete: {...}}`) receive
+   * the wrapper here.
+   */
+  structuredOutput?: unknown;
+  /**
+   * `subtype` from the final `result` event. Common values: "success" |
+   * "error_max_structured_output_retries" | "error_during_execution".
+   * The retries-exhausted subtype is the one we treat as a parse-error
+   * scenario for the M12 trustworthiness gates.
+   */
+  resultSubtype?: string;
 }
 
 /** Grace period between SIGTERM and SIGKILL when killing a subprocess. */
@@ -553,6 +597,11 @@ export function extractJsonObjects(buf: string): { objects: string[]; rest: stri
 }
 
 async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaudeResult> {
+  const responseShape = input.responseShape ?? "stream-jsonl-records";
+  if (responseShape === "structured-output" && !input.jsonSchema) {
+    throw new Error("spawnClaudeAndStream: jsonSchema is required when responseShape='structured-output'");
+  }
+
   const args = [
     "-p",
     input.userPrompt,
@@ -569,6 +618,9 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
     "--verbose",
     "--append-system-prompt",
     input.systemPrompt,
+    ...(responseShape === "structured-output" && input.jsonSchema
+      ? ["--json-schema", JSON.stringify(input.jsonSchema)]
+      : []),
   ];
 
   const childEnv: NodeJS.ProcessEnv = {
@@ -589,6 +641,8 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
   };
 
   let killedReason: "timeout" | "staleness" | null = null;
+  let structuredOutput: unknown = undefined;
+  let resultSubtype: string | undefined = undefined;
 
   const exitCode: number | null = await new Promise((resolve, reject) => {
     const proc = spawn("claude", args, {
@@ -721,6 +775,8 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
           };
           total_cost_usd?: number;
           cost_usd?: number;
+          subtype?: string;
+          structured_output?: unknown;
         };
         const u = ev.usage ?? {};
         usage.inputTokens = u.input_tokens ?? 0;
@@ -728,6 +784,8 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
         usage.cacheReadInputTokens = u.cache_read_input_tokens ?? 0;
         usage.cacheCreationInputTokens = u.cache_creation_input_tokens ?? 0;
         usage.estimatedUsdCost = ev.total_cost_usd ?? ev.cost_usd ?? null;
+        if (ev.structured_output !== undefined) structuredOutput = ev.structured_output;
+        if (ev.subtype !== undefined) resultSubtype = ev.subtype;
       }
     };
 
@@ -772,7 +830,7 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
     });
   });
 
-  return { exitCode, usage, killedReason };
+  return { exitCode, usage, killedReason, structuredOutput, resultSubtype };
 }
 
 /**
@@ -819,6 +877,8 @@ export async function runDetection(input: RunDetectionInput): Promise<RunDetecti
     "[llmSastService] starting detection",
   );
 
+  const detectionSchema = buildDetectionSchema();
+
   /** Single spawn attempt with its own fresh record/error arrays. */
   const spawnOnce = async (
     home: string,
@@ -839,6 +899,12 @@ export async function runDetection(input: RunDetectionInput): Promise<RunDetecti
       onProgress: input.onProgress,
       wallClockTimeoutMs: input.wallClockTimeoutMs,
       stdoutStalenessMs: input.stdoutStalenessMs,
+      responseShape: "structured-output",
+      jsonSchema: detectionSchema,
+      // Legacy fallback — only fires if the model emits JSONL text instead of
+      // invoking the StructuredOutput tool. With --json-schema in play the
+      // model uses the tool; onLine should be silent. Kept as a safety net so
+      // a future SDK revision can't quietly drop output on the floor.
       onLine: (line) => {
         if (!line.startsWith("{")) return;
         let parsed: unknown;
@@ -859,6 +925,36 @@ export async function runDetection(input: RunDetectionInput): Promise<RunDetecti
         records.push(result.data);
       },
     });
+
+    // M13 Phase B — primary parse path: read findings + complete from the
+    // schema-validated structured_output. The Zod aliases stay as defense
+    // in depth for any field-name drift inside a single record (the SDK
+    // validates the OUTER wrapper, not each variant's internal field
+    // semantics beyond what the schema specifies).
+    if (spawnResult.resultSubtype === "error_max_structured_output_retries") {
+      parseErrors.push({
+        raw: JSON.stringify({ subtype: spawnResult.resultSubtype }),
+        reason: "SDK exhausted structured-output retries — see result.subtype",
+      });
+    } else if (spawnResult.structuredOutput && typeof spawnResult.structuredOutput === "object") {
+      const so = spawnResult.structuredOutput as { findings?: unknown[]; complete?: unknown };
+      const findings = Array.isArray(so.findings) ? so.findings : [];
+      for (const f of findings) {
+        const result = DetectionRecord.safeParse(f);
+        if (!result.success) {
+          parseErrors.push({
+            raw: JSON.stringify(f),
+            reason: `schema: ${result.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")}`,
+          });
+          continue;
+        }
+        records.push(result.data);
+      }
+      if (so.complete !== undefined) {
+        const completeResult = DetectionRecord.safeParse(so.complete);
+        if (completeResult.success) records.push(completeResult.data);
+      }
+    }
 
     return { records, parseErrors, ...spawnResult };
   };
@@ -1111,6 +1207,8 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
     "[llmSastService] starting recheck",
   );
 
+  const recheckSchema = buildRecheckSchema();
+
   /** Single spawn attempt with its own fresh verdict/error arrays. */
   const spawnOnce = async (
     home: string,
@@ -1131,6 +1229,11 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
       onProgress: input.onProgress,
       wallClockTimeoutMs: input.wallClockTimeoutMs,
       stdoutStalenessMs: input.stdoutStalenessMs,
+      responseShape: "structured-output",
+      jsonSchema: recheckSchema,
+      // Legacy text-line fallback. With --json-schema active the model uses
+      // the StructuredOutput tool — this callback should be silent in
+      // practice. Kept defensively.
       onLine: (line) => {
         if (!line.startsWith("{")) return;
         let parsed: unknown;
@@ -1140,20 +1243,43 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
           parseErrors.push({ raw: line, reason: `JSON parse: ${(err as Error).message}` });
           return;
         }
-        // Try verdict first (lacks `kind`). Fall back to complete record.
         const verdict = RecheckVerdictRecord.safeParse(parsed);
         if (verdict.success) {
           verdicts.push(verdict.data);
           return;
         }
         const complete = RecheckCompleteRecord.safeParse(parsed);
-        if (complete.success) return; // info-only; not persisted
+        if (complete.success) return;
         parseErrors.push({
           raw: line,
           reason: `schema: ${verdict.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")}`,
         });
       },
     });
+
+    // M13 Phase B — primary parse path from structured_output.
+    if (spawnResult.resultSubtype === "error_max_structured_output_retries") {
+      parseErrors.push({
+        raw: JSON.stringify({ subtype: spawnResult.resultSubtype }),
+        reason: "SDK exhausted structured-output retries — see result.subtype",
+      });
+    } else if (spawnResult.structuredOutput && typeof spawnResult.structuredOutput === "object") {
+      const so = spawnResult.structuredOutput as { verdicts?: unknown[]; complete?: unknown };
+      const list = Array.isArray(so.verdicts) ? so.verdicts : [];
+      for (const v of list) {
+        const result = RecheckVerdictRecord.safeParse(v);
+        if (!result.success) {
+          parseErrors.push({
+            raw: JSON.stringify(v),
+            reason: `schema: ${result.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")}`,
+          });
+          continue;
+        }
+        verdicts.push(result.data);
+      }
+      // Complete record is informational only — parsed for shape validation
+      // but not surfaced. Mirrors the legacy JSONL behaviour.
+    }
 
     return { verdicts, parseErrors, ...spawnResult };
   };
