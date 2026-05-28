@@ -1769,9 +1769,11 @@ function ScopeComponentRow({
                               </FileLink>
                             </p>
                             {e.snippet && (
-                              <pre className="text-[10px] whitespace-pre-wrap bg-muted rounded px-2 py-1 mt-1 overflow-x-auto">
-                                {e.snippet}
-                              </pre>
+                              <ContextSnippet
+                                snippet={e.snippet}
+                                matchLine={e.line ?? undefined}
+                                className="mt-1"
+                              />
                             )}
                           </div>
                         ))}
@@ -1836,9 +1838,10 @@ function ScopeComponentRow({
                     </p>
                   )}
                   {component.llm_evidence.excerpt && (
-                    <pre className="text-[10px] whitespace-pre-wrap bg-muted rounded px-2 py-1 mt-1 overflow-hidden max-h-32">
-                      {component.llm_evidence.excerpt}
-                    </pre>
+                    <ContextSnippet
+                      snippet={component.llm_evidence.excerpt}
+                      className="mt-1 max-h-40"
+                    />
                   )}
                 </div>
               )}

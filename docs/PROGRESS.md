@@ -40,6 +40,25 @@ moved together per policy: `backend/package.json`, `frontend/package.json`
 `20260527000000_rename_removed_to_not_found_drop_manual_override_from_dismissed`
 applied via `prisma migrate deploy` on the live homelab DB.
 
+**Post-ship polish (shipped in the same 0.14.0 tag).** Two component-detail
+fixes surfaced during QA:
+
+- **Linked-issues panel rendered nothing for all-resolved packages.** The
+  Components-tab map query excluded terminal-state SCA issues, so a package
+  whose CVEs were all `fixed` (e.g. jquery@1.3.2, 6 fixed CVEs) showed
+  "Linked issues (6)" over an empty table and a dangling "+3" badge on the
+  row. The map now fetches with `include_resolved=true`; the row badge counts
+  only actionable (non-terminal) issues; the panel shows all linkages with a
+  Fixed/Suppressed chip and an "N open, M resolved" header.
+- **Component code snippets now share `ContextSnippet` with SAST.** Component
+  evidence snippets (the manifest declaration "where the component was
+  imported from") and LLM-augmentation excerpts were rendered as bare `<pre>`
+  blocks — no line numbers, no match highlight. `ContextSnippet` gained an
+  optional `matchLine`: anchored (line numbers + highlight + arrow, identical
+  to SAST findings) when a line is known, plain shared monospace frame when
+  not (free-form LLM excerpts). Applied on both the scope detail page and the
+  scan detail page so the two views render identically.
+
 ---
 
 ## 2026-05-27 — M13 Phase B+C: structured-output enforcement via `--json-schema` (v0.13.0)
