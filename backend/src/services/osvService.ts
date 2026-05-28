@@ -259,6 +259,9 @@ export async function queryAndPersistFindings(
   scopeDir = "",
   scopePath = "/",
   includeDevDeps = true,
+  /** Set of component names currently ignored by the operator. New issues
+   *  for these packages auto-land as suppressed/component_ignored. */
+  ignoredComponentNames?: Set<string>,
 ): Promise<ScanFinding[]> {
   let queried = components;
   if (!includeDevDeps) {
@@ -354,6 +357,7 @@ export async function queryAndPersistFindings(
           manifestLine: manifestFields.line,
           manifestSnippet: manifestFields.snippet,
         },
+        ignoredComponentNames,
       );
 
       await (client as PrismaClient).scanFinding.create({

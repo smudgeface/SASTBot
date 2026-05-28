@@ -43,9 +43,9 @@ const logger = pino({ level: loadConfig().logLevel, name: "scopeComponentService
  * Rules per the plan (docs/SBOM_COMPONENT_RECHECK_PLAN.md):
  * - Insert: set firstSeenScanRunId = lastSeenScanRunId = scanRunId,
  *   lastSeenAt = now, dismissedStatus = 'active', source = 'scan'.
- * - Existing 'active' or 'removed' row hit: update lastSeenScanRunId,
- *   lastSeenAt. Flip 'removed' back to 'active' (the component is back).
- * - Existing 'manual_override' row: leave dismissedStatus / reason as-is.
+ * - Existing 'active' or 'not_found' row hit: update lastSeenScanRunId,
+ *   lastSeenAt. Flip 'not_found' back to 'active' (the component is back).
+ * - Existing source='manual_override' row: leave dismissedStatus / reason as-is.
  *   Update lastSeenScanRunId and lastSeenAt only.
  *
  * The join row (scan_run_components) always uses the component's discoveryMethod
@@ -185,15 +185,15 @@ export async function persistScanComponentsToScopeState(
               ELSE $6::jsonb
             END,
             dismissed_status = CASE
-              WHEN dismissed_status = 'removed' THEN 'active'
+              WHEN dismissed_status = 'not_found' THEN 'active'
               ELSE dismissed_status
             END,
             dismissed_reason = CASE
-              WHEN dismissed_status = 'removed' THEN NULL
+              WHEN dismissed_status = 'not_found' THEN NULL
               ELSE dismissed_reason
             END,
             dismissed_at = CASE
-              WHEN dismissed_status = 'removed' THEN NULL
+              WHEN dismissed_status = 'not_found' THEN NULL
               ELSE dismissed_at
             END,
             latest_licenses         = $7::text[],
@@ -279,15 +279,15 @@ export async function persistScanComponentsToScopeState(
                   ELSE EXCLUDED.usage
                 END,
                 dismissed_status = CASE
-                  WHEN scope_components.dismissed_status = 'removed' THEN 'active'
+                  WHEN scope_components.dismissed_status = 'not_found' THEN 'active'
                   ELSE scope_components.dismissed_status
                 END,
                 dismissed_reason = CASE
-                  WHEN scope_components.dismissed_status = 'removed' THEN NULL
+                  WHEN scope_components.dismissed_status = 'not_found' THEN NULL
                   ELSE scope_components.dismissed_reason
                 END,
                 dismissed_at = CASE
-                  WHEN scope_components.dismissed_status = 'removed' THEN NULL
+                  WHEN scope_components.dismissed_status = 'not_found' THEN NULL
                   ELSE scope_components.dismissed_at
                 END,
                 latest_licenses         = EXCLUDED.latest_licenses,
@@ -414,4 +414,116 @@ export async function materializeRecoveredComponents(
   );
 
   return { updated: recoveredScopeComponentIds.length };
+}
+
+// ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
+
+export class ScopeComponentNotFoundError extends Error {
+  constructor(componentId: string) {
+    super(`ScopeComponent not found: ${componentId}`);
+    this.name = "ScopeComponentNotFoundError";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ignore / unignore — operator-facing soft-suppress
+// ---------------------------------------------------------------------------
+
+/**
+ * Mark a scope_component as 'ignored' and cascade suppression to all
+ * non-terminal sca_issues for the same package.
+ *
+ * Returns the number of sca_issue rows suppressed (for operator confirmation).
+ */
+export async function ignoreScopeComponent(
+  componentId: string,
+  reason?: string | null,
+): Promise<{ suppressed_sca_count: number }> {
+  return prisma.$transaction(async (tx) => {
+    const component = await tx.scopeComponent.findUnique({
+      where: { id: componentId },
+      select: { id: true, scopeId: true, name: true },
+    });
+    if (!component) throw new ScopeComponentNotFoundError(componentId);
+
+    await tx.scopeComponent.update({
+      where: { id: componentId },
+      data: {
+        dismissedStatus: "ignored",
+        dismissedReason: reason ?? null,
+        dismissedAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    const result = await tx.$executeRaw`
+      UPDATE sca_issues
+      SET dismissed_status = 'suppressed',
+          dismissed_reason = 'component_ignored',
+          dismissed_at     = now(),
+          updated_at       = now()
+      WHERE scope_id = ${component.scopeId}::uuid
+        AND package_name = ${component.name}
+        AND dismissed_status NOT IN ('fixed', 'false_positive')
+    `;
+
+    logger.info(
+      { componentId, scopeId: component.scopeId, name: component.name, suppressed_sca_count: result },
+      "[scopeComponentService] ignoreScopeComponent: component ignored, sca_issues suppressed",
+    );
+
+    return { suppressed_sca_count: result };
+  });
+}
+
+/**
+ * Restore an 'ignored' scope_component to 'active' and un-suppress all
+ * sca_issues that were cascaded by the ignore action.
+ *
+ * Only reverses issues suppressed with dismissed_reason='component_ignored'.
+ * dev_tree_policy suppressions are left as-is.
+ *
+ * Returns the number of sca_issue rows restored.
+ */
+export async function unignoreScopeComponent(
+  componentId: string,
+): Promise<{ restored_sca_count: number }> {
+  return prisma.$transaction(async (tx) => {
+    const component = await tx.scopeComponent.findUnique({
+      where: { id: componentId },
+      select: { id: true, scopeId: true, name: true },
+    });
+    if (!component) throw new ScopeComponentNotFoundError(componentId);
+
+    await tx.scopeComponent.update({
+      where: { id: componentId },
+      data: {
+        dismissedStatus: "active",
+        dismissedReason: null,
+        dismissedAt: null,
+        updatedAt: new Date(),
+      },
+    });
+
+    const result = await tx.$executeRaw`
+      UPDATE sca_issues
+      SET dismissed_status = 'pending',
+          dismissed_reason = NULL,
+          dismissed_at     = NULL,
+          updated_at       = now()
+      WHERE scope_id = ${component.scopeId}::uuid
+        AND package_name = ${component.name}
+        AND dismissed_status = 'suppressed'
+        AND dismissed_reason = 'component_ignored'
+    `;
+
+    logger.info(
+      { componentId, scopeId: component.scopeId, name: component.name, restored_sca_count: result },
+      "[scopeComponentService] unignoreScopeComponent: component restored, sca_issues un-suppressed",
+    );
+
+    return { restored_sca_count: result };
+  });
 }

@@ -616,7 +616,7 @@ model ScopeComponent {
 
   // Lifecycle — mirrors SastIssue / ScaIssue pattern
   source          String    @default("scan")
-  // "active" | "removed" | "manual_override"
+  // "active" | "not_found" | "ignored"
   dismissedStatus String    @default("active") @map("dismissed_status")
   dismissedReason String?   @map("dismissed_reason")
   dismissedAt     DateTime? @map("dismissed_at") @db.Timestamptz(6)

@@ -132,6 +132,11 @@ export async function upsertScaIssueFromDetection(
   orgId: string | null,
   component: ScaComponentInfo,
   detection: ScaDetectionInput,
+  /** Optional: set of component names in this scope that are currently ignored.
+   *  When a new issue's package matches an ignored component, it auto-lands as
+   *  suppressed/component_ignored (sticky cascade). Pass from the worker via a
+   *  batched lookup at the start of the OSV/NVD phase. */
+  ignoredComponentNames?: Set<string>,
 ): Promise<{ issue: ScaIssue; isNew: boolean }> {
   const db = client as Db;
   const { name: packageName, version, ecosystem, scope: componentScope, isDevOnly } = component;
@@ -163,6 +168,13 @@ export async function upsertScaIssueFromDetection(
     latestManifestSnippet: detection.manifestSnippet ?? null,
   };
 
+  // If the component is ignored by the operator, new issues auto-land as
+  // suppressed. Only applies on CREATE — don't override existing triage.
+  const isComponentIgnored = ignoredComponentNames?.has(packageName) ?? false;
+  const createDismissedStatus = isComponentIgnored ? "suppressed" : "pending";
+  const createDismissedReason = isComponentIgnored ? "component_ignored" : null;
+  const createDismissedAt = isComponentIgnored ? new Date() : null;
+
   const issue = await db.scaIssue.upsert({
     where: { uq_sca_issues_scope_pkg_osv: { scopeId, packageName, osvId } },
     create: {
@@ -170,7 +182,9 @@ export async function upsertScaIssueFromDetection(
       scopeId,
       packageName,
       osvId,
-      dismissedStatus: "pending",
+      dismissedStatus: createDismissedStatus,
+      dismissedReason: createDismissedReason,
+      dismissedAt: createDismissedAt,
       source: detection.source ?? "osv",
       ...latestFields,
       firstSeenScanRunId: scanRunId,

@@ -23,6 +23,31 @@ beforeAll(() => {
 });
 
 // ---------------------------------------------------------------------------
+// M14 helper: buildCuratedSbomJsonForScope now calls scopeComponent.findMany
+// twice per invocation:
+//   1st call: { dismissedStatus: "active" } → active components for output
+//   2nd call: { dismissedStatus: { in: ["ignored","not_found"] } } → excluded names
+// Use this filter-aware mock to handle both calls correctly.
+// ---------------------------------------------------------------------------
+function mockScopeComponentFindMany(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  prisma: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  activeRows: any[],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  excludedRows: any[] = [],
+) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  vi.spyOn(prisma.scopeComponent, "findMany").mockImplementation((args: any) => {
+    const where = args?.where ?? {};
+    if (where.dismissedStatus && typeof where.dismissedStatus === "object" && "in" in where.dismissedStatus) {
+      return Promise.resolve(excludedRows);
+    }
+    return Promise.resolve(activeRows);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Fixture builders
 // ---------------------------------------------------------------------------
 
@@ -410,9 +435,7 @@ describe("buildCuratedSbomJsonForScope — determinism", () => {
     vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
       makeScopeRow(SCOPE_ID) as ReturnType<typeof makeScopeRow>,
     );
-    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue(
-      components as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
-    );
+    mockScopeComponentFindMany(prisma, components);
     // M11 Step 3: buildCuratedSbomJsonForScope now queries scaIssue.
     vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
@@ -456,22 +479,19 @@ describe("buildCuratedSbomJsonForScope — determinism", () => {
     // M11 Step 3: scaIssue.findMany now queried — mock for both calls.
     vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
-    // Call 1: forward order
+    // Call 1: forward order. Uses filter-aware mock — active call returns
+    // componentForward; excluded-names call returns [].
     vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValueOnce(
       makeScopeRow(SCOPE_ID) as ReturnType<typeof makeScopeRow>,
     );
-    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValueOnce(
-      [componentForward] as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
-    );
+    mockScopeComponentFindMany(prisma, [componentForward]);
     const docForward = await buildCuratedSbomJsonForScope(SCOPE_ID);
 
-    // Call 2: reversed occurrence array
+    // Call 2: reversed occurrence array.
     vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValueOnce(
       makeScopeRow(SCOPE_ID) as ReturnType<typeof makeScopeRow>,
     );
-    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValueOnce(
-      [componentReverse] as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
-    );
+    mockScopeComponentFindMany(prisma, [componentReverse]);
     const docReverse = await buildCuratedSbomJsonForScope(SCOPE_ID);
 
     expect(docForward).not.toBeNull();
@@ -494,9 +514,7 @@ describe("buildCuratedSbomJsonForScope — determinism", () => {
     vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
       makeScopeRow(SCOPE_ID) as ReturnType<typeof makeScopeRow>,
     );
-    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue(
-      makeScopeComponents(SCOPE_ID) as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
-    );
+    mockScopeComponentFindMany(prisma, makeScopeComponents(SCOPE_ID));
     // M11 Step 3: scaIssue.findMany now queried.
     vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
@@ -711,9 +729,7 @@ describe("SBOM tools.components.SASTBot.version reflects APP_VERSION", () => {
     vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
       makeScopeRow(SCOPE_ID) as ReturnType<typeof makeScopeRow>,
     );
-    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue(
-      makeScopeComponents(SCOPE_ID) as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
-    );
+    mockScopeComponentFindMany(prisma, makeScopeComponents(SCOPE_ID));
     // M11 Step 3: scaIssue.findMany now queried.
     vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([]);
 
@@ -786,10 +802,8 @@ describe("buildCuratedSbomJsonForScope — determinism with vulns + EOL data (M1
     vi.spyOn(prisma.scanScope, "findUnique").mockResolvedValue(
       makeScopeRow(VULN_SCOPE_ID) as ReturnType<typeof makeScopeRow>,
     );
-    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValue(
-      // Reuse the first two components from makeScopeComponents — axios matches the issue.
-      makeScopeComponents(VULN_SCOPE_ID).slice(0, 2) as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>,
-    );
+    // Reuse the first two components from makeScopeComponents — axios matches the issue.
+    mockScopeComponentFindMany(prisma, makeScopeComponents(VULN_SCOPE_ID).slice(0, 2));
     vi.spyOn(prisma.scaIssue, "findMany").mockResolvedValue([
       makeScaIssueForDet() as Awaited<ReturnType<typeof prisma.scaIssue.findMany>>[number],
     ]);

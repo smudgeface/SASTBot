@@ -51,21 +51,52 @@ Click a row to expand. The expanded panel shows:
 - CPE, PURL, manifest file, manifest line.
 - A pencil icon next to **Evidence** to inline-edit
   (name, component_root, evidence list).
-- A trashcan icon for hard delete.
+- A trashcan icon (in the detail pane, next to the pencil) for hard delete.
 
-## Editing a component
+## Component actions
 
-Two operator actions on each scope_component:
+Three operator actions are available per scope_component:
 
-- **Edit** (pencil icon) — opens `PATCH /api/scopes/:id/components/:componentId`.
-  Accepts `name`, `component_root`, `evidence` (array of
-  `{path, line?}`). Marks the row `source='manual_override'`. The
-  persist-flow UPDATE uses COALESCE / array-empty checks so
-  operator-set values aren't overwritten by future scans.
-- **Delete** (trashcan) — `DELETE /api/scopes/:id/components/:componentId`.
-  Hard delete. Safe to use freely: the next scan will re-emit any
-  legitimate component, and the matcher will collapse the new row
-  against any operator override that survives.
+- **Ignore** (Ban icon, row-level) — soft-suppresses the component and
+  all its pending/confirmed SCA issues. Sticky across scans: future CVEs
+  on the same package also land as suppressed automatically. Reversible
+  via the Restore action in the Ignored view (see Filter chips below).
+  An optional free-text reason can be recorded when ignoring.
+- **Edit** (pencil icon, in the detail pane) — opens
+  `PATCH /api/scopes/:id/components/:componentId`. Accepts `name`,
+  `component_root`, `evidence` (array of `{path, line?}`). Marks the
+  row `source='manual_override'`. The persist-flow UPDATE uses COALESCE
+  / array-empty checks so operator-set values aren't overwritten by
+  future scans.
+- **Delete** (trashcan, in the detail pane next to the pencil) —
+  `DELETE /api/scopes/:id/components/:componentId`. Hard delete. Safe to
+  use freely: the next scan will re-emit any legitimate component, and
+  the matcher will collapse the new row against any operator override
+  that survives. Use this for duplicate or garbage rows the matcher
+  didn't catch. Use **Ignore** instead if the component is real but you
+  don't want to see it or its CVEs.
+
+## Filter chips (status views)
+
+The Components tab has two filter chips:
+
+- **Not found** — components where the worker could not find evidence
+  (the evidence path file no longer exists on disk, or the LLM SBOM
+  recheck concluded the component is absent). This is a worker-side
+  decision, not an operator action.
+- **Ignored** — components the operator has explicitly ignored via the
+  Ban icon. Shows the Restore (Undo) action in place of the Ignore
+  button.
+
+When no chip is selected (the default), only active components are
+shown. Selecting one or both chips replaces the default and shows
+components with the selected `dismissed_status` values instead.
+
+In the **Ignored** view, the row-level action icon becomes a Restore
+icon (Undo2). Clicking it restores the component to active and
+un-suppresses the SCA issues that were cascaded by the ignore action.
+The trashcan in the detail pane is always available regardless of
+which filter view is active.
 
 Evidence accepts `path:N` shorthand on each line in the textarea —
 parsed into `{path, line: N}` objects.
@@ -98,6 +129,9 @@ Two distinct endpoints, both serving CycloneDX 1.7:
   - Built fresh on every request from the current `scope_components`
     rows.
   - Reflects any operator edits (renames, evidence changes, deletes).
+  - **Ignored and not-found components are excluded**, along with all
+    their SCA vulnerabilities. Only `dismissed_status='active'`
+    components and their issues appear in this artifact.
   - The primary **CRA-evidence** artifact.
 
 The two endpoints serve the same content shape but different scopes —

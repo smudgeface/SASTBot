@@ -3,6 +3,7 @@ import { Link, useMatch, useNavigate, useParams, useSearchParams } from "react-r
 import {
   AlertTriangle,
   ArrowLeft,
+  Ban,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -17,6 +18,7 @@ import {
   ScanSearch,
   ShieldAlert,
   Trash2,
+  Undo2,
   Unlink,
   Zap,
 } from "lucide-react";
@@ -31,8 +33,11 @@ import {
   useDismissScaIssue,
   useDeleteScopeComponent,
   usePatchScopeComponent,
+  useIgnoreScopeComponent,
+  useUnignoreScopeComponent,
   type SastIssueFilters,
   type ScaIssueFilters,
+  type ScopeComponentDismissedStatus,
 } from "@/api/queries/scopes";
 import {
   useLinkSastIssueToJira,
@@ -51,6 +56,14 @@ import { SCAN_PHASE_LABELS, SCAN_PHASE_UNITS, SCAN_PHASE_CAPS } from "@/api/type
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -1361,7 +1374,7 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplaye
 
 /** Single expandable row in the scope-page ComponentsTab. */
 function ScopeComponentRow({
-  component, scopeId, sourceUrlTemplate, autoExpand, scaIssueMap, onUserInteraction,
+  component, scopeId, sourceUrlTemplate, autoExpand, scaIssueMap, onUserInteraction, viewingIgnored,
 }: {
   component: import("@/api/types").SbomComponent;
   scopeId: string;
@@ -1369,6 +1382,8 @@ function ScopeComponentRow({
   autoExpand: boolean;
   scaIssueMap: Map<string, import("@/api/types").ScaIssue>;
   onUserInteraction?: () => void;
+  /** When true (user selected the "Ignored" filter chip), show Restore instead of Ignore. */
+  viewingIgnored?: boolean;
 }) {
   const rowRef = useRef<HTMLTableRowElement>(null);
   // Local expand state — mirrors SCA/SAST rows so multiple rows can be open
@@ -1377,6 +1392,9 @@ function ScopeComponentRow({
   const [expanded, setExpanded] = useState(autoExpand);
   const deleteComponent = useDeleteScopeComponent();
   const patchComponent = usePatchScopeComponent();
+  const ignoreComponent = useIgnoreScopeComponent(scopeId);
+  const unignoreComponent = useUnignoreScopeComponent(scopeId);
+  const { toast } = useToast();
 
   // Inline-edit state for name + component_root + evidence.
   // evidenceDraft is a newline-separated textarea string. Each line is a
@@ -1389,6 +1407,10 @@ function ScopeComponentRow({
       .map((e) => (e.line != null ? `${e.path}:${e.line}` : e.path))
       .join("\n"),
   );
+
+  // Ignore confirm dialog state
+  const [ignoreDialogOpen, setIgnoreDialogOpen] = useState(false);
+  const [ignoreReason, setIgnoreReason] = useState("");
 
   useEffect(() => {
     if (autoExpand) {
@@ -1412,8 +1434,55 @@ function ScopeComponentRow({
     deleteComponent.mutate({ scopeId, componentId: component.id });
   };
 
+  const handleIgnoreConfirm = () => {
+    const reason = ignoreReason.trim() || undefined;
+    ignoreComponent.mutate(
+      { componentId: component.id, reason },
+      {
+        onSuccess: (data) => {
+          setIgnoreDialogOpen(false);
+          setIgnoreReason("");
+          toast({
+            title: `Ignored ${component.name}`,
+            description: `Suppressed ${data.suppressed_sca_count} SCA issue${data.suppressed_sca_count === 1 ? "" : "s"}.`,
+          });
+        },
+        onError: (err) => {
+          toast({ title: "Failed to ignore component", description: (err as Error).message, variant: "destructive" });
+        },
+      },
+    );
+  };
+
+  const handleRestore = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    unignoreComponent.mutate(
+      { componentId: component.id },
+      {
+        onSuccess: (data) => {
+          toast({
+            title: `Restored ${component.name}`,
+            description: `Un-suppressed ${data.restored_sca_count} SCA issue${data.restored_sca_count === 1 ? "" : "s"}.`,
+          });
+        },
+        onError: (err) => {
+          toast({ title: "Failed to restore component", description: (err as Error).message, variant: "destructive" });
+        },
+      },
+    );
+  };
+
   const eco = prettyEcosystem(component.ecosystem, component.discovery_method);
   const linkedScaIds = component.linked_issue_ids?.sca ?? [];
+  // Row badge column shows only NON-TERMINAL issues — operator action needed.
+  // The detail panel below shows ALL linked issues (fixed included) as audit.
+  // Without this split, jquery@1.3.2 (6 fixed CVEs) showed three colored
+  // severity chips that looked actionable but weren't, plus a confusing "+3".
+  const TERMINAL_TRIAGE = new Set(["fixed", "suppressed", "false_positive"]);
+  const actionableScaIds = linkedScaIds.filter((id) => {
+    const i = scaIssueMap.get(id);
+    return i ? !TERMINAL_TRIAGE.has(i.dismissed_status) : false;
+  });
 
   // First license for inline display; rest go in expand panel.
   // prettyLicense() preserves SPDX casing but title-cases bare-word
@@ -1453,9 +1522,9 @@ function ScopeComponentRow({
           ) : "—"}
         </TableCell>
         <TableCell>
-          {linkedScaIds.length > 0 && (
+          {actionableScaIds.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              {linkedScaIds.slice(0, 3).map((issueId) => {
+              {actionableScaIds.slice(0, 3).map((issueId) => {
                 const issue = scaIssueMap.get(issueId);
                 if (!issue) return null;
                 const sev = issue.latest_severity;
@@ -1477,25 +1546,76 @@ function ScopeComponentRow({
                   </Link>
                 );
               })}
-              {linkedScaIds.length > 3 && (
-                <span className="text-[10px] text-muted-foreground">+{linkedScaIds.length - 3}</span>
+              {actionableScaIds.length > 3 && (
+                <span className="text-[10px] text-muted-foreground">+{actionableScaIds.length - 3}</span>
               )}
             </div>
           )}
         </TableCell>
         <TableCell className="text-right">
-          <button
-            type="button"
-            onClick={handleDelete}
-            disabled={deleteComponent.isPending}
-            className="p-1 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition disabled:opacity-50"
-            title="Delete this component from the scope (manual cleanup)"
-            aria-label="Delete component"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          {viewingIgnored ? (
+            <button
+              type="button"
+              onClick={handleRestore}
+              disabled={unignoreComponent.isPending}
+              className="p-1 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition disabled:opacity-50"
+              title="Restore this component (un-ignore and un-suppress its SCA issues)"
+              aria-label="Restore component"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setIgnoreDialogOpen(true); }}
+              disabled={ignoreComponent.isPending}
+              className="p-1 text-muted-foreground hover:text-amber-600 opacity-0 group-hover:opacity-100 transition disabled:opacity-50"
+              title="Ignore this component (soft-suppress it and all its SCA issues)"
+              aria-label="Ignore component"
+            >
+              <Ban className="h-3.5 w-3.5" />
+            </button>
+          )}
         </TableCell>
       </TableRow>
+
+      {/* Ignore confirm dialog — uses Dialog since @radix-ui/react-alert-dialog is not installed.
+          TODO: migrate to AlertDialog if it's added to the shadcn component set. */}
+      <Dialog open={ignoreDialogOpen} onOpenChange={setIgnoreDialogOpen}>
+        <DialogContent onClick={(e) => e.stopPropagation()}>
+          <DialogHeader>
+            <DialogTitle>Ignore &ldquo;{component.name}&rdquo;?</DialogTitle>
+            <DialogDescription>
+              This will also suppress {linkedScaIds.length} pending and confirmed SCA issue{linkedScaIds.length === 1 ? "" : "s"} on this package.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-1">
+            <label className="block text-xs text-muted-foreground uppercase tracking-wide">
+              Optional reason
+            </label>
+            <textarea
+              rows={3}
+              value={ignoreReason}
+              onChange={(e) => setIgnoreReason(e.target.value)}
+              placeholder="e.g. false positive, vendored in a safe context…"
+              className="w-full text-sm px-2 py-1.5 border rounded bg-background resize-none"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setIgnoreDialogOpen(false); setIgnoreReason(""); }}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={ignoreComponent.isPending}
+              onClick={handleIgnoreConfirm}
+            >
+              {ignoreComponent.isPending ? "Ignoring…" : "Ignore"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {isExpanded && (
         <TableRow className="bg-muted/20 hover:bg-muted/20">
           <TableCell colSpan={7} className="py-4 px-6">
@@ -1506,25 +1626,37 @@ function ScopeComponentRow({
                 <div className="flex items-center justify-between mb-1">
                   <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide">Evidence</p>
                   {!editingEvidence && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setNameDraft(component.name);
-                        setRootDraft(component.component_root ?? "");
-                        setEvidenceDraft(
-                          (component.evidence ?? [])
-                            .map((e) => (e.line != null ? `${e.path}:${e.line}` : e.path))
-                            .join("\n"),
-                        );
-                        setEditingEvidence(true);
-                      }}
-                      className="p-1 text-muted-foreground hover:text-foreground"
-                      title="Edit name, component_root and evidence_paths"
-                      aria-label="Edit evidence"
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setNameDraft(component.name);
+                          setRootDraft(component.component_root ?? "");
+                          setEvidenceDraft(
+                            (component.evidence ?? [])
+                              .map((e) => (e.line != null ? `${e.path}:${e.line}` : e.path))
+                              .join("\n"),
+                          );
+                          setEditingEvidence(true);
+                        }}
+                        className="p-1 text-muted-foreground hover:text-foreground"
+                        title="Edit name, component_root and evidence_paths"
+                        aria-label="Edit evidence"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDelete}
+                        disabled={deleteComponent.isPending}
+                        className="p-1 text-muted-foreground hover:text-destructive transition disabled:opacity-50"
+                        title="Delete this component from the scope (manual cleanup)"
+                        aria-label="Delete component"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -1717,13 +1849,21 @@ function ScopeComponentRow({
                 <div>
                   <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-1">
                     Linked issues ({linkedScaIds.length})
+                    {actionableScaIds.length < linkedScaIds.length && (
+                      <span className="ml-1 text-[10px] normal-case font-normal text-muted-foreground">
+                        — {actionableScaIds.length} open, {linkedScaIds.length - actionableScaIds.length} resolved
+                      </span>
+                    )}
                   </p>
                   <div className="space-y-1">
                     {linkedScaIds.map((issueId) => {
                       const issue = scaIssueMap.get(issueId);
                       if (!issue) return null;
                       const sev = issue.latest_severity;
-                      const sevColor = sev === "critical" ? "text-destructive"
+                      const isTerminal = TERMINAL_TRIAGE.has(issue.dismissed_status);
+                      const sevColor = isTerminal
+                        ? "text-muted-foreground"
+                        : sev === "critical" ? "text-destructive"
                         : sev === "high" ? "text-orange-600"
                         : sev === "medium" ? "text-amber-600"
                         : sev === "low" ? "text-blue-600"
@@ -1733,12 +1873,19 @@ function ScopeComponentRow({
                           <span className={`text-xs font-medium w-16 shrink-0 ${sevColor}`}>{sev.toUpperCase()}</span>
                           <Link
                             to={`/scopes/${scopeId}/sca/${issueId}`}
-                            className="text-xs hover:underline font-mono w-56 shrink-0 break-all"
+                            className={`text-xs hover:underline font-mono w-56 shrink-0 break-all ${isTerminal ? "text-muted-foreground line-through decoration-1 decoration-muted-foreground/60" : ""}`}
                           >
                             {issue.latest_cve_id ?? issue.osv_id}
                           </Link>
+                          {isTerminal && (
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 text-muted-foreground border-border shrink-0">
+                              {issue.dismissed_status === "fixed" ? "Fixed"
+                                : issue.dismissed_status === "false_positive" ? "False positive"
+                                : "Suppressed"}
+                            </Badge>
+                          )}
                           {issue.latest_summary && (
-                            <span className="text-xs text-muted-foreground flex-1 min-w-0">{issue.latest_summary}</span>
+                            <span className={`text-xs flex-1 min-w-0 ${isTerminal ? "text-muted-foreground/70" : "text-muted-foreground"}`}>{issue.latest_summary}</span>
                           )}
                         </div>
                       );
@@ -1753,6 +1900,19 @@ function ScopeComponentRow({
     </>
   );
 }
+
+// Dismissed status filter colors for Components tab filter chips
+const COMPONENT_STATUS_COLORS: Record<string, string> = {
+  not_found: "text-slate-500 border-slate-400",
+  ignored:   "text-amber-600 border-amber-400",
+};
+
+const COMPONENT_STATUS_LABELS: Record<string, string> = {
+  not_found: "Not found",
+  ignored:   "Ignored",
+};
+
+const COMPONENT_DISMISSED_STATUSES = ["not_found", "ignored"] as const;
 
 function ComponentsTab({
   scopeId,
@@ -1770,10 +1930,38 @@ function ComponentsTab({
   const [page, setPage] = useState(1);
   const [hasFindings, setHasFindings] = useState(false);
   const [excludeDevOnly, setExcludeDevOnly] = useState(true);
-  const { data, isLoading } = useScopeComponents(scopeId, { page, page_size: 50, has_findings: hasFindings || undefined, exclude_dev_only: excludeDevOnly });
+  // dismissed_statuses filter: empty = active only (backend default)
+  const [dismissedStatuses, setDismissedStatuses] = useState<ScopeComponentDismissedStatus[]>([]);
+
+  const dismissedStatusSet = new Set(dismissedStatuses) as ReadonlySet<typeof COMPONENT_DISMISSED_STATUSES[number]>;
+
+  const toggleDismissedStatus = (s: typeof COMPONENT_DISMISSED_STATUSES[number]) => {
+    setDismissedStatuses((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s); else next.add(s);
+      return Array.from(next);
+    });
+    setPage(1);
+    onUserInteraction?.();
+  };
+
+  const viewingIgnored = dismissedStatuses.includes("ignored") && !dismissedStatuses.includes("not_found");
+
+  const { data, isLoading } = useScopeComponents(scopeId, {
+    page,
+    page_size: 50,
+    has_findings: hasFindings || undefined,
+    exclude_dev_only: excludeDevOnly,
+    dismissed_statuses: dismissedStatuses.length > 0 ? dismissedStatuses : undefined,
+  });
 
   // Fetch current SCA issues so we can show linked issue details in expand panels
-  const { data: scaData } = useScopeScaIssues(scopeId, { page: 1, page_size: 500 });
+  // Include resolved (fixed / suppressed / false_positive) so the Components
+  // tab's per-row badge + detail-panel "Linked issues" list can render every
+  // linkage the backend reports. Without this, jquery@1.3.2 (all 6 CVEs
+  // marked `fixed`) showed "Linked issues (6)" with an empty table and the
+  // row badge column dangled a "+3" overflow with no preceding chips.
+  const { data: scaData } = useScopeScaIssues(scopeId, { page: 1, page_size: 500, include_resolved: true });
   const scaIssueMap = new Map((scaData?.items ?? []).map((i) => [i.id, i]));
 
   const totalRuntime = data?.total_runtime ?? 0;
@@ -1787,23 +1975,33 @@ function ComponentsTab({
 
   return (
     <div className="space-y-3">
-      <ToggleGroup
-        items={[
-          {
-            key: "has_findings",
-            label: "Only with findings",
-            active: hasFindings,
-            onToggle: () => { setHasFindings((v) => !v); setPage(1); onUserInteraction?.(); },
-          },
-          {
-            key: "show_dev",
-            label: "Show dev-tool packages",
-            active: !excludeDevOnly,
-            onToggle: () => { setExcludeDevOnly((v) => !v); setPage(1); onUserInteraction?.(); },
-          },
-        ]}
-      />
-      {totalAll > 0 && (
+      <div className="flex flex-wrap items-center gap-y-2 gap-x-0">
+        <ToggleGroup
+          items={[
+            {
+              key: "has_findings",
+              label: "Only with findings",
+              active: hasFindings,
+              onToggle: () => { setHasFindings((v) => !v); setPage(1); onUserInteraction?.(); },
+            },
+            {
+              key: "show_dev",
+              label: "Show dev-tool packages",
+              active: !excludeDevOnly,
+              onToggle: () => { setExcludeDevOnly((v) => !v); setPage(1); onUserInteraction?.(); },
+            },
+          ]}
+        />
+        <Pipe />
+        <FilterGroup
+          items={COMPONENT_DISMISSED_STATUSES}
+          active={dismissedStatusSet}
+          onToggle={toggleDismissedStatus}
+          label={(s) => COMPONENT_STATUS_LABELS[s] ?? s.replace(/_/g, " ")}
+          colorFn={(s) => COMPONENT_STATUS_COLORS[s] ?? ""}
+        />
+      </div>
+      {totalAll > 0 && dismissedStatuses.length === 0 && (
         <p className="text-xs text-muted-foreground">
           {visible.toLocaleString()} of {totalAll.toLocaleString()} components shown
           {excludeDevOnly && totalDev > 0 && (
@@ -1815,7 +2013,9 @@ function ComponentsTab({
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : !data || data.total === 0 ? (
         <p className="text-sm text-muted-foreground py-6 text-center">
-          {excludeDevOnly && totalDev > 0
+          {dismissedStatuses.length > 0
+            ? `No components with the selected status filter${dismissedStatuses.length > 1 ? "s" : ""}.`
+            : excludeDevOnly && totalDev > 0
             ? `No runtime components with findings. ${totalDev.toLocaleString()} dev-tool packages hidden.`
             : "No components in the most recent scan."}
         </p>
@@ -1844,6 +2044,7 @@ function ComponentsTab({
                     autoExpand={expandedId === c.id}
                     scaIssueMap={scaIssueMap}
                     onUserInteraction={onUserInteraction}
+                    viewingIgnored={viewingIgnored}
                   />
                 ))}
               </TableBody>

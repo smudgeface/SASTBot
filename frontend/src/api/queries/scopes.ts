@@ -127,9 +127,19 @@ export function useScopeScaIssues(scopeId: string | undefined, filters: ScaIssue
   });
 }
 
+// TODO: re-align with regenerated schema once backend agent lands (M14)
+export type ScopeComponentDismissedStatus = "active" | "not_found" | "ignored";
+
 export function useScopeComponents(
   scopeId: string | undefined,
-  options?: { page?: number; page_size?: number; has_findings?: boolean; exclude_dev_only?: boolean },
+  options?: {
+    page?: number;
+    page_size?: number;
+    has_findings?: boolean;
+    exclude_dev_only?: boolean;
+    /** When provided, filters by dismissed_status IN <values>. Empty/omitted = active only. */
+    dismissed_statuses?: ScopeComponentDismissedStatus[];
+  },
 ) {
   return useQuery<Paginated<SbomComponent>>({
     queryKey: [...scopesKey, scopeId, "components", options],
@@ -140,10 +150,62 @@ export function useScopeComponents(
       if (options?.has_findings) params.set("has_findings", "true");
       // Default: exclude dev-only. Pass false explicitly only when showing build-tool packages.
       if (options?.exclude_dev_only === false) params.set("exclude_dev_only", "false");
+      // dismissed_statuses: when provided, pass each value; omit entirely for backend default (active).
+      options?.dismissed_statuses?.forEach((s) => params.append("dismissed_statuses", s));
       const qs = params.toString();
       return apiFetch<Paginated<SbomComponent>>(`/api/scopes/${scopeId}/components${qs ? `?${qs}` : ""}`);
     },
     enabled: !!scopeId,
+  });
+}
+
+/**
+ * Soft-ignore a scope_component. Cascades to suppress all pending/confirmed
+ * SCA issues for this package. Sticky: future CVEs on the same package also
+ * land as suppressed. Reversible via useUnignoreScopeComponent.
+ *
+ * TODO: re-align response type with regenerated schema once backend agent lands (M14)
+ */
+export function useIgnoreScopeComponent(scopeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ componentId, reason }: { componentId: string; reason?: string }) =>
+      apiFetch<{ ok: true; suppressed_sca_count: number }>(
+        `/api/scopes/${scopeId}/components/${componentId}/ignore`,
+        {
+          method: "POST",
+          body: reason ? JSON.stringify({ reason }) : JSON.stringify({}),
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scope-components", scopeId] });
+      queryClient.invalidateQueries({ queryKey: [...scopesKey, scopeId, "components"] });
+      queryClient.invalidateQueries({ queryKey: [...scopesKey, scopeId, "sca-issues"] });
+    },
+  });
+}
+
+/**
+ * Restore (un-ignore) a scope_component. Only reverts SCA suppressions that
+ * were created by the ignore cascade (dismissed_reason='component_ignored').
+ * Dev-tree-policy suppressions are left alone.
+ *
+ * TODO: re-align response type with regenerated schema once backend agent lands (M14)
+ */
+export function useUnignoreScopeComponent(scopeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ componentId }: { componentId: string }) =>
+      apiFetch<{ ok: true; restored_sca_count: number }>(
+        `/api/scopes/${scopeId}/components/${componentId}/unignore`,
+        { method: "POST", json: {} },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scope-components", scopeId] });
+      queryClient.invalidateQueries({ queryKey: [...scopesKey, scopeId, "components"] });
+      queryClient.invalidateQueries({ queryKey: [...scopesKey, scopeId, "sca-issues"] });
+    },
   });
 }
 

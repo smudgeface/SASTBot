@@ -4,6 +4,44 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-27 — M14: ignore components + dismissed_status vocabulary cleanup (v0.14.0)
+
+First operator-facing affordance for "I don't care about this component" plus a
+language sweep on `scope_components.dismissed_status` that we'd been carrying as
+technical debt. One coordinated migration; one operator-visible feature; a
+quieter cleanup that was tangentially needed.
+
+**What shipped.**
+
+- **`scope_components.dismissed_status` value space is now `'active' | 'not_found' | 'ignored'`.** Clean three-state lifecycle. Two cleanup moves:
+  - Renamed `'removed'` → `'not_found'`. The worker writes this when an evidence file is missing on disk (Tier 1) or the LLM SBOM recheck verdicts the component as absent (Tier 2). "Removed" overstated certainty; "not_found" reflects the actual semantic ("we can't find evidence anymore"). The LLM verdict TEXT on the prompt's JSON contract is still `"removed"` — only the DB column flipped.
+  - Disentangled `'manual_override'` from `dismissed_status`. The value was documented but never actually written there — the PATCH route correctly writes `source='manual_override'`. Two defensive queries in `llmSbomRecheckService.ts` were checking the wrong column (`dismissed_status = 'manual_override'`) — those flipped to `source = 'manual_override'`. One migration step `UPDATE … SET dismissed_status='active' WHERE dismissed_status='manual_override'` covers any stray production rows defensively (no-op on a clean DB).
+- **New `'ignored'` state, operator-driven.** Two routes:
+  - `POST /api/scopes/:id/components/:componentId/ignore` body `{ reason?: string }` → 200 `{ ok: true, suppressed_sca_count: N }`. Cascades to all non-terminal sca_issues on that package (`dismissed_status='suppressed'`, `reason='component_ignored'`) in a single transaction.
+  - `POST /api/scopes/:id/components/:componentId/unignore` → 200 `{ ok: true, restored_sca_count: N }`. Reverses only the `component_ignored` cascade — dev_tree_policy suppressions stay put.
+- **Sticky cascade for future CVEs.** Worker fetches `ignoredComponentNames` at the start of the OSV/NVD phases and threads it through `upsertScaIssueFromDetection`. New sca_issues on an ignored component land as `suppressed`/`component_ignored` automatically — no operator action required on re-scan.
+- **Sticky across scans, for free.** The existing CASE-WHEN in `persistScanComponentsToScopeState` preserves any non-`not_found` `dismissed_status` on re-detect. `'ignored'` rides that path. (`'not_found'` continues to flip back to `'active'` on re-detect, matching its semantics.)
+- **Scope SBOM artifact excludes both ignored and not_found.** `buildCuratedSbomJsonForScope` already filtered components by `dismissed_status='active'`; we added a second-pass filter on `vulnerabilities[]` so CVEs belonging to ignored/not_found components don't appear either. The scan-level SBOM (`/scans/:id/sbom`) is **unchanged** — it's a per-scan audit snapshot, not a curated scope export.
+- **Components tab UX shuffle.** The trashcan moved from the row action column into the detail-pane action row next to the edit pencil. The row action slot now holds a new Ignore button (Ban icon) — or a Restore button (Undo2) when viewing the Ignored chip. The trashcan stays accessible from any view.
+- **Status filter chips on the Components tab.** Multi-select FilterGroup matching the SCA tab pattern: `["Not found", "Ignored"]`. Empty selection (default) = backend defaults to `dismissed_status='active'`. Selected chips replace the default with `dismissed_status IN <chips>`. Same convention as SCA's `dismissed_statuses` filter.
+- **Ignore confirm dialog** with optional reason textarea. Surfaces the cascade impact ("This will also suppress N pending and confirmed SCA issues on this package.") before the operator commits. Reason persists on `scope_components.dismissed_reason`.
+- **User manual section** (`components-sbom.md`) rewritten: actions table reflects the relocation, the new chips are documented, the relationship between worker-side `not_found` and operator-side `ignored` is called out, and the scope-SBOM exclusion behavior is noted.
+
+**What we learned.**
+
+- **The `manual_override` mis-list was a vocabulary smell.** Two columns (`source` and `dismissed_status`) carrying the same value but only one being written caused defensive code to read from the wrong column. The fix: keep the columns disjoint by responsibility (`source` = "did the operator edit this row?"; `dismissed_status` = "what's the lifecycle state?"). Generalises: when two columns share a value, one of them is probably mis-modeling something. The "fix" was a two-line code change plus a one-line defensive migration — small in code, large in clarity.
+- **Naming a state for the worker's verdict matters more than the verdict itself.** `'removed'` invited operators to read it as "confirmed gone"; the worker only ever means "I couldn't find evidence." `'not_found'` is the same data, less overconfident framing. Worth doing the rename even though zero behavior changes.
+- **The trashcan + ignore distinction needed UX language, not just data-model design.** Two affordances for "make this go away" with subtly different semantics is a recipe for confusion six months later. The pattern that emerged: row-level button = lightweight reversible action (Ignore), detail-pane button = heavyweight irreversible action (Delete). Codifying that location convention up front for future "two actions, similar but distinct" cases.
+
+Version bumped 0.13.0 → 0.14.0 (MINOR — new operator-visible feature, backwards-
+compatible schema rename with idempotent data migration). All three surfaces
+moved together per policy: `backend/package.json`, `frontend/package.json`
+(+ lockfile), `APP_VERSION` in `backend/src/routes/version.ts`. Migration
+`20260527000000_rename_removed_to_not_found_drop_manual_override_from_dismissed`
+applied via `prisma migrate deploy` on the live homelab DB.
+
+---
+
 ## 2026-05-27 — M13 Phase B+C: structured-output enforcement via `--json-schema` (v0.13.0)
 
 The follow-on to Phase A's prompt-embedded schema. Pass the same canonical

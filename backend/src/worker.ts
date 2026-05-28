@@ -1633,7 +1633,19 @@ const worker = new Worker<ScanJobData>(
       // ── Step 4: OSV.dev vulnerability lookup ────────────────────────────
       log.info("[worker] querying OSV.dev");
       await setPhase(scanRunId, "osv", { done: 0, total: components.length, label: "Querying OSV.dev" });
-      const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir, scopePath, repo.reachabilityIncludeDevDeps);
+
+      // Build the ignored-component name set once (per scan) so OSV and NVD
+      // can auto-suppress new issues for already-ignored components.
+      const ignoredComponentRows = await prisma.scopeComponent.findMany({
+        where: { scopeId: run.scopeId, dismissedStatus: "ignored" },
+        select: { name: true },
+      });
+      const ignoredComponentNames = new Set(ignoredComponentRows.map((r) => r.name));
+      if (ignoredComponentNames.size > 0) {
+        log.info({ count: ignoredComponentNames.size }, "[worker] found ignored components — new CVEs for these packages will auto-suppress");
+      }
+
+      const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir, scopePath, repo.reachabilityIncludeDevDeps, ignoredComponentNames);
       log.info({ findings: cveFindings.length }, "[worker] CVE findings persisted");
 
       // ── Step 4.5: NVD fallback for generic/C/C++ components ─────────────
@@ -1656,6 +1668,7 @@ const worker = new Worker<ScanJobData>(
             (done, total) => {
               void setPhase(scanRunId, "nvd", { done, total, label: "Querying NVD" });
             },
+            ignoredComponentNames,
           );
           log.info({ findings: nvdFindings.length }, "[worker] NVD findings persisted");
         } catch (err) {

@@ -8,7 +8,7 @@
  * Two-tier check (per the plan in docs/SBOM_COMPONENT_RECHECK_PLAN.md):
  *
  *   Tier 1 — filesystem evidence check (free):
- *     If the row has an evidencePath: stat the file. Missing → mark removed.
+ *     If the row has an evidencePath: stat the file. Missing → mark not_found.
  *     File still there → fall through to Tier 2.
  *     No evidencePath → fall straight through to Tier 2.
  *
@@ -17,6 +17,8 @@
  *     is a verdict:
  *       {"component_id":"...","verdict":"present","rationale":"..."}
  *       {"component_id":"...","verdict":"removed","rationale":"..."}
+ *     The LLM verdict string "removed" is kept as-is in the JSON contract.
+ *     The DB column value written is 'not_found' (renamed from 'removed').
  *     Recoveries are written back as scan_run_components join rows and the
  *     scope_component's lastSeenScanRunId / lastSeenAt are advanced.
  *
@@ -409,7 +411,7 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
     `SELECT sc.id, sc.name, sc.version, sc.purl, sc.cpe, sc.evidence_path, sc.llm_evidence
      FROM scope_components sc
      WHERE sc.scope_id = $1::uuid
-       AND sc.dismissed_status != 'manual_override'
+       AND sc.source != 'manual_override'
        AND sc.dismissed_status = 'active'
      ORDER BY sc.name ASC, sc.id ASC`,
     input.scopeId,
@@ -458,7 +460,7 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
         );
         await prisma.$executeRawUnsafe(
           `UPDATE scope_components
-           SET dismissed_status = 'removed',
+           SET dismissed_status = 'not_found',
                dismissed_reason = 'no_evidence',
                dismissed_at     = now(),
                updated_at       = now()
@@ -631,10 +633,10 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
 
         tier2Recovered.push(v.component_id);
       } else {
-        // verdict === "removed"
+        // verdict === "removed" (LLM verdict string kept as-is; DB column is 'not_found')
         await prisma.$executeRawUnsafe(
           `UPDATE scope_components
-           SET dismissed_status = 'removed',
+           SET dismissed_status = 'not_found',
                dismissed_reason = 'llm_confirmed_removed',
                dismissed_at     = now(),
                updated_at       = now()
@@ -687,12 +689,13 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
         continue;
       }
 
-      // Re-confirm none of the IDs are manual_override rows in the DB
+      // Re-confirm none of the IDs are operator-edited rows in the DB
       // (the LLM was not sent those rows, but double-check for safety).
+      // Operator edits live on source='manual_override', not dismissed_status.
       const overrideCheck = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
         `SELECT id FROM scope_components
          WHERE id = ANY($1::uuid[])
-           AND dismissed_status = 'manual_override'`,
+           AND source = 'manual_override'`,
         `{${[mv.keep_id, ...mv.drop_ids].map((id) => id).join(",")}}`,
       );
       if (overrideCheck.length > 0) {

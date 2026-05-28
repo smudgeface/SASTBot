@@ -377,6 +377,9 @@ export async function queryAndPersistNvdFindings(
   components: SbomComponent[],
   client: PrismaClient,
   onProgress?: (done: number, total: number) => void,
+  /** Set of component names currently ignored by the operator. New issues
+   *  for these packages auto-land as suppressed/component_ignored. */
+  ignoredComponentNames?: Set<string>,
 ): Promise<ScanFinding[]> {
   // Only generic ecosystem — the whole reason this service exists.
   const genericComponents = components.filter(
@@ -493,6 +496,7 @@ export async function queryAndPersistNvdFindings(
           detailJson: { id: cve.id, published: cve.published, refs },
           source: "nvd",
         },
+        ignoredComponentNames,
       );
 
       const finding = await (client as PrismaClient).scanFinding.create({

@@ -634,11 +634,26 @@ export async function buildCuratedSbomJsonForScope(
   });
   if (scopeComponents.length === 0) return null;
 
+  // Fetch names of excluded (ignored/not_found) components so their
+  // vulnerabilities can be filtered out of the scope-level SBOM export.
+  // The components themselves are already excluded (query above filters
+  // dismissedStatus = 'active'). Only the sca_issues need explicit filtering.
+  const excludedComponentRows = await prisma.scopeComponent.findMany({
+    where: { scopeId, dismissedStatus: { in: ["ignored", "not_found"] } },
+    select: { name: true },
+  });
+  const excludedComponentNames = new Set(excludedComponentRows.map((r) => r.name));
+
   // Fetch all sca_issues for this scope.
-  const scaIssues = await prisma.scaIssue.findMany({
+  let scaIssues = await prisma.scaIssue.findMany({
     where: { scopeId },
     select: SCA_ISSUE_SELECT,
   });
+
+  // Filter out issues for ignored/not_found components.
+  if (excludedComponentNames.size > 0) {
+    scaIssues = scaIssues.filter((i) => !excludedComponentNames.has(i.packageName));
+  }
 
   // Build component key → purl side-map for A3 linkage (scope-level).
   const purlByKey = new Map<string, string>();

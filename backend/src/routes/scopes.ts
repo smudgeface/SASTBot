@@ -31,6 +31,7 @@ import {
 import { jiraTicketToOut, sastIssueToOut, scaIssueToOut, scanRunToOut, sbomComponentToOut, scopeComponentToOut } from "../services/mappers.js";
 import { linkSastIssueToTicket, linkScaIssueToTicket, refreshTicket, unlinkSastIssue, unlinkScaIssue } from "../services/jiraTicketService.js";
 import { bySeverity, byStatus, cmpNum, cmpStr, dirSign } from "../services/issueSort.js";
+import { ignoreScopeComponent, unignoreScopeComponent, ScopeComponentNotFoundError } from "../services/scopeComponentService.js";
 
 // Query-string boolean parser. `z.coerce.boolean()` is a footgun in query-
 // string contexts because Zod's coerce uses `Boolean(value)`, and
@@ -704,6 +705,12 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           has_findings: z.coerce.boolean().optional(),
           /** When true (default), hides components with isDevOnly = true. Pass false to show build-tool packages. */
           exclude_dev_only: queryBool.default(true),
+          /** Filter by dismissed_status. Repeatable (?dismissed_statuses=active&dismissed_statuses=ignored).
+           *  When omitted/empty, defaults to active only. */
+          dismissed_statuses: z.preprocess(
+            (v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v]),
+            z.array(z.enum(["active", "not_found", "ignored"])).optional(),
+          ) as z.ZodType<Array<"active" | "not_found" | "ignored"> | undefined>,
         }),
         response: {
           200: PaginatedSchema(ScopeComponentOutSchema).extend({
@@ -730,10 +737,12 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       // history remains on sbom_components and is read by the scan-detail
       // page (which reads scan-local data only — never reverses to scope).
 
-      const { page, page_size, has_findings, exclude_dev_only } = req.query;
+      const { page, page_size, has_findings, exclude_dev_only, dismissed_statuses } = req.query;
       const baseWhere: Record<string, unknown> = {
         scopeId: scope.id,
-        dismissedStatus: "active",
+        dismissedStatus: dismissed_statuses?.length
+          ? { in: dismissed_statuses }
+          : "active",
       };
 
       // Always compute dev/runtime split counts before applying the dev filter.
@@ -978,6 +987,105 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       }
 
       return { ok: true as const };
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // POST /scopes/:id/components/:componentId/ignore — soft-suppress a component
+  // ---------------------------------------------------------------------------
+
+  typed.post(
+    "/scopes/:id/components/:componentId/ignore",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["scopes"],
+        summary: "Ignore a scope component and cascade suppression to its SCA issues",
+        params: z.object({ id: UuidSchema, componentId: UuidSchema }),
+        body: z.object({ reason: z.string().nullable().optional() }),
+        response: {
+          200: z.object({ ok: z.literal(true), suppressed_sca_count: z.number().int().nonnegative() }),
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const scope = await prisma.scanScope.findFirst({
+        where: { id: req.params.id, orgId: orgId ?? null },
+        select: { id: true },
+      });
+      if (!scope) return reply.code(404).send({ detail: "Scope not found" });
+
+      const component = await prisma.scopeComponent.findFirst({
+        where: { id: req.params.componentId, scopeId: scope.id },
+        select: { id: true },
+      });
+      if (!component) return reply.code(404).send({ detail: "Component not found in this scope" });
+
+      try {
+        const { suppressed_sca_count } = await ignoreScopeComponent(
+          component.id,
+          req.body.reason ?? null,
+        );
+        return { ok: true as const, suppressed_sca_count };
+      } catch (err) {
+        if (err instanceof ScopeComponentNotFoundError) {
+          return reply.code(404).send({ detail: "Component not found" });
+        }
+        throw err;
+      }
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // POST /scopes/:id/components/:componentId/unignore — restore an ignored component
+  // ---------------------------------------------------------------------------
+
+  typed.post(
+    "/scopes/:id/components/:componentId/unignore",
+    {
+      preHandler: [app.requireAdmin],
+      schema: {
+        tags: ["scopes"],
+        summary: "Restore an ignored scope component and reverse the cascaded SCA suppressions",
+        params: z.object({ id: UuidSchema, componentId: UuidSchema }),
+        // Accept an empty/missing body — Fastify defaults reject null, so
+        // declare an explicitly nullish unknown to opt out of strict parsing.
+        body: z.unknown().nullish(),
+        response: {
+          200: z.object({ ok: z.literal(true), restored_sca_count: z.number().int().nonnegative() }),
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const orgId = req.user?.orgId ?? null;
+      const scope = await prisma.scanScope.findFirst({
+        where: { id: req.params.id, orgId: orgId ?? null },
+        select: { id: true },
+      });
+      if (!scope) return reply.code(404).send({ detail: "Scope not found" });
+
+      const component = await prisma.scopeComponent.findFirst({
+        where: { id: req.params.componentId, scopeId: scope.id },
+        select: { id: true },
+      });
+      if (!component) return reply.code(404).send({ detail: "Component not found in this scope" });
+
+      try {
+        const { restored_sca_count } = await unignoreScopeComponent(component.id);
+        return { ok: true as const, restored_sca_count };
+      } catch (err) {
+        if (err instanceof ScopeComponentNotFoundError) {
+          return reply.code(404).send({ detail: "Component not found" });
+        }
+        throw err;
+      }
     },
   );
 
