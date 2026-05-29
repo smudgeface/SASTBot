@@ -67,8 +67,7 @@ SASTBot/
 │   └── compose/             # docker-compose.yml for dev & deploy
 ├── docs/
 │   ├── PROGRESS.md          # milestone log
-│   ├── OPERATIONS.md        # ops/runbook
-│   └── M5_PLAN.md           # M5 implementation plan (phases 5a–5f)
+│   └── OPERATIONS.md        # ops/runbook
 ├── CLAUDE.md                # contributor + AI-agent guide
 └── README.md
 ```
@@ -88,7 +87,7 @@ SASTBot tracks **two** versions, both surfaced at `GET /version` and in the admi
 
 | Version | Source | When it changes |
 |---------|--------|------------------|
-| **App version** (SemVer) | `backend/package.json` AND `frontend/package.json` (must match) | **Manual bump** in a dedicated commit. Currently `0.1.0`. PATCH for bug fixes, MINOR for backwards-compatible features, MAJOR reserved for post-1.0 breaking changes. |
+| **App version** (SemVer) | `backend/package.json` AND `frontend/package.json` (must match) | **Manual bump** in a dedicated commit. Currently `0.16.0`. PATCH for bug fixes, MINOR for backwards-compatible features, MAJOR reserved for post-1.0 breaking changes. |
 | **DB schema version** | Latest folder in `backend/prisma/migrations/` (also recorded in the `_prisma_migrations` table) | **Automatic** — running `pnpm prisma migrate dev --name …` produces the new folder. Commit it; that IS the bump. |
 
 The backup tarball produced by `GET /admin/db/backup` embeds both versions. The restore endpoint compares them to the running backend and either restores as-is, auto-migrates forward, or refuses (newer-than-running). Bumping the app version when shipping a schema or operator-visible change is what makes cross-version restore safe — don't skip it.
@@ -105,17 +104,14 @@ See [`CLAUDE.md`](CLAUDE.md) for detailed developer and AI-agent guidance, inclu
 
 ## Milestones
 
-Progress is tracked in [`docs/PROGRESS.md`](docs/PROGRESS.md). Rough roadmap:
+Progress is tracked in [`docs/PROGRESS.md`](docs/PROGRESS.md). The project has shipped through **M14 / v0.16.0**. Key milestones:
 
-1. **M1 — Skeleton** ✓ auth, admin UI, repo CRUD, encrypted credentials
-2. **M2 — CI + BullMQ + deploy** ✓ deployable stack, scan pipeline plumbing
-3. **M3 — SCA vertical slice** ✓ cdxgen + OSV.dev + findings UI
-4. **M4 — SAST vertical slice** ✓ Opengrep + LLM triage + reachability
-5. **M5 — Issue identity + scope UX + Jira** ✓ stable issue model, scope-centric views, Jira read-only sync, status lifecycle
-6. **M5d — Scheduled scans** ⬜ BullMQ cron, scheduler process, UI preset + preview
-7. **M5e — Operational hardening** ⬜ rate limiting, pagination audit, worker concurrency
-8. **M6 — API hardening + CRA exports** ⬜ API keys, audit log, CRA bundle
-9. **M7 — Scheduling + ops polish** ⬜
+- **M1–M3** ✓ Auth, admin UI, encrypted credentials, deployable stack, SCA pipeline (cdxgen + OSV.dev + findings UI)
+- **M4–M5** ✓ SAST pipeline (LLM-driven, no Opengrep), reachability analysis, issue identity, scope-centric views, Jira read-only sync
+- **M6** ✓ Full LLM-mode SAST (claude-p agentic detection + recheck); Opengrep removed; SARIF v2.1.0 export; LLM SBOM augmentation pass
+- **M7** ✓ Two-table component model (`sbom_components` + `scope_components`); deterministic component matcher; operator component edits
+- **M8–M10** ✓ Artifact store (per-scan SBOM + SARIF files), scan-detail improvements, backup/restore v2 with version-aware migration
+- **M11–M14** ✓ Scope-component evidence snippets, dismissed-status lifecycle hardening (`not_found`, `ignored`), operator-visible UX polish; current release v0.16.0
 
 ## Security
 

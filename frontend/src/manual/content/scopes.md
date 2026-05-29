@@ -80,7 +80,7 @@ Each tab has its own filter strip. Common patterns:
 - **Severity** chips toggle which severities are shown.
 - **Triage status** — for SAST: `pending`, `confirmed`, `false_positive`,
   `wont_fix`, `planned`, `done`. For SCA: `active`, `suppressed`,
-  `removed`, `dev_tree_policy`, etc.
+  `not_found`, `dev_tree_policy`, etc.
 - **Show dev-tool packages** / **Show dev CVEs** — npm-only toggles
   that surface components / SCA issues marked dev-only by cdxgen.
   Default tracks the repo-level `include_dev_deps` setting (hidden

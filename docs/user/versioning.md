@@ -9,7 +9,7 @@ SASTBot follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`)
 The canonical source is the `version` field in `backend/package.json`; the same
 string is mirrored in `frontend/package.json`.
 
-The current release is `0.1.0`. Versions below `1.0.0` signal that the project
+The current release is `0.16.0`. Versions below `1.0.0` signal that the project
 is still in active development and the API / DB schema may change between
 deployments.
 
@@ -19,7 +19,7 @@ The **schema version** is the `migration_name` of the most recently applied
 Prisma migration, as recorded in the `_prisma_migrations` table. Example:
 
 ```
-20260516165953_add_per_repo_llm_token_budgets
+20260528173420_rename_include_dev_deps
 ```
 
 The prefix is a `YYYYMMDDHHMMSS` timestamp, so lexicographic comparison between
@@ -36,9 +36,9 @@ compiled against. In a healthy deployment these two values match.
 
 ```json
 {
-  "app": "0.1.0",
-  "schema": "20260516165953_add_per_repo_llm_token_budgets",
-  "expected_schema": "20260516165953_add_per_repo_llm_token_budgets",
+  "app": "0.16.0",
+  "schema": "20260528173420_rename_include_dev_deps",
+  "expected_schema": "20260528173420_rename_include_dev_deps",
   "sastbot_dump_format_version": 1
 }
 ```
@@ -59,7 +59,7 @@ docker compose -f docker/compose/docker-compose.yml exec backend \
 ```
 
 The admin **Settings** page footer displays a condensed version of this
-information: `SASTBot v0.1.0 · schema 20260516165953`. If the schema and
+information: `SASTBot v0.16.0 · schema 20260528173420`. If the schema and
 expected schema differ, the footer renders in amber to signal that a migration
 is pending.
 
@@ -76,9 +76,9 @@ metadata.json   — version metadata (see below)
 
 ```json
 {
-  "app_version": "0.1.0",
-  "schema_version": "20260516165953_add_per_repo_llm_token_budgets",
-  "expected_schema_version": "20260516165953_add_per_repo_llm_token_budgets",
+  "app_version": "0.16.0",
+  "schema_version": "20260528173420_rename_include_dev_deps",
+  "expected_schema_version": "20260528173420_rename_include_dev_deps",
   "exported_at": "2026-05-17T10:30:00.000Z",
   "sastbot_dump_format_version": 1
 }
@@ -123,7 +123,7 @@ expects.
 {
   "ok": true,
   "restarting": true,
-  "migrations_applied": ["20260516165953_add_per_repo_llm_token_budgets"]
+  "migrations_applied": ["20260528173420_rename_include_dev_deps"]
 }
 ```
 

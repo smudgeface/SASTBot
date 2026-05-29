@@ -182,11 +182,10 @@ SASTBot is **read-only** with respect to Jira — it never creates tickets.
 3. From any issue expanded row, click "+ Link Jira ticket" and enter a ticket key (e.g. `SEC-123`).
 
 **Sync cadence:**
-- Open/In-progress tickets: re-synced every 15 minutes (handled by Phase 5d scheduler, not yet wired).
-- Done tickets: re-synced every 60 minutes.
-- On-demand: "Refresh" button in the Jira card on any linked issue.
+- Automatic background re-sync is **not implemented**. `reconcileJiraSync()` exists in the codebase but is not called from any scheduled context. Scheduled sync is a future milestone.
+- On-demand: use the **Refresh** button in the Jira card on any linked issue to pull the latest status from Jira.
 
-**Resolutions:** Available via `GET /admin/jira/resolutions`. The resolution name is stored as a raw string and displayed in the Jira card. Common values at lmitechnologies: Done, Fixed, Invalid, Won't Do.
+**Resolutions:** Available via `GET /admin/jira/resolutions`. The resolution name is stored as a raw string and displayed in the Jira card. Common values: Done, Fixed, Invalid, Won't Do.
 
 **Attention indicator:** Issues with `triageStatus=planned` where the linked Jira ticket has `statusCategory=done` show an amber ⚠ badge. This means Jira says it's resolved but the scan hasn't confirmed the code fix yet. Either the next scan will mark the issue `fixed`, or the ticket was closed with a dismissal resolution (Invalid/Won't Do) and the SASTBot issue should be manually set to Invalid/Won't fix.
 
@@ -205,17 +204,22 @@ Common errors:
 - `Remote branch not found`: the configured `default_branch` doesn't exist on the remote. Update the repo's default branch.
 - `not appear to be a git repository`: `file://` URL is wrong path, or the repo hasn't been initialized.
 
-## Worker-startup backfills (M5 polish)
+## Worker-startup backfills
 
-Each time the worker container boots it runs five idempotent backfills before accepting jobs. Each one filters its own work and is safe to re-run; logs go to the worker's stdout (`docker compose -f docker/compose/docker-compose.yml logs worker | grep backfill`).
+Each time the worker container boots it runs idempotent backfills before accepting jobs. Each one filters its own work and is safe to re-run; logs go to the worker's stdout (`docker compose -f docker/compose/docker-compose.yml logs worker | grep backfill`).
 
-| Backfill | Updates | Skips | Cost |
-|---|---|---|---|
-| `backfillLlmSummaries` | `latest_llm_summary` for SAST + SCA issues with no summary | rows whose LLM call returned null this boot (tracked by id) | one LLM call per row |
-| `backfillSastContextSnippets` | `latest_snippet` for SAST issues whose snippet has no newlines (predates the ±3 lines feature) | rows in scopes with no retained clone | one file read per row |
-| `backfillCvssScores` | `latest_cvss_score` from the existing vector; for rows with neither, re-queries OSV to capture vectors that older ingestion code dropped (e.g. `CVSS_V4`-only advisories) | rows whose vector still resolves to no numeric score | local for pass 1; one OSV HTTP call per missing-vector row for pass 2 |
-| `backfillReachability` | `confirmed_reachable`, `reachable_confidence`, `reachable_call_sites`, `reachable_reasoning` for CVE issues at or above the configured severity gate | rows in scopes with no retained clone; rows already structured-assessed | one ripgrep + ~one LLM call per row |
-| `backfillManifestOrigin` | `latest_manifest_file/line/snippet` on SCA issues, by reading each scope's stored `sbom_json` | rows in scopes with no retained clone | local file reads |
+| Backfill | What it updates |
+|---|---|
+| `backfillLlmSummaries` | `latest_llm_summary` for SAST + SCA issues with no summary (one LLM call per row) |
+| `backfillScanRunSeverities` | Severity-count denorms on `scan_runs` rows missing them |
+| `backfillManifestPathPrefixes` | Strips leaked clone-root prefix from `latest_manifest_file` on SCA issues |
+| `backfillSastSnippets` | `latest_snippet` for SAST issues whose snippet has no newlines (predates the ±3-line context window) |
+| `backfillRepoRelativePaths` | Rewrites absolute clone-path prefixes to repo-relative paths in SAST `file_path` |
+| `backfillCvssScores` | `latest_cvss_score` from the existing vector; re-queries OSV for rows missing both score and vector |
+| `backfillReachability` | Reachability verdict columns for CVE issues at/above the configured severity gate that haven't been assessed yet |
+| `backfillDevOnlyScaIssues` | Sets `dismissed_status='suppressed', dismissed_reason='dev_tree_policy'` on dev-only SCA issues for repos with `include_dev_deps=false` |
+| `backfillManifestOrigin` | `latest_manifest_file/line/snippet` on SCA issues from the scope's SBOM |
+| `backfillScopeComponentEvidenceSnippets` | Populates `evidence` line numbers and snippets on `scope_components` rows |
 
 If you add a new column that needs to be populated for existing data, mirror this pattern in `backend/src/worker.ts` rather than forcing users to re-scan.
 
@@ -247,7 +251,7 @@ A repo's **Scan paths** are a comma-separated list of repo-relative paths; each 
 
 When two scan paths overlap (e.g. `/` and `/services/api`), the deeper path owns its tree — the broader scope skips it at scan time via `--exclude services/api/**`. This works for arbitrary nesting.
 
-A repo's **Ignore paths** are paths to skip from every scan (vendored code, generated output, internal-only scripts). They're combined with the sibling-scope exclusions and applied to both cdxgen and Opengrep. Stored as `repos.ignore_paths` (JSONB array, default `[]`).
+A repo's **Ignore paths** are paths to skip from every scan (vendored code, generated output, internal-only scripts). They're combined with the sibling-scope exclusions and applied to cdxgen (SCA) and passed as an IGNORE_PATHS block to the LLM SAST detection prompt. Stored as `repos.ignore_paths` (JSONB array, default `[]`).
 
 ## Cancelling a scan
 
@@ -259,7 +263,7 @@ Pending or running scans can be cancelled by an admin from two places:
 Both call `POST /scans/:id/cancel`. The behavior:
 
 - **Pending (queued in BullMQ but not picked up):** the BullMQ job is removed and the row is marked `cancelled` immediately. No worker time consumed.
-- **Running (worker has picked it up):** the row is marked `cancelled` but the worker may already be inside an external process (cdxgen / opengrep) and won't stop mid-tool. The row reflects the user's intent; on next pickup the worker honors `cancelled` status and skips. Known limitation: a tool already executing will finish and the worker's success-write may overwrite the cancelled flag — see PROGRESS.md M5-polish note.
+- **Running (worker has picked it up):** the row is marked `cancelled` but the worker may already be inside an external process (cdxgen / claude-p) and won't stop mid-tool. The row reflects the user's intent; on next pickup the worker honors `cancelled` status and skips. Known limitation: a tool already executing will finish and the worker's success-write may overwrite the cancelled flag — see PROGRESS.md M5-polish note.
 
 Defense in depth on the trigger path: `POST /admin/repos/:id/scan` checks for pending/running runs per scope and skips creating a new one if any exist. Accidental double-clicks return the existing run rather than queueing duplicates.
 

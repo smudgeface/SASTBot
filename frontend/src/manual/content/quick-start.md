@@ -87,7 +87,7 @@ While it runs you can:
 
 - Click the scope name to open the scope detail page and watch the
   banner update.
-- Switch to **Scans (audit)** for a flat, chronological view.
+- Switch to **Scans** for a flat, chronological audit view.
 
 ## 6. Read the results
 

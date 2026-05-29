@@ -10,7 +10,9 @@ The canonical entry points:
 
 - **Scopes page** — the run icon at the right end of each row.
 - **Scope detail page** — the run button in the header.
-- **REST API** — `POST /api/scans` with `{ scope_id }`. See the
+- **REST API** — `POST /api/admin/repos/:id/scan` (where `:id` is the
+  repo ID). Triggers a scan for all active scopes of that repo and
+  returns one `scan_runs` row per scope. See the
   [API reference](api-reference) for the exact shape.
 
 The endpoint returns immediately with the new `scan_run_id` and a
@@ -50,9 +52,9 @@ the `xhigh` SAST effort can take 45+ minutes. Token spend dominates the
 LLM phases — see [Settings page](admin-settings) for per-repo token
 budget controls.
 
-## Scans (audit) page
+## Scans page
 
-The **Scans (audit)** page (left sidebar) is a flat, chronological list
+The **Scans** page (left sidebar) is a flat, chronological audit list
 of all scan runs across all scopes:
 
 - Status badge (queued, running, success, failed, cancelled).
@@ -103,7 +105,7 @@ page — the scope's default issue filters pivot off `lastScanRunId`,
 which still points at the last successful scan.
 
 The Scopes list "Last scan" column reflects the last *successful*
-scan only. Failed attempts are visible on the **Scans (audit)**
+scan only. Failed attempts are visible on the **Scans**
 page.
 
 To recover after a failure: fix the underlying cause (LLM endpoint

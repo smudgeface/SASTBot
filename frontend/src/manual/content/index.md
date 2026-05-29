@@ -34,8 +34,8 @@ backend's OpenAPI schema, so it never drifts from the actual protocol.
 
 This document is written for both operators (people who use SASTBot
 day-to-day to triage findings) and administrators (people who deploy,
-upgrade, back up, and restore it). At LMI Technologies the two roles are
-held by the same team in practice; the [Administration](credentials)
+upgrade, back up, and restore it). In small teams both roles are often
+held by the same people in practice; the [Administration](credentials)
 section is therefore as detailed as the day-to-day sections.
 
 If you're an integrator wiring SASTBot into another system, jump straight

@@ -4,6 +4,70 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-29 — Production-readiness audit + Stage-1 cleanup (v0.16.0)
+
+First session of the production push (Stage 1 of 4: audit + cleanup; the
+Bitbucket migration, Pipelines/Packages build, and Proxmox runbook are later
+stages). No schema migration. Audit findings live in
+`docs/PROD_READINESS_AUDIT.md`.
+
+**What shipped.**
+
+- **Leak guard (pre-Bitbucket).** Added `docs/Claude CRA Analysis Reference/`
+  (real LMI firmware findings — plaintext creds), `.claude/`, and `core`/`core.*`
+  to `.gitignore`. Verified by hand that the CRA dir was **never** committed and
+  is **not** on the GitHub remote (searched all reachable blobs for the firmware
+  password string — zero hits), so no history rewrite was needed.
+- **Security/config.** Production boot guard for `SESSION_COOKIE_SECURE=false`
+  (mirrors the `BOOTSTRAP_ADMIN_PASSWORD` guard); allowlist validation of the
+  DB-sourced `effort`/`model` values before they become `claude` argv flags;
+  fixed incomplete Postgres `text[]` license-literal escaping in
+  `scopeComponentService` (now escapes backslash + quote).
+- **Resilience.** Added request timeouts to OSV (15s) and NVD (20s, with abort
+  handled by the retry path) fetches; `unhandledRejection`/`uncaughtException`
+  handlers on `server.ts`; Redis `connectTimeout`; explicit BullMQ
+  `attempts: 1` + a 5-min `lockDuration` (defensive against event-loop-block
+  false stalls — the subprocess wait keeps the lock auto-renewing).
+- **Operability.** New `GET /readyz` readiness probe (Postgres `SELECT 1` +
+  Redis `PING`, 503 on failure; `/healthz` stays a pure liveness probe);
+  backend container `HEALTHCHECK` + compose healthcheck; query safety caps
+  (5000) on the in-memory-sorted issue/component list endpoints, logged when hit.
+- **CVSS fix.** `computeCvss40BaseScore` now returns `0.0` for a zero-impact
+  vector per CVSS v4.0 §1.3 (the macro-vector table's lowest cell was 2.7 — a
+  no-impact CVE could score ~2.7). Found while adding the test below.
+- **Tests.** +78 backend unit tests (443 → **521**) covering the previously
+  untested security/correctness core: sessions, credential encrypt/decrypt
+  round-trip, the crypto canary, CVSS 3.1/4.0 scorers, the 7-tier
+  `componentMatch`, and `hasErrorWarnings`.
+- **Frontend.** Top-level error boundary; surfaced previously-swallowed
+  scan/triage/dismiss mutation errors as toasts; global mid-session 401 → re-auth
+  redirect; removed the `example.com` LLM default URL; favicon + per-route
+  page titles; error states on the scans list + scope SBOM viewer.
+- **Docs / manual.** Version drift fixed (README, `versioning.md`, CLAUDE.md);
+  `.env.example` corrected (`postgresql://` not `+asyncpg`, plus the previously
+  undocumented `PORT`/`CLONE_CACHE_DIR`/`CLAUDE_*_TIMEOUT_MS`/`DB_RESTORE_MAX_BYTES`
+  /diagnostic vars); removed stale Opengrep references and a false "15-min Jira
+  auto-sync" claim from OPERATIONS.md; SBOM/SARIF artifact routes given OpenAPI
+  metadata. **Manual sections touched:** `sca-issues.md`, `scopes.md`,
+  `scans.md`, `index.md`, `repositories.md` (`removed`→`not_found` rename,
+  de-LMI-ified phrasing, corrected the scan-trigger endpoint).
+- **Version bump.** 0.15.0 → **0.16.0** (MINOR — operator-visible: new endpoint,
+  config guard, healthcheck). All three surfaces moved together.
+
+**Deferred (agreed with owner):** non-root container user, wiring the generated
+`schema.d.ts` types, full DB-side pagination, the SSH known_hosts TOFU decision,
+and a few lower-severity items — all catalogued in `docs/PROD_READINESS_AUDIT.md`.
+
+**What we learned.** The biggest risk surfaced wasn't in code — it was the
+untracked sensitive dir sitting one `git add .` away from a shared repo. Verify
+"is it on the remote" empirically (blob scan) before reaching for a history
+rewrite; the answer here was "never committed," making the scary fix a one-line
+`.gitignore`. Also: a transient vitest crash left a **1.5 GB core dump** in
+`backend/` that would have been committed without a status check — hence the new
+`core` ignore rule.
+
+---
+
 ## 2026-05-28 — SCA trust-gate fix + dev-deps scope rename/gating (v0.15.0)
 
 Two coordinated pieces of work, both prompted by a real correctness incident on

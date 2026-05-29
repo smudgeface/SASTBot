@@ -46,7 +46,7 @@ Each SCA row has:
   (cdxgen 12.2+ `dev: true` lockfile marker). Hidden by default unless
   the **Show dev CVEs** toggle is on, or the repo has
   `include_dev_deps=true`.
-- **Status chip** — `active`, `suppressed`, `removed`,
+- **Status chip** — `active`, `suppressed`, `not_found`,
   `dev_tree_policy`, `manual_override`. See states below.
 
 ## Reachability
@@ -75,7 +75,7 @@ visible so you can decide whether to trust it.
 |---|---|---|
 | `active` | Default. Live finding. | Initial insertion. |
 | `suppressed` | Operator dismissed (with a reason). | Manual via expanded row. |
-| `removed` | Component is no longer present. | Auto, when a trustworthy scan no longer sees the package. |
+| `not_found` | Component is no longer present. | Auto, when a trustworthy scan no longer sees the package. |
 | `dev_tree_policy` | npm dev dependency, auto-hidden. | Auto, on backfill / per-scan. |
 
 The flow inside the expanded row:
@@ -87,15 +87,15 @@ The flow inside the expanded row:
 - **Link Jira ticket** — see [Jira integration](jira).
 - **Notes** — free-text per issue. Persisted; never sent to the LLM.
 
-## How "removed" works
+## How "not found" works
 
 The SCA auto-fix sweep runs at the end of every *trustworthy* scan:
 
 1. Take every active SCA issue on the scope.
 2. If the issue's `(package_name, osv_id)` was NOT seen in the current
-   scan's SBOM + OSV results, mark the issue `removed` with
+   scan's SBOM + OSV results, mark the issue `not_found` with
    `dismissed_at = scan.finished_at`.
-3. If a previously-`removed` issue reappears, it's reactivated to
+3. If a previously-`not_found` issue reappears, it's reactivated to
    `active`.
 
 The sweep is gated on `hasErrorWarnings(scanRunId) === false`. If the
@@ -118,7 +118,7 @@ regardless and are unaffected.
 ## Filters
 
 - **Severity** chips — toggle critical / high / medium / low.
-- **Status** — active (default), suppressed, removed, dev_tree_policy.
+- **Status** — active (default), suppressed, not_found, dev_tree_policy.
 - **Reachable** — only / hide reachable.
 - **Search** — matches package name, CVE id, OSV id, summary text.
 

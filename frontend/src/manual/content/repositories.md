@@ -60,7 +60,7 @@ that matter day-to-day:
   Default `medium`. Recheck is verification, not search.
 - **First-party namespaces** — string list. Names with these prefixes
   are dropped by the LLM SBOM augmentation step as known first-party.
-  Set this on every LMI repo at onboarding; with it empty, the LLM has
+  Set this for every repo at onboarding to get deterministic results; with it empty, the LLM has
   to infer first-party status from content inspection, which is more
   expensive and less deterministic.
 - **Vendored directories** — string list. Default
