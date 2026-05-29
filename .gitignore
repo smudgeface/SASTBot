@@ -47,6 +47,10 @@ docker/compose/volumes/
 *.log
 logs/
 
+# Process crash dumps (e.g. a node/vitest core file)
+core
+core.*
+
 # Generated types (kept committed for reviewability; uncomment to skip)
 # frontend/src/api/schema.d.ts
 
@@ -64,3 +68,10 @@ backend/config.local.yaml
 # Personal screenshots + original brief — local reference only, not part of the public repo
 Screencaps/
 SASTBot Initial Prompt.txt
+
+# Local Claude Code session state (settings, screenshots, worktrees) — never commit
+.claude/
+
+# Sensitive reference material — real customer/firmware audit findings, NOT part of
+# this product's source. Contains plaintext credentials; must never enter the repo.
+docs/Claude CRA Analysis Reference/
