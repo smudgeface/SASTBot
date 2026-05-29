@@ -159,7 +159,7 @@ export async function persistScanComponentsToScopeState(
         // is the jsonb equivalent of array_length here.
         // latest* fields always overwrite — they represent "what the latest
         // scan saw", not operator choices. No COALESCE.
-        const latestLicensesArr = `{${c.licenses.map((l) => `"${l.replace(/"/g, '\\"')}"`).join(",")}}`;
+        const latestLicensesArr = `{${c.licenses.map((l) => `"${l.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",")}}`;
         const latestLlmEvidenceJson = c.llmEvidence !== null ? JSON.stringify(c.llmEvidence) : null;
         await prisma.$executeRawUnsafe(
           `UPDATE scope_components SET
@@ -227,7 +227,7 @@ export async function persistScanComponentsToScopeState(
         // missed an existing row but the strict identity collides (e.g. an
         // identical row inserted in the same loop with NULL version against
         // PG's NULL-distinct semantics).
-        const latestLicensesArr = `{${c.licenses.map((l) => `"${l.replace(/"/g, '\\"')}"`).join(",")}}`;
+        const latestLicensesArr = `{${c.licenses.map((l) => `"${l.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",")}}`;
         const latestLlmEvidenceJson = c.llmEvidence !== null ? JSON.stringify(c.llmEvidence) : null;
         await prisma.$executeRawUnsafe(
           `INSERT INTO scope_components (
@@ -301,7 +301,7 @@ export async function persistScanComponentsToScopeState(
           c.version ?? null,
           c.purl,
           c.ecosystem ?? null,
-          `{${c.licenses.map((l) => `"${l.replace(/"/g, '\\"')}"`).join(",")}}`,
+          `{${c.licenses.map((l) => `"${l.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",")}}`,
           c.componentType,
           c.scope ?? null,
           c.isDevOnly,

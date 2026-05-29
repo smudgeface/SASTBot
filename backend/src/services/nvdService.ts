@@ -328,13 +328,30 @@ async function queryNvd(
   if (apiKey) headers["apiKey"] = apiKey;
 
   const doFetch = async (): Promise<Response> =>
-    fetch(url.toString(), { headers });
+    // Bound each attempt so a hung NVD socket can't stall the phase until the OS
+    // TCP timeout. NVD is known for transient slowness. A timeout rejects with
+    // an AbortError, which the retry/catch logic below treats like a 503.
+    fetch(url.toString(), { headers, signal: AbortSignal.timeout(20_000) });
 
-  let res = await doFetch();
-  if (res.status === 503 || res.status === 429) {
-    // Single retry after 2 seconds.
-    await new Promise<void>((r) => setTimeout(r, 2000));
+  let res: Response;
+  try {
     res = await doFetch();
+    if (res.status === 503 || res.status === 429) {
+      // Single retry after 2 seconds.
+      await new Promise<void>((r) => setTimeout(r, 2000));
+      res = await doFetch();
+    }
+  } catch (err) {
+    // Network-level failure or timeout on the first attempt: retry once, then
+    // give up. Failures are non-fatal here (return [] like a non-ok response).
+    logger.warn({ url: url.toString(), err: (err as Error).message }, "[nvdService] NVD query threw — retrying once");
+    await new Promise<void>((r) => setTimeout(r, 2000));
+    try {
+      res = await doFetch();
+    } catch (err2) {
+      logger.warn({ url: url.toString(), err: (err2 as Error).message }, "[nvdService] NVD query failed after retry");
+      return [];
+    }
   }
 
   if (!res.ok) {

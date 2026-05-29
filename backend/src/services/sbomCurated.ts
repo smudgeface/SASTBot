@@ -1,16 +1,23 @@
 /**
  * sbomCurated.ts — M6q follow-up
  *
- * Builds a CycloneDX 1.7 document from the curated `sbom_components` rows
- * for a given scan run. This is what operators want when they click
- * "Download SBOM" — the post-augmentation, path-cleaned, dev-tree-aware
- * artifact that matches the Components tab.
+ * Builds curated CycloneDX 1.7 documents. Two builders, two scopes:
  *
- * The curated SBOM is written to the artifact store (`${ARTIFACT_DIR}/sbom/<scanRunId>.json`)
- * by the `sbom_emit` worker phase (M9 Stream B1) and served by
- * `GET /scans/:id/sbom`. The raw cdxgen output is no longer stored — legacy
- * scans (run before M9 Stream B) have no artifact file and that endpoint
- * returns 404 with a re-run hint.
+ *  1. Per-scan (`buildCuratedSbomJson` / the `sbom_emit` path): reads the
+ *     immutable per-scan `sbom_components` rows for a given scan run. Written to
+ *     the artifact store (`${ARTIFACT_DIR}/sbom/<scanRunId>.json`) by the
+ *     `sbom_emit` worker phase (M9 Stream B1) and served by `GET /scans/:id/sbom`.
+ *     The raw cdxgen output is no longer stored — legacy scans (run before M9
+ *     Stream B) have no artifact file and that endpoint returns 404 with a re-run hint.
+ *
+ *  2. Scope-level (`buildCuratedSbomJsonForScope`): reads the durable,
+ *     operator-edited `scope_components` rows, built on demand and served by
+ *     `GET /api/scopes/:id/sbom-json`. This is the primary CRA-compliance artifact
+ *     and reflects operator edits (renames, ignores). Same content shape as (1),
+ *     different scope: per-run snapshot vs per-scope durable state.
+ *
+ * Both produce the post-augmentation, path-cleaned, dev-tree-aware component set
+ * that matches the Components tab.
  */
 
 import { prisma } from "../db.js";

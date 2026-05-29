@@ -602,6 +602,18 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
     throw new Error("spawnClaudeAndStream: jsonSchema is required when responseShape='structured-output'");
   }
 
+  // Defensive validation of the two DB-sourced values that become `claude` argv
+  // flags. These are admin-controlled (not shell-interpolated, so not an
+  // injection vector), but a malformed value could smuggle an unexpected CLI
+  // flag (e.g. a model name beginning with "--"). Constrain them at the boundary.
+  const ALLOWED_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+  if (!ALLOWED_EFFORTS.has(input.effortLevel)) {
+    throw new Error(`spawnClaudeAndStream: invalid effort level "${input.effortLevel}"`);
+  }
+  if (!/^[A-Za-z0-9._:\/-]+$/.test(input.modelName)) {
+    throw new Error(`spawnClaudeAndStream: invalid model name "${input.modelName}"`);
+  }
+
   const args = [
     "-p",
     input.userPrompt,

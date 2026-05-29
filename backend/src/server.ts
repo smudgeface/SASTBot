@@ -201,5 +201,21 @@ const isEntrypoint = (() => {
 })();
 
 if (isEntrypoint) {
+  // Process-level catch-alls (mirrors worker.ts). Without these, an async error
+  // that escapes Fastify's error handler — e.g. inside a `void`-launched
+  // background task — crashes the process with no structured log line. Log the
+  // full stack, then exit non-zero so the orchestrator restarts a clean process
+  // rather than leaving a half-broken one serving traffic.
+  process.on("uncaughtException", (err) => {
+    // eslint-disable-next-line no-console
+    console.error("[sastbot] uncaughtException:", err);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    // eslint-disable-next-line no-console
+    console.error("[sastbot] unhandledRejection:", reason);
+    process.exit(1);
+  });
+
   void start();
 }

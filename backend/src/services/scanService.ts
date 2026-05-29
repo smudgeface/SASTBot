@@ -67,7 +67,16 @@ export async function triggerScan(input: TriggerScanInput): Promise<ScanRun[]> {
     await queue.add(
       "scan",
       { scanRunId: run.id, scopeId: scope.id, scopePath: scope.path },
-      { removeOnComplete: { count: 100 }, removeOnFail: { count: 200 } },
+      {
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 200 },
+        // Explicit: a thrown processor error marks the scan failed and must NOT
+        // re-run. A SAST scan is expensive (LLM tokens) and the worker already
+        // finalizes the scan_runs row to `failed` in its catch block — retrying
+        // would double-spend and create duplicate state. Stalled-job recovery
+        // (worker crash) is a separate BullMQ mechanism, unaffected by this.
+        attempts: 1,
+      },
     );
 
     runs.push(run);

@@ -1343,7 +1343,8 @@ const worker = new Worker<ScanJobData>(
 
       // When the same repo defines nested scopes (e.g. "/" and "/GoWeb"),
       // the broader scope excludes the deeper sibling so files aren't
-      // double-counted. We also strip excluded subtrees from opengrep.
+      // double-counted. The same excluded subtrees are passed to cdxgen
+      // (SCA) and surfaced to the LLM SAST pass via the IGNORE_PATHS block.
       // Per-repo ignore_paths are concatenated with sibling scopes — both
       // are "things to skip from this scope's tree", so the same logic
       // handles them. An ignore path that isn't under this scope is
@@ -2012,7 +2013,19 @@ const worker = new Worker<ScanJobData>(
       }
     }
   },
-  { connection: getRedis(), concurrency: config.scanWorkerConcurrency },
+  {
+    connection: getRedis(),
+    concurrency: config.scanWorkerConcurrency,
+    // Scans run for many minutes, but the heavy work is in the `claude -p`
+    // subprocess we await — the event loop stays free, so BullMQ auto-renews
+    // the job lock (every lockDuration/2) the whole time. A larger lockDuration
+    // is purely defensive: it widens the grace window so a synchronous
+    // event-loop block (e.g. a large SBOM/SARIF JSON parse) can't trip a false
+    // "stalled" requeue, which would duplicate an in-flight scan. stalledInterval
+    // governs how often BullMQ scans for genuinely dead workers.
+    lockDuration: 300_000,
+    stalledInterval: 60_000,
+  },
 );
 
 worker.on("failed", (job, err) => {

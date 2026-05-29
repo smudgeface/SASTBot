@@ -141,6 +141,12 @@ const ScaIssuesQuerySchema = PaginationQuerySchema.extend({
 // to backend/src/services/issueSort.ts so the scan-page routes can share
 // the same null-aware, severity-CASE ordering.
 
+// Safety cap on per-scope issue list fetches that sort in memory. Far above
+// realistic volumes (hundreds); a backstop against pathological growth, logged
+// when hit so a truncation can't pass as "complete". DB-side pagination for the
+// CASE-ordered sort is a tracked follow-up.
+const LIST_SAFETY_CAP = 5000;
+
 const scopesRoutes: FastifyPluginAsync = async (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
@@ -502,9 +508,12 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
 
       const skip = (page - 1) * page_size;
       const [all, total] = await Promise.all([
-        prisma.sastIssue.findMany({ where }),
+        prisma.sastIssue.findMany({ where, take: LIST_SAFETY_CAP }),
         prisma.sastIssue.count({ where }),
       ]);
+      if (all.length === LIST_SAFETY_CAP) {
+        req.log.warn({ cap: LIST_SAFETY_CAP }, "[scopes] sast-issues list hit safety cap — sort/page over truncated set");
+      }
 
       // Post-process sort. Per-scope SAST datasets are bounded (hundreds at
       // most), so fetching + sorting + slicing in JS is cheap and avoids
@@ -640,9 +649,12 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
 
       const skip = (page - 1) * page_size;
       const [all, total] = await Promise.all([
-        prisma.scaIssue.findMany({ where }),
+        prisma.scaIssue.findMany({ where, take: LIST_SAFETY_CAP }),
         prisma.scaIssue.count({ where }),
       ]);
+      if (all.length === LIST_SAFETY_CAP) {
+        req.log.warn({ cap: LIST_SAFETY_CAP }, "[scopes] sca-issues list hit safety cap — sort/page over truncated set");
+      }
 
       // Post-process sort. Per-scope SCA datasets are bounded (low
       // hundreds), so fetching + sorting + slicing in JS is cheap and

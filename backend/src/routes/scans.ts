@@ -27,6 +27,13 @@ import {
 import { bySeverity, byStatus, cmpNum, cmpStr, dirSign } from "../services/issueSort.js";
 import { sbomPathFor, sarifPathFor, tryReadArtifact } from "../services/artifactStore.js";
 
+// Safety cap on list fetches that load rows into memory for sorting/serialization.
+// Far above realistic per-scan/per-scope volumes (hundreds–low thousands); it's a
+// backstop against pathological growth, not pagination. Hitting it is logged so a
+// silent truncation can't masquerade as "complete". Proper DB-side pagination for
+// these endpoints is tracked as a follow-up.
+const LIST_SAFETY_CAP = 5000;
+
 const scansRoutes: FastifyPluginAsync = async (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
@@ -299,6 +306,20 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
     "/scans/:id/sbom",
     {
       preHandler: [app.authenticate],
+      schema: {
+        tags: ["scans"],
+        summary: "Download the curated CycloneDX 1.7 SBOM for a scan run",
+        description:
+          "Returns the post-augmentation curated CycloneDX 1.7 JSON for this " +
+          "specific scan run as a file download (ETag-cached). 404 if the scan " +
+          "has no artifact file (still running, legacy pre-M9 scan, or an " +
+          "sbom_emit failure). For the operator-edited scope-level SBOM, use " +
+          "GET /api/scopes/:id/sbom-json.",
+        params: IdParamsSchema,
+        // No 200 body schema on purpose: the response is a raw JSON file stream,
+        // not a Zod-validated object.
+        response: { 401: ErrorSchema, 404: ErrorSchema },
+      },
     },
     async (req, reply) => {
       const orgId = (req as unknown as { user?: { orgId?: string } }).user?.orgId ?? null;
@@ -347,6 +368,18 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
     "/scans/:id/sast-sarif",
     {
       preHandler: [app.authenticate],
+      schema: {
+        tags: ["scans"],
+        summary: "Download the SARIF v2.1.0 SAST report for a scan run",
+        description:
+          "Returns the SARIF v2.1.0 document of the LLM SAST findings for this " +
+          "scan run as a file download (ETag-cached). 404 if the scan has no " +
+          "artifact file (still running, legacy pre-M9 scan, or a sarif_emit " +
+          "failure) — re-trigger the scan to produce one.",
+        params: IdParamsSchema,
+        // No 200 body schema on purpose: the response is a raw JSON file stream.
+        response: { 401: ErrorSchema, 404: ErrorSchema },
+      },
     },
     async (req, reply) => {
       const orgId = (req as unknown as { user?: { orgId?: string } }).user?.orgId ?? null;
@@ -417,7 +450,11 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       const comps = await prisma.sbomComponent.findMany({
         where: { scanRunId: req.params.id },
         orderBy: { name: "asc" },
+        take: LIST_SAFETY_CAP,
       });
+      if (comps.length === LIST_SAFETY_CAP) {
+        req.log.warn({ scanRunId: req.params.id, cap: LIST_SAFETY_CAP }, "[scans] sbom-components list hit safety cap — result truncated");
+      }
       return comps.map(sbomComponentToOut);
     },
   );
@@ -461,9 +498,12 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const [all, total] = await Promise.all([
-        prisma.sastIssue.findMany({ where }),
+        prisma.sastIssue.findMany({ where, take: LIST_SAFETY_CAP }),
         prisma.sastIssue.count({ where }),
       ]);
+      if (all.length === LIST_SAFETY_CAP) {
+        req.log.warn({ scanRunId: req.params.id, cap: LIST_SAFETY_CAP }, "[scans] sast-findings list hit safety cap — sort/page over truncated set");
+      }
 
       const sign = dirSign(sort_dir);
       all.sort((a, b) => {

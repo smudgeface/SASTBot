@@ -225,6 +225,10 @@ async function queryOsvForPurl(purl: string, version: string | null): Promise<Os
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(buildOsvQueryBody(purl, version)),
+      // Bound the request so a hung OSV socket can't stall the whole SCA phase
+      // until the OS TCP timeout. A timeout aborts → caught below → counted as
+      // a failed query (feeds the trustworthiness threshold), not silent "0 vulns".
+      signal: AbortSignal.timeout(15_000),
     });
   } catch (err) {
     // Network-level failure (DNS, connection refused, TLS). Count it rather

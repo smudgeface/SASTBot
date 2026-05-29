@@ -314,6 +314,18 @@ export function loadConfig(): AppConfig {
     );
   }
 
+  // Production guard: session cookies must be Secure (HTTPS-only) in production.
+  // The default is `false` for local HTTP dev; shipping that default to a real
+  // deployment would send the session cookie over plaintext HTTP, exposing it to
+  // interception. Fail fast rather than silently accept an insecure cookie.
+  if (parsed.data.SESSION_COOKIE_SECURE === false && process.env["NODE_ENV"] === "production") {
+    throw new ConfigError(
+      "SESSION_COOKIE_SECURE must be true in production (NODE_ENV=production). " +
+      "Set SESSION_COOKIE_SECURE=true so session cookies are only sent over HTTPS. " +
+      "Only leave it false for local HTTP development.",
+    );
+  }
+
   cached = {
     masterKey,
     databaseUrl: parsed.data.DATABASE_URL,

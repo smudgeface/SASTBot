@@ -255,6 +255,22 @@ export function computeCvss40BaseScore(vector: string): number | null {
   const m = parseVector(vector);
   if (!m) return null;
 
+  // Spec rule (CVSS v4.0 §1.3): a vector with no impact on any of the
+  // vulnerable- or subsequent-system CIA metrics scores 0.0. The macro-vector
+  // lookup table does not encode this special-case (its lowest cell is > 0), so
+  // we short-circuit it here. Use the effective (environmental-modified) values
+  // so e.g. MVC:N also counts. Without this, a zero-impact CVE scored ~2.7.
+  if (
+    effective(m, "VC") === "N" &&
+    effective(m, "VI") === "N" &&
+    effective(m, "VA") === "N" &&
+    effective(m, "SC") === "N" &&
+    effective(m, "SI") === "N" &&
+    effective(m, "SA") === "N"
+  ) {
+    return 0;
+  }
+
   const macro = `${eq1(m)}${eq2(m)}${eq3(m)}${eq4(m)}${eq5(m)}${eq6(m)}`;
   const baseScore = MV_LOOKUP[macro];
   return baseScore === undefined ? null : baseScore;
