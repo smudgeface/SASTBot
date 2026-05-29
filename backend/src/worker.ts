@@ -16,6 +16,7 @@ import {
   runCdxgen,
 } from "./services/sbomService.js";
 import { queryAndPersistFindings, backfillCvssScores, backfillManifestOrigin } from "./services/osvService.js";
+import { runScaAutoFixSweep } from "./services/scaAutoFix.js";
 import { queryAndPersistNvdFindings } from "./services/nvdService.js";
 import { checkAndPersistEolFindings } from "./services/eolService.js";
 import { backfillReachability } from "./services/reachabilityService.js";
@@ -114,6 +115,51 @@ export function parseErrorSeverity(
   if (parseErrorCount >= absoluteCount) return "error";
   const dropRatio = parseErrorCount / total;
   return dropRatio >= threshold ? "error" : "info";
+}
+
+/**
+ * Fraction of OSV queries that must fail before the OSV phase is treated as
+ * untrustworthy. Reuses the parse-error rationale: above this ratio the SCA
+ * result no longer reflects the component set, so reporting "0 vulnerabilities"
+ * (and letting the auto-fix sweep mark real findings "fixed") would be a lie.
+ *
+ * Set equal to the parse-error threshold for consistency — both answer the
+ * same question, "did enough of this phase's inputs survive to trust the
+ * output?". A handful of transient per-query failures stay `info`; a
+ * rate-limit storm or OSV.dev outage escalates to `error`.
+ */
+export const OSV_FAILURE_RATIO_THRESHOLD = 0.25;
+
+/**
+ * Absolute-count guard for `osv_query_failures`, mirroring the parse-error one:
+ * at/above this many failed queries the warning escalates regardless of ratio.
+ * A failed query = one component left unchecked, so 10+ unchecked components on
+ * a large scan is a real blind spot even when the ratio looks small — those
+ * components' findings would otherwise be eligible for the auto-fix sweep
+ * despite never being verified this run.
+ */
+export const OSV_FAILURE_ABSOLUTE_COUNT = 10;
+
+/**
+ * Decide the severity of an `osv_query_failures` warning. Escalates to `error`
+ * when at least `threshold` of the attempted queries failed (non-2xx or thrown),
+ * OR when the absolute number of failed queries crosses `absoluteCount`.
+ * `error` flips `hasErrorWarnings`, which marks the scan failed, holds
+ * `lastScanRunId` at the last trustworthy scan, and skips the SCA auto-fix
+ * sweep — so a degraded OSV phase can no longer silently resolve findings.
+ *
+ * Caller skips emitting the warning entirely when `failedCount === 0`.
+ * Exported for unit tests.
+ */
+export function osvFailureSeverity(
+  queriedCount: number,
+  failedCount: number,
+  threshold: number = OSV_FAILURE_RATIO_THRESHOLD,
+  absoluteCount: number = OSV_FAILURE_ABSOLUTE_COUNT,
+): "error" | "info" {
+  if (queriedCount === 0 || failedCount === 0) return "info";
+  if (failedCount >= absoluteCount) return "error";
+  return failedCount / queriedCount >= threshold ? "error" : "info";
 }
 
 /** Truncation suffix appended when a raw string exceeds the byte cap. */
@@ -242,7 +288,7 @@ interface LlmSastPipelineInput {
     llmSastEffort: string;
     llmRecheckEffort: string;
     reachabilityEnabled: boolean;
-    reachabilityIncludeDevDeps: boolean;
+    includeDevDeps: boolean;
   };
   run: { scopeId: string; orgId: string | null };
   scanDir: string;
@@ -282,7 +328,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         latestFindingType: "cve",
         latestSeverity: { in: ["critical", "high"] },
       };
-      if (!repo.reachabilityIncludeDevDeps) {
+      if (!repo.includeDevDeps) {
         where.latestIsDevOnly = false;
       }
       const scaIssues = await prisma.scaIssue.findMany({
@@ -303,7 +349,7 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         summary: i.latestSummary,
       }));
       log.info(
-        { count: scaHints.length, includeDevDeps: repo.reachabilityIncludeDevDeps },
+        { count: scaHints.length, includeDevDeps: repo.includeDevDeps },
         "[worker] built SCA hint set",
       );
     } else {
@@ -1072,7 +1118,7 @@ backfillReachability(prisma).catch((err) => {
 // Idempotent — filters on dismissedStatus not already terminal. Safe to re-run.
 async function backfillDevOnlyScaIssues(): Promise<void> {
   const repos = await prisma.repo.findMany({
-    where: { reachabilityIncludeDevDeps: false },
+    where: { includeDevDeps: false },
     select: { id: true, scopes: { select: { id: true } } },
   });
   if (repos.length === 0) return;
@@ -1531,6 +1577,7 @@ const worker = new Worker<ScanJobData>(
           effortLevel: recheckEffort,
           tokenBudget: sbomRecheckTokenBudget,
           orgId: run.orgId,
+          includeDevDeps: repo.includeDevDeps,
           onProgress: (usage) => {
             void setPhase(scanRunId, "llm_sbom_recheck", {
               done: usage.inputTokens + usage.outputTokens,
@@ -1546,6 +1593,9 @@ const worker = new Worker<ScanJobData>(
             mergeGroups: recheckResult.merged.length,
             mergedRowsRemoved: recheckResult.mergedRowsRemoved,
             capped: recheckResult.capped,
+            cappedDevOnly: recheckResult.cappedDevOnly,
+            cappedRuntime: recheckResult.cappedRuntime,
+            excludedDevOnly: recheckResult.excludedDevOnly,
             parseErrors: recheckResult.parseErrors.length,
             exitCode: recheckResult.exitCode,
             durationMs: recheckResult.durationMs,
@@ -1577,11 +1627,29 @@ const worker = new Worker<ScanJobData>(
         }
 
         if (recheckResult.capped > 0) {
+          const devExcludedNote = recheckResult.excludedDevOnly > 0
+            ? ` ${recheckResult.excludedDevOnly} dev-only component(s) were excluded from recheck (out of scope for this repo).`
+            : "";
           await appendWarning(scanRunId, {
             code: "recheck_capped",
             severity: "info",
-            message: `SBOM recheck: ${recheckResult.capped} candidate(s) skipped (hard cap of ${MAX_SBOM_RECHECK_CANDIDATES} reached). Components not processed remain active from prior runs.`,
-            context: { totalCandidates: recheckResult.capped + Math.min(recheckResult.recovered.length + recheckResult.removed.length + recheckResult.parseErrors.length, MAX_SBOM_RECHECK_CANDIDATES), processed: MAX_SBOM_RECHECK_CANDIDATES },
+            message: `SBOM recheck: ${recheckResult.capped} candidate(s) skipped (hard cap of ${MAX_SBOM_RECHECK_CANDIDATES} reached) — ${recheckResult.cappedRuntime} runtime, ${recheckResult.cappedDevOnly} dev-only. Components not processed remain active from prior runs.${devExcludedNote}`,
+            context: {
+              processed: MAX_SBOM_RECHECK_CANDIDATES,
+              skipped: recheckResult.capped,
+              skippedRuntime: recheckResult.cappedRuntime,
+              skippedDevOnly: recheckResult.cappedDevOnly,
+              excludedDevOnly: recheckResult.excludedDevOnly,
+            },
+          });
+        } else if (recheckResult.excludedDevOnly > 0) {
+          // No cap pressure, but report the dev-only exclusion so operators
+          // understand why those components aren't being reconciled.
+          await appendWarning(scanRunId, {
+            code: "recheck_dev_excluded",
+            severity: "info",
+            message: `SBOM recheck: ${recheckResult.excludedDevOnly} dev-only component(s) excluded from recheck (out of scope for this repo — not shown in the GUI, OSV, or SBOM).`,
+            context: { excludedDevOnly: recheckResult.excludedDevOnly },
           });
         }
 
@@ -1645,8 +1713,28 @@ const worker = new Worker<ScanJobData>(
         log.info({ count: ignoredComponentNames.size }, "[worker] found ignored components — new CVEs for these packages will auto-suppress");
       }
 
-      const cveFindings = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir, scopePath, repo.reachabilityIncludeDevDeps, ignoredComponentNames);
-      log.info({ findings: cveFindings.length }, "[worker] CVE findings persisted");
+      const osvResult = await queryAndPersistFindings(scanRunId, run.scopeId, run.orgId, components, prisma, scanDir, scopePath, repo.includeDevDeps, ignoredComponentNames);
+      const cveFindings = osvResult.findings;
+      log.info({ findings: cveFindings.length, queried: osvResult.queriedCount, failed: osvResult.failedCount }, "[worker] CVE findings persisted");
+
+      // Trustworthiness gate: if OSV queries failed (rate-limit, 5xx, network),
+      // the SCA result under-reports vulnerabilities. Above the failure ratio
+      // this escalates to an error warning → scan marked failed → pointer held
+      // → auto-fix sweep skipped, so a degraded OSV phase can't mark real
+      // findings "fixed". Below threshold it's an informational note.
+      if (osvResult.failedCount > 0) {
+        const sev = osvFailureSeverity(osvResult.queriedCount, osvResult.failedCount);
+        const pct = Math.round((osvResult.failedCount / osvResult.queriedCount) * 100);
+        await appendWarning(scanRunId, {
+          code: "osv_query_failures",
+          severity: sev,
+          message:
+            sev === "error"
+              ? `OSV.dev queries failed for ${osvResult.failedCount}/${osvResult.queriedCount} component(s) (${pct}%) — at or above the ${Math.round(OSV_FAILURE_RATIO_THRESHOLD * 100)}% trustworthiness threshold. The SCA result under-reports vulnerabilities; scan marked untrustworthy and existing findings preserved. Retry once OSV.dev is reachable.`
+              : `OSV.dev queries failed for ${osvResult.failedCount}/${osvResult.queriedCount} component(s) (${pct}%); those components were not checked this run and their existing findings are unaffected.`,
+          context: { queried: osvResult.queriedCount, failed: osvResult.failedCount },
+        });
+      }
 
       // ── Step 4.5: NVD fallback for generic/C/C++ components ─────────────
       // Always-on for `generic` ecosystem components — OSV has near-zero
@@ -1785,16 +1873,27 @@ const worker = new Worker<ScanJobData>(
       if (finalizeUntrustworthy) {
         log.warn("[worker] skipping SCA auto-fix sweep — scan has error warnings (will be marked failed)");
       } else {
-        const TERMINAL_STATUSES = ["fixed", "suppressed", "false_positive"];
-        await prisma.scaIssue.updateMany({
-          where: {
-            scopeId: run.scopeId,
-            lastSeenScanRunId: { not: scanRunId },
-            dismissedStatus: { notIn: TERMINAL_STATUSES },
-          },
-          data: { dismissedStatus: "fixed" },
+        const sweep = await runScaAutoFixSweep(prisma, {
+          scopeId: run.scopeId,
+          scanRunId,
+          analyzedComponentCount: components.length,
         });
-        log.info("[worker] auto-fixed resolved SCA issues");
+        if (sweep.degenerate) {
+          // A scan that analyzed components yet detected nothing, while prior
+          // scans left active findings, is degenerate. Mark it untrustworthy
+          // so finalize sets status=failed and holds `lastScanRunId` — the
+          // operator confirms via re-scan or manual resolution rather than
+          // being told real CVEs are fixed.
+          await appendWarning(scanRunId, {
+            code: "sca_zero_detection_guard",
+            severity: "error",
+            message: `SCA detection found 0 findings this run while ${sweep.activeToSweep} finding(s) were active from prior scans across ${components.length} analyzed component(s). Auto-resolution was withheld and the scan marked untrustworthy — a populated scan that detects nothing is treated as degraded, not as confirmation that every prior finding is fixed. Re-scan; if the repository genuinely has no known-vulnerable dependencies, resolve the remaining findings manually.`,
+            context: { detectedThisRun: sweep.detectedThisRun, activeToSweep: sweep.activeToSweep, analyzedComponents: components.length },
+          });
+          log.warn({ activeToSweep: sweep.activeToSweep, components: components.length }, "[worker] SCA zero-detection guard tripped — withholding auto-fix sweep; scan will be marked failed");
+        } else {
+          log.info({ swept: sweep.activeToSweep }, "[worker] auto-fixed resolved SCA issues");
+        }
       }
 
       // ── Step 8: update severity summary counters (SCA + SAST) ────────────

@@ -45,7 +45,7 @@ Each SCA row has:
 - **Dev** chip — npm-only. Tag the component as a dev dependency
   (cdxgen 12.2+ `dev: true` lockfile marker). Hidden by default unless
   the **Show dev CVEs** toggle is on, or the repo has
-  `reachability_include_dev_deps=true`.
+  `include_dev_deps=true`.
 - **Status chip** — `active`, `suppressed`, `removed`,
   `dev_tree_policy`, `manual_override`. See states below.
 
@@ -105,7 +105,7 @@ findings have been fixed.
 
 ## How the dev-tree policy works
 
-When a repo has `reachability_include_dev_deps=false` (the default),
+When a repo has `include_dev_deps=false` (the default),
 issues whose component is marked `is_dev_only=true` by cdxgen are
 auto-set to `dismissed_status='suppressed'` with
 `dismissed_reason='dev_tree_policy'`. They're hidden from the default

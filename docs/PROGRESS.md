@@ -4,6 +4,70 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-28 — SCA trust-gate fix + dev-deps scope rename/gating (v0.15.0)
+
+Two coordinated pieces of work, both prompted by a real correctness incident on
+the GoPxL BE scope. Migration: `20260528173420_rename_include_dev_deps`.
+
+**What shipped — Part 1: SCA auto-resolve correctness.**
+
+- **Root cause.** A successful scan (`9fe4acbb`) detected 0 SCA issues despite
+  carrying a superset of the prior scan's nuget packages (Newtonsoft.Json,
+  SharpZipLib, …). `osvService.queryOsvForPurl` was swallowing failed OSV.dev
+  HTTP responses (`return []` on `!response.ok`), indistinguishable from "no
+  vulns". No error warning fired, so the auto-fix sweep marked all 46
+  then-active findings `fixed` and the scope pivoted to the empty scan — hiding
+  everything behind the last-seen filter.
+- **Defense 1 (root cause).** `queryOsvForPurl` now returns a discriminated
+  outcome; failures are counted (and per-query throws no longer reject the whole
+  batch). The worker emits an `osv_query_failures` warning, escalating to
+  `error` past a 25% ratio or 10 absolute failures → scan `failed`, pointer
+  held, sweep skipped. Mirrors the existing parse-error gate.
+- **Defense 2 (backstop).** Extracted `runScaAutoFixSweep` (`services/scaAutoFix.ts`).
+  Withholds the sweep + marks the scan untrustworthy when a *populated* scan
+  detects **0** findings while prior findings are active — covers any
+  degradation, not just OSV HTTP errors. Legit full-dependency removal (0
+  components) is untouched (the existing `cdxgen_failed` gate owns that).
+- Validated on a clean GoPxL BE re-scan (`de9afef0`): OSV healthy → 18 real CVEs
+  re-detected, gates stayed passive, pointer advanced, findings visible again.
+
+**What shipped — Part 2: `reachabilityIncludeDevDeps` → `includeDevDeps`.**
+
+- **Rename** (DB column `reachability_include_dev_deps` → `include_dev_deps`,
+  data-preserving `ALTER … RENAME COLUMN`; API field + all consumers). The old
+  name undersold the flag — it governs **six** consumers now, not just
+  reachability: OSV/NVD scanning, SCA hints, the GUI Components/SCA default
+  views, the SBOM component recheck, and the curated SBOM artifact.
+- **SBOM + recheck gating (Option B, flag-gated).** When `includeDevDeps=false`
+  (default): the curated SBOM (both builders) excludes `isDevOnly` components so
+  it matches the Components tab; the recheck drops dev-only from its candidate
+  set entirely (`partitionRecheckCandidates`), ordering non-dev-first when
+  in-scope. Reporting splits skipped dev vs runtime (`recheck_capped`) + a new
+  `recheck_dev_excluded` info warning.
+- **3 consistency fixes.** Form default `true`→`false` (matched the misleading
+  "On by default" copy to the actual schema default — root cause of GoPxL BE
+  being mis-set to `true`); label reworded + moved to its own "Dependency scope"
+  control; Components/SCA tab dev-hide default now tracks the flag via
+  `scope.include_dev_deps`.
+- Validated on `68ccf9e4` (flag off): 411 npm dev-only excluded from the
+  recheck (was a perpetual 385-candidate cap backlog), recheck cost $1.23→$0.80,
+  curated SBOM dropped 514→103 components (0 dev-only), SCA findings all runtime.
+
+**Manual + docs.** Updated `repositories.md`, `sca-issues.md`, `scopes.md`, and
+the CLAUDE.md dev-deps section (now documents six consumers). New tests:
+`scaTrustGates.test.ts` (19), `devDepsScope.test.ts` (7). Full suite 443/443.
+
+**What we learned.**
+
+- **"Found nothing" ≠ "confirmed nothing exists."** The auto-fix sweep conflated
+  a degraded scan with a clean one. Remediation logic must gate on input
+  *quality*, not just quantity — the same lesson from M6i, now with a second
+  failure mode (silent OSV degradation) the M12 error-warning model didn't cover.
+- **A misleading form default is a correctness bug.** The checkbox defaulting to
+  `true` while the schema defaulted to `false`, with copy saying "On by default",
+  is exactly how GoPxL BE ended up pulling 411 dev-only npm packages into its
+  recheck and SBOM. Form defaults must match the persisted default.
+
 ## 2026-05-27 — M14: ignore components + dismissed_status vocabulary cleanup (v0.14.0)
 
 First operator-facing affordance for "I don't care about this component" plus a

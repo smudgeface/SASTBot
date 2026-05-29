@@ -427,7 +427,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   const [sast, setSast] = useState<boolean>(repo?.analysis_types.includes("sast") ?? true);
   const [retainClone, setRetainClone] = useState<boolean>(repo?.retain_clone ?? false);
   const [reachabilityEnabled, setReachabilityEnabled] = useState<boolean>(repo?.reachability_enabled ?? true);
-  const [reachabilityIncludeDevDeps, setReachabilityIncludeDevDeps] = useState<boolean>(repo?.reachability_include_dev_deps ?? true);
+  const [includeDevDeps, setIncludeDevDeps] = useState<boolean>(repo?.include_dev_deps ?? false);
   const [llmSastEffort, setLlmSastEffort] = useState<LlmEffort>(repo?.llm_sast_effort ?? "xhigh");
   const [llmRecheckEffort, setLlmRecheckEffort] = useState<LlmEffort>(repo?.llm_recheck_effort ?? "medium");
   const [llmSbomEffort, setLlmSbomEffort] = useState<LlmEffort>(repo?.llm_sbom_effort ?? "medium");
@@ -511,7 +511,7 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       analysis_types,
       retain_clone: retainClone,
       reachability_enabled: reachabilityEnabled,
-      reachability_include_dev_deps: reachabilityIncludeDevDeps,
+      include_dev_deps: includeDevDeps,
       llm_sast_effort: llmSastEffort,
       llm_recheck_effort: llmRecheckEffort,
       first_party_namespaces,
@@ -749,26 +749,31 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
                 </p>
               </div>
             </label>
-            {reachabilityEnabled && (
-              <label className="inline-flex items-start gap-2 text-sm pl-6">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={reachabilityIncludeDevDeps}
-                  onChange={(e) => setReachabilityIncludeDevDeps(e.target.checked)}
-                />
-                <div>
-                  Include npm dev-only deps in the reachability hint set
-                  <p className="text-xs text-muted-foreground">
-                    On by default. Driven by cdxgen 12.2+'s <code>dev: true</code>{" "}
-                    npm-lockfile marker — non-npm components are unaffected. Flip off
-                    on repos with a lot of npm dev tooling to skip reachability cost
-                    on it. (Caveat: cdxgen issue #3927 — <code>devOptional</code>{" "}
-                    lockfile entries miss the marker and still slip through.)
-                  </p>
-                </div>
-              </label>
-            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Dependency scope</Label>
+            <label className="inline-flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={includeDevDeps}
+                onChange={(e) => setIncludeDevDeps(e.target.checked)}
+              />
+              <div>
+                Include npm dev-only dependencies
+                <p className="text-xs text-muted-foreground">
+                  Off by default. When off, components cdxgen 12.2+ flags as dev-only
+                  (npm-lockfile <code>dev: true</code>) are excluded from vulnerability
+                  scanning, the SCA reachability hints, the Components/SCA default views,
+                  AND the curated SBOM. Turn on only for repos where dev/test/build
+                  dependencies are in scope for your compliance artifact. npm-only signal
+                  — non-npm components are always included. (Caveat: cdxgen issue #3927 —{" "}
+                  <code>devOptional</code> lockfile entries miss the marker and still slip
+                  through.)
+                </p>
+              </div>
+            </label>
           </div>
 
           <div className="space-y-1.5">

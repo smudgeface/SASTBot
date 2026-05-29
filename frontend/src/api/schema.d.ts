@@ -320,7 +320,7 @@ export interface paths {
                                 is_active: boolean;
                                 retain_clone: boolean;
                                 reachability_enabled: boolean;
-                                reachability_include_dev_deps: boolean;
+                                include_dev_deps: boolean;
                                 /** @enum {string} */
                                 llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
                                 /** @enum {string} */
@@ -409,7 +409,7 @@ export interface paths {
                         /** @default true */
                         reachability_enabled?: boolean;
                         /** @default false */
-                        reachability_include_dev_deps?: boolean;
+                        include_dev_deps?: boolean;
                         /**
                          * @default xhigh
                          * @enum {string}
@@ -522,7 +522,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_dev_deps: boolean;
+                            include_dev_deps: boolean;
                             /** @enum {string} */
                             llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             /** @enum {string} */
@@ -628,7 +628,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_dev_deps: boolean;
+                            include_dev_deps: boolean;
                             /** @enum {string} */
                             llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             /** @enum {string} */
@@ -709,7 +709,7 @@ export interface paths {
                         is_active?: boolean;
                         retain_clone?: boolean;
                         reachability_enabled?: boolean;
-                        reachability_include_dev_deps?: boolean;
+                        include_dev_deps?: boolean;
                         /** @enum {string} */
                         llm_sast_effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         /** @enum {string} */
@@ -802,7 +802,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_dev_deps: boolean;
+                            include_dev_deps: boolean;
                             /** @enum {string} */
                             llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             /** @enum {string} */
@@ -980,7 +980,7 @@ export interface paths {
                             is_active: boolean;
                             retain_clone: boolean;
                             reachability_enabled: boolean;
-                            reachability_include_dev_deps: boolean;
+                            include_dev_deps: boolean;
                             /** @enum {string} */
                             llm_sast_effort: "low" | "medium" | "high" | "xhigh" | "max";
                             /** @enum {string} */
@@ -3310,6 +3310,7 @@ export interface paths {
                             repo_id: string;
                             repo_name: string;
                             repo_branch: string;
+                            include_dev_deps: boolean;
                             path: string;
                             display_name: string | null;
                             is_active: boolean;
@@ -3395,6 +3396,7 @@ export interface paths {
                             repo_id: string;
                             repo_name: string;
                             repo_branch: string;
+                            include_dev_deps: boolean;
                             path: string;
                             display_name: string | null;
                             is_active: boolean;
@@ -3725,6 +3727,7 @@ export interface paths {
                     page_size?: number;
                     has_findings?: boolean;
                     exclude_dev_only?: boolean;
+                    dismissed_statuses?: ("active" | "not_found" | "ignored")[];
                 };
                 header?: never;
                 path: {
@@ -3960,6 +3963,168 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/api/scopes/{id}/components/{componentId}/ignore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ignore a scope component and cascade suppression to its SCA issues */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    componentId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        reason?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                            suppressed_sca_count: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scopes/{id}/components/{componentId}/unignore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore an ignored scope component and reverse the cascaded SCA suppressions */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    componentId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": unknown | unknown;
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                            restored_sca_count: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/scopes/{id}/sbom-json": {

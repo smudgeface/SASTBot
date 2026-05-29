@@ -96,7 +96,7 @@ export async function createRepo(
           isActive: input.is_active ?? true,
           retainClone: input.retain_clone ?? false,
           reachabilityEnabled: input.reachability_enabled ?? true,
-          reachabilityIncludeDevDeps: input.reachability_include_dev_deps ?? false,
+          includeDevDeps: input.include_dev_deps ?? false,
           llmSastEffort: input.llm_sast_effort ?? "xhigh",
           llmRecheckEffort: input.llm_recheck_effort ?? "medium",
           firstPartyNamespaces: input.first_party_namespaces ?? [],
@@ -179,7 +179,7 @@ export async function updateRepo(
       if (input.is_active !== undefined) data.isActive = input.is_active;
       if (input.retain_clone !== undefined) data.retainClone = input.retain_clone;
       if (input.reachability_enabled !== undefined) data.reachabilityEnabled = input.reachability_enabled;
-      if (input.reachability_include_dev_deps !== undefined) data.reachabilityIncludeDevDeps = input.reachability_include_dev_deps;
+      if (input.include_dev_deps !== undefined) data.includeDevDeps = input.include_dev_deps;
       if (input.llm_sast_effort !== undefined) data.llmSastEffort = input.llm_sast_effort;
       if (input.llm_recheck_effort !== undefined) data.llmRecheckEffort = input.llm_recheck_effort;
       if (input.first_party_namespaces !== undefined) data.firstPartyNamespaces = input.first_party_namespaces;

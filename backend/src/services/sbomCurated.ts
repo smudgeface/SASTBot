@@ -439,14 +439,17 @@ export async function buildCuratedSbomJson(
       id: true,
       finishedAt: true,
       createdAt: true,
-      repo: { select: { name: true, defaultBranch: true } },
+      repo: { select: { name: true, defaultBranch: true, includeDevDeps: true } },
       scope: { select: { path: true } },
     },
   });
   if (!run) return null;
 
   const rows = await prisma.sbomComponent.findMany({
-    where: { scanRunId },
+    // Exclude dev-only components unless the repo opts them into scope — the
+    // SBOM mirrors what's visible on the Components tab. npm-only signal; non-npm
+    // components have isDevOnly=false and are always included.
+    where: { scanRunId, ...(run.repo.includeDevDeps ? {} : { isDevOnly: false }) },
     // D1: full tiebreaker chain — (ecosystem, name, purl, id) — ensures a
     // deterministic row order even when two components share name + ecosystem.
     orderBy: [{ ecosystem: "asc" }, { name: "asc" }, { purl: "asc" }, { id: "asc" }],
@@ -622,13 +625,16 @@ export async function buildCuratedSbomJsonForScope(
       lastScanRunId: true,
       lastScanCompletedAt: true,
       createdAt: true,
-      repo: { select: { name: true, defaultBranch: true } },
+      repo: { select: { name: true, defaultBranch: true, includeDevDeps: true } },
     },
   });
   if (!scope) return null;
 
   const scopeComponents = await prisma.scopeComponent.findMany({
-    where: { scopeId, dismissedStatus: "active" },
+    // Exclude dev-only components unless the repo opts them into scope — the
+    // SBOM mirrors what's visible on the Components tab. npm-only signal; non-npm
+    // components have isDevOnly=false and are always included.
+    where: { scopeId, dismissedStatus: "active", ...(scope.repo.includeDevDeps ? {} : { isDevOnly: false }) },
     // D1: full tiebreaker chain — (ecosystem, name, purl, id).
     orderBy: [{ ecosystem: "asc" }, { name: "asc" }, { purl: "asc" }, { id: "asc" }],
   });

@@ -83,8 +83,8 @@ Each tab has its own filter strip. Common patterns:
   `removed`, `dev_tree_policy`, etc.
 - **Show dev-tool packages** / **Show dev CVEs** — npm-only toggles
   that surface components / SCA issues marked dev-only by cdxgen.
-  Off by default; matches the repo-level
-  `reachability_include_dev_deps` setting.
+  Default tracks the repo-level `include_dev_deps` setting (hidden
+  when it's off, the default).
 - **Free-text search** — matches across package name, CVE, summary,
   file path, CWE ID, depending on the tab.
 

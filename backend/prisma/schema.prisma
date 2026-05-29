@@ -144,14 +144,17 @@ model Repo {
   // Use for repos where the reachability signal hasn't proven worth the
   // additional output-token cost.
   reachabilityEnabled             Boolean @default(true) @map("reachability_enabled")
-  // When reachability is enabled, controls whether components cdxgen 12.2+
-  // flagged as dev-only (npm lockfile `dev: true`) are included in the LLM
-  // hint set. Default true (include everything). Flip off on repos that
-  // import a lot of npm dev tooling and you don't want reachability tokens
-  // spent on them. npm-only signal — non-npm ecosystems are unaffected.
+  // Governs whether components cdxgen 12.2+ flagged as dev-only (npm lockfile
+  // `dev: true`) are treated as in-scope for this repo. When false (default),
+  // dev-only components are excluded from: OSV/NVD vulnerability querying, the
+  // SCA reachability hint set, the GUI Components/SCA default views, the SBOM
+  // component recheck, AND the curated SBOM artifact. When true, dev-only
+  // components are in-scope everywhere. Renamed from reachabilityIncludeDevDeps
+  // (the original name undersold its reach — it affects far more than
+  // reachability). npm-only signal — non-npm ecosystems are unaffected.
   // Caveat: cdxgen issue #3927 — `devOptional: true` lockfile entries miss
   // the dev marker, so a small fraction of dev-only deps still slip through.
-  reachabilityIncludeDevDeps Boolean @default(false) @map("reachability_include_dev_deps")
+  includeDevDeps Boolean @default(false) @map("include_dev_deps")
   // M6p Stage 2: LLM SBOM augmentation pass.
   // firstPartyNamespaces — operator-curated name prefixes the LLM treats as
   //   first-party (e.g. ["GoSdkNet", "kApiNet", "LMI"]). Matched as string

@@ -59,6 +59,44 @@ const CLAUDE_GID = 1001;
  */
 const MAX_CANDIDATES = 100;
 
+export interface RecheckCandidatePartition<T> {
+  /** Candidates that will actually be rechecked (after dev-only exclusion). */
+  candidates: T[];
+  /** First `maxCandidates` of `candidates` — the set sent for verification. */
+  workSet: T[];
+  /** Candidates beyond the cap, deferred to a future scan. */
+  skipped: T[];
+  /** Dev-only candidates dropped entirely because they're out of scope. */
+  excludedDevOnly: number;
+  /** Split of `skipped` (cap overflow) into dev-only vs runtime. */
+  cappedDevOnly: number;
+  cappedRuntime: number;
+}
+
+/**
+ * Partition the raw recheck candidate set, honoring the repo's dev-deps scope.
+ *
+ * `raw` MUST already be ordered non-dev-first (dev-only last) so the cap
+ * prioritizes runtime components. When `includeDevDeps` is false, dev-only
+ * candidates are dropped entirely (they're invisible to OSV, the GUI, and the
+ * SBOM, so rechecking them is pure token waste); `excludedDevOnly` records how
+ * many. When true, dev-only are kept but still ranked behind runtime under the
+ * cap. Exported for unit tests.
+ */
+export function partitionRecheckCandidates<T extends { is_dev_only: boolean }>(
+  raw: T[],
+  includeDevDeps: boolean,
+  maxCandidates: number = MAX_CANDIDATES,
+): RecheckCandidatePartition<T> {
+  const excludedDevOnly = includeDevDeps ? 0 : raw.filter((c) => c.is_dev_only).length;
+  const candidates = includeDevDeps ? raw : raw.filter((c) => !c.is_dev_only);
+  const workSet = candidates.slice(0, maxCandidates);
+  const skipped = candidates.slice(maxCandidates);
+  const cappedDevOnly = skipped.filter((c) => c.is_dev_only).length;
+  const cappedRuntime = skipped.length - cappedDevOnly;
+  return { candidates, workSet, skipped, excludedDevOnly, cappedDevOnly, cappedRuntime };
+}
+
 // ---------------------------------------------------------------------------
 // Output record schemas
 // ---------------------------------------------------------------------------
@@ -322,6 +360,12 @@ export interface RunSbomRecheckInput {
   effortLevel: string;
   tokenBudget: number;
   orgId: string | null;
+  /** When false, dev-only components are out of scope for this repo and are
+   *  excluded from the recheck entirely (they don't appear in the GUI, OSV, or
+   *  the SBOM, so confirming their presence is pure token waste). When true,
+   *  dev-only are rechecked too, but non-dev candidates are still prioritized
+   *  ahead of them under the hard cap. */
+  includeDevDeps: boolean;
   onProgress?: (usage: TokenUsage) => void;
 }
 
@@ -340,8 +384,14 @@ export interface RunSbomRecheckResult {
   merged: MergeResult[];
   /** Total scope_component rows deleted due to merge verdicts. */
   mergedRowsRemoved: number;
-  /** Number of candidates skipped by the hard cap. */
+  /** Number of candidates skipped by the hard cap (will be retried next scan). */
   capped: number;
+  /** Of `capped`, how many were dev-only vs runtime (split reporting). */
+  cappedDevOnly: number;
+  cappedRuntime: number;
+  /** Dev-only candidates excluded entirely because they're out of scope for
+   *  this repo (includeDevDeps=false). Not rechecked, not retried. */
+  excludedDevOnly: number;
   parseErrors: ParseError[];
   exitCode: number | null;
   durationMs: number;
@@ -369,7 +419,9 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
   //
   // Exclude 'manual_override' rows from the candidate set — those are operator
   // decisions and must not be touched by the automated recheck.
-  const candidates = await prisma.$queryRawUnsafe<Array<{
+  // Order non-dev-first so the hard cap always prioritizes runtime components
+  // (the ones that matter for OSV / the SBOM / the GUI) ahead of dev-only.
+  const rawCandidates = await prisma.$queryRawUnsafe<Array<{
     id: string;
     name: string;
     version: string | null;
@@ -378,8 +430,9 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
     evidence_path: string | null;
     llm_evidence: unknown;
     last_seen_at: Date | null;
+    is_dev_only: boolean;
   }>>(
-    `SELECT sc.id, sc.name, sc.version, sc.purl, sc.cpe, sc.evidence_path, sc.llm_evidence, sc.last_seen_at
+    `SELECT sc.id, sc.name, sc.version, sc.purl, sc.cpe, sc.evidence_path, sc.llm_evidence, sc.last_seen_at, sc.is_dev_only
      FROM scope_components sc
      WHERE sc.scope_id = $1::uuid
        AND sc.dismissed_status = 'active'
@@ -388,10 +441,22 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
          FROM scan_run_components src
          WHERE src.scan_run_id = $2::uuid
        )
-     ORDER BY sc.last_seen_at DESC NULLS LAST`,
+     ORDER BY sc.is_dev_only ASC, sc.last_seen_at DESC NULLS LAST`,
     input.scopeId,
     input.scanRunId,
   );
+
+  // Drop dev-only candidates when out of scope (token waste — they're invisible
+  // to OSV, the GUI, and the SBOM), split the cap overflow into dev/runtime.
+  const { candidates, workSet, skipped, excludedDevOnly, cappedDevOnly, cappedRuntime } =
+    partitionRecheckCandidates(rawCandidates, input.includeDevDeps, MAX_CANDIDATES);
+  const cappedCount = skipped.length;
+  if (excludedDevOnly > 0) {
+    logger.info(
+      { scanRunId: input.scanRunId, excludedDevOnly },
+      "[llmSbomRecheckService] excluded dev-only candidates from recheck (out of scope for repo)",
+    );
+  }
 
   // ── 1b. Fetch ALL active scope_components for the dedup task ──────────────
   //
@@ -413,6 +478,7 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
      WHERE sc.scope_id = $1::uuid
        AND sc.source != 'manual_override'
        AND sc.dismissed_status = 'active'
+       ${input.includeDevDeps ? "" : "AND sc.is_dev_only = false"}
      ORDER BY sc.name ASC, sc.id ASC`,
     input.scopeId,
   );
@@ -428,6 +494,9 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
       merged: [],
       mergedRowsRemoved: 0,
       capped: 0,
+      cappedDevOnly: 0,
+      cappedRuntime: 0,
+      excludedDevOnly,
       parseErrors: [],
       exitCode: 0,
       durationMs: Date.now() - startedAt,
@@ -435,12 +504,8 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
     };
   }
 
-  // Apply hard cap of 20 (most-recently-seen first, already ordered above).
-  const cappedCount = Math.max(0, candidates.length - MAX_CANDIDATES);
-  const workSet = candidates.slice(0, MAX_CANDIDATES);
-
   logger.info(
-    { scanRunId: input.scanRunId, total: candidates.length, processing: workSet.length, capped: cappedCount },
+    { scanRunId: input.scanRunId, total: candidates.length, processing: workSet.length, capped: cappedCount, cappedDevOnly, cappedRuntime, excludedDevOnly },
     "[llmSbomRecheckService] candidate set built",
   );
 
@@ -488,6 +553,9 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
       merged: [],
       mergedRowsRemoved: 0,
       capped: cappedCount,
+      cappedDevOnly,
+      cappedRuntime,
+      excludedDevOnly,
       parseErrors: [],
       exitCode: 0,
       durationMs: Date.now() - startedAt,
@@ -767,6 +835,9 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
       merged: appliedMerges,
       mergedRowsRemoved,
       capped: cappedCount,
+      cappedDevOnly,
+      cappedRuntime,
+      excludedDevOnly,
       parseErrors,
       exitCode,
       durationMs: Date.now() - startedAt,

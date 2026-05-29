@@ -98,7 +98,7 @@ function baseRepo(overrides: Record<string, unknown> = {}) {
     isActive: true,
     retainClone: true,
     reachabilityEnabled: true,
-    reachabilityIncludeDevDeps: false,
+    includeDevDeps: false,
     ...overrides,
   };
 }

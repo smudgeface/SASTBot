@@ -219,11 +219,11 @@ export const RepoCreateSchema = z.object({
    *  high+critical SCA issues, saving output-token cost on repos where
    *  the reachability signal hasn't proven worth it. */
   reachability_enabled: z.boolean().default(true),
-  /** Whether to include npm dev-only deps (cdxgen 12.2+ `dev: true` marker)
-   *  in the LLM reachability hint set. Default true — flip off only when you
-   *  want to skip reachability analysis on dev tooling. npm-only signal:
-   *  non-npm components are unaffected. */
-  reachability_include_dev_deps: z.boolean().default(false),
+  /** Whether npm dev-only deps (cdxgen 12.2+ `dev: true` marker) are in-scope
+   *  for this repo. When false (default) they're excluded from OSV/NVD scanning,
+   *  the SCA reachability hint set, the GUI default views, the SBOM recheck, and
+   *  the curated SBOM artifact. npm-only signal: non-npm components unaffected. */
+  include_dev_deps: z.boolean().default(false),
   /** `claude -p --effort` value for SAST detection / recheck. Detection
    *  defaults to xhigh (Opus 4.7 docs recommend xhigh for agentic coding);
    *  recheck defaults to medium (verification, not exploration). xhigh is
@@ -270,7 +270,7 @@ export const RepoUpdateSchema = z.object({
   is_active: z.boolean().optional(),
   retain_clone: z.boolean().optional(),
   reachability_enabled: z.boolean().optional(),
-  reachability_include_dev_deps: z.boolean().optional(),
+  include_dev_deps: z.boolean().optional(),
   llm_sast_effort: LlmEffortSchema.optional(),
   llm_recheck_effort: LlmEffortSchema.optional(),
   first_party_namespaces: z.array(z.string()).optional(),
@@ -302,7 +302,7 @@ export const RepoOutSchema = z.object({
   is_active: z.boolean(),
   retain_clone: z.boolean(),
   reachability_enabled: z.boolean(),
-  reachability_include_dev_deps: z.boolean(),
+  include_dev_deps: z.boolean(),
   llm_sast_effort: LlmEffortSchema,
   llm_recheck_effort: LlmEffortSchema,
   /** M6p Stage 2: first-party namespace prefixes. */

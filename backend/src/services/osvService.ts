@@ -205,34 +205,72 @@ export function buildOsvQueryBody(
     : { package: { purl: barePurl } };
 }
 
-async function queryOsvForPurl(purl: string, version: string | null): Promise<OsvVuln[]> {
-  const response = await fetch(OSV_QUERY_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildOsvQueryBody(purl, version)),
-  });
+/**
+ * Outcome of a single OSV query. The `ok` discriminant is load-bearing: a
+ * failed query (`ok: false`) must NOT be conflated with a successful query
+ * that returned no vulnerabilities (`ok: true, vulns: []`). Swallowing the
+ * distinction is exactly what let a degraded OSV phase (rate-limited / 5xx /
+ * network blip) report "0 vulnerabilities" and trip the worker's SCA
+ * auto-fix sweep into marking every real finding "fixed". The caller counts
+ * failures so the worker can mark the scan untrustworthy.
+ */
+type OsvQueryOutcome =
+  | { ok: true; vulns: OsvVuln[] }
+  | { ok: false; status: number | null };
+
+async function queryOsvForPurl(purl: string, version: string | null): Promise<OsvQueryOutcome> {
+  let response: Response;
+  try {
+    response = await fetch(OSV_QUERY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildOsvQueryBody(purl, version)),
+    });
+  } catch (err) {
+    // Network-level failure (DNS, connection refused, TLS). Count it rather
+    // than letting it reject the whole batch — a transient blip on one query
+    // shouldn't nuke a 40-minute scan, but a total outage will push the
+    // failure ratio past the worker's trustworthiness threshold.
+    logger.warn({ purl, version, err: (err as Error).message }, "[osvService] OSV query threw — counted as failed");
+    return { ok: false, status: null };
+  }
   if (!response.ok) {
-    logger.warn({ purl, version, status: response.status }, "[osvService] OSV query failed — skipping");
-    return [];
+    logger.warn({ purl, version, status: response.status }, "[osvService] OSV query failed — counted as failed");
+    return { ok: false, status: response.status };
   }
   const data = (await response.json()) as OsvQueryResponse;
-  return data.vulns ?? [];
+  return { ok: true, vulns: data.vulns ?? [] };
+}
+
+interface OsvBatchResult {
+  /** Per-query vulnerability lists, index-aligned with the input queries.
+   *  A failed query contributes an empty list here AND increments `failed`. */
+  results: OsvVuln[][];
+  /** Number of queries that failed (non-2xx response or thrown error). */
+  failed: number;
 }
 
 /** Query OSV.dev for each (purl, version), throttled to OSV_CONCURRENCY parallel requests. */
 async function queryOsvForPurls(
   queries: { purl: string; version: string | null }[],
-): Promise<OsvVuln[][]> {
+): Promise<OsvBatchResult> {
   const results: OsvVuln[][] = new Array(queries.length);
+  let failed = 0;
   // Process in windows of OSV_CONCURRENCY to avoid hammering OSV.dev.
   for (let i = 0; i < queries.length; i += OSV_CONCURRENCY) {
     const chunk = queries.slice(i, i + OSV_CONCURRENCY);
     const chunkResults = await Promise.all(chunk.map((q) => queryOsvForPurl(q.purl, q.version)));
     for (let j = 0; j < chunk.length; j++) {
-      results[i + j] = chunkResults[j];
+      const outcome = chunkResults[j];
+      if (outcome.ok) {
+        results[i + j] = outcome.vulns;
+      } else {
+        results[i + j] = [];
+        failed++;
+      }
     }
   }
-  return results;
+  return { results, failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -247,8 +285,21 @@ export interface OsvResult {
 }
 
 /**
+ * Result of an OSV scan pass. `findings` is the persisted ScanFinding rows.
+ * `queriedCount` / `failedCount` let the worker judge trustworthiness: when a
+ * large fraction of queries failed, the SCA result is degraded and the scan
+ * must be marked untrustworthy rather than treated as "no vulnerabilities".
+ */
+export interface OsvScanResult {
+  findings: ScanFinding[];
+  queriedCount: number;
+  failedCount: number;
+}
+
+/**
  * Query OSV.dev for all components that have a purl, upsert ScaIssue rows,
- * then persist ScanFinding detection rows. Returns the inserted ScanFinding rows.
+ * then persist ScanFinding detection rows. Returns the inserted ScanFinding
+ * rows plus the queried/failed counts so the caller can gate on trustworthiness.
  */
 export async function queryAndPersistFindings(
   scanRunId: string,
@@ -262,7 +313,7 @@ export async function queryAndPersistFindings(
   /** Set of component names currently ignored by the operator. New issues
    *  for these packages auto-land as suppressed/component_ignored. */
   ignoredComponentNames?: Set<string>,
-): Promise<ScanFinding[]> {
+): Promise<OsvScanResult> {
   let queried = components;
   if (!includeDevDeps) {
     const before = queried.length;
@@ -273,11 +324,11 @@ export async function queryAndPersistFindings(
     }
   }
   const withPurl = queried.filter((c) => c.purl);
-  if (withPurl.length === 0) return [];
+  if (withPurl.length === 0) return { findings: [], queriedCount: 0, failedCount: 0 };
 
   logger.info({ scanRunId, count: withPurl.length }, "[osvService] querying OSV.dev");
   const queries = withPurl.map((c) => ({ purl: c.purl, version: c.version || null }));
-  const results = await queryOsvForPurls(queries);
+  const { results, failed: failedCount } = await queryOsvForPurls(queries);
 
   // Deduplicate by (componentId, osvId) then upsert issues + create detections.
   const seen = new Set<string>();
@@ -380,10 +431,11 @@ export async function queryAndPersistFindings(
     }
   }
 
-  logger.info({ scanRunId }, "[osvService] CVE findings persisted");
-  return (client as PrismaClient).scanFinding.findMany({
+  logger.info({ scanRunId, queried: withPurl.length, failed: failedCount }, "[osvService] CVE findings persisted");
+  const findings = await (client as PrismaClient).scanFinding.findMany({
     where: { scanRunId, findingType: "cve" },
   });
+  return { findings, queriedCount: withPurl.length, failedCount };
 }
 
 // ---------------------------------------------------------------------------

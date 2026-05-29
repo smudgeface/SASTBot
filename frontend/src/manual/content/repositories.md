@@ -40,9 +40,20 @@ that matter day-to-day:
 - **Reachability enabled** — if off, SCA findings are flat — no LLM
   reachability assessment. Speeds up large scans where reachability
   isn't compliance-relevant.
-- **Reachability includes dev deps** — npm-only. Off by default —
-  components marked `dev: true` by cdxgen 12.2+ are hidden from
-  Components, SCA, and the LLM reachability hints.
+- **Include npm dev-only dependencies** — npm-only, **off by default**,
+  in its own "Dependency scope" section of the form. When off, any
+  component cdxgen 12.2+ flags as dev-only (the npm-lockfile `dev: true`
+  marker) is treated as out of scope for the repo and excluded from
+  **all** of: OSV/NVD vulnerability scanning, the LLM reachability hint
+  set, the Components and SCA tab default views, the SBOM component
+  recheck, and the **curated SBOM artifact**. Turn it on only for repos
+  where dev/test/build dependencies belong in your compliance artifact.
+  This is an npm-only signal: components in other ecosystems (NuGet,
+  Maven, PyPI, generic C/C++, etc.) are never marked dev-only and are
+  always included regardless of this setting. (Renamed from
+  "Reachability includes dev deps" — the flag affects far more than
+  reachability now. Caveat: cdxgen issue #3927 means a few `devOptional`
+  npm entries miss the marker and still slip through.)
 - **LLM SAST effort** — claude-p `--effort` for the detection pass.
   Default `xhigh` (Opus). Lower for cheaper / faster scans.
 - **LLM recheck effort** — claude-p `--effort` for the recheck pass.

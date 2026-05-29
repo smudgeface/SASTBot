@@ -1172,11 +1172,13 @@ function ScaIssueRow({
   );
 }
 
-function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplayedTotalChange, onUserInteraction }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null; onDisplayedTotalChange?: (total: number) => void; onUserInteraction?: () => void }) {
+function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, includeDevDeps, onDisplayedTotalChange, onUserInteraction }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null; includeDevDeps?: boolean; onDisplayedTotalChange?: (total: number) => void; onUserInteraction?: () => void }) {
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
   const [filters, setFiltersRaw] = useState<ScaIssueFilters>({ page: 1, page_size: 50 });
-  const [excludeDevOnly, setExcludeDevOnlyRaw] = useState(true);
+  // Default to hiding dev-only unless the repo opts dev deps into scope, so the
+  // tab matches what the SBOM includes. The operator can still toggle.
+  const [excludeDevOnly, setExcludeDevOnlyRaw] = useState(!includeDevDeps);
   // Any filter / toggle change clears the URL row target so a stale deep link
   // doesn't persist once the user moves on.
   const setFilters = (next: ScaIssueFilters | ((f: ScaIssueFilters) => ScaIssueFilters)) => {
@@ -1920,19 +1922,23 @@ const COMPONENT_DISMISSED_STATUSES = ["not_found", "ignored"] as const;
 function ComponentsTab({
   scopeId,
   sourceUrlTemplate,
+  includeDevDeps,
   onDisplayedTotalChange,
   expandedId,
   onUserInteraction,
 }: {
   scopeId: string;
   sourceUrlTemplate?: string | null;
+  includeDevDeps?: boolean;
   onDisplayedTotalChange?: (total: number) => void;
   expandedId?: string;
   onUserInteraction?: () => void;
 }) {
   const [page, setPage] = useState(1);
   const [hasFindings, setHasFindings] = useState(false);
-  const [excludeDevOnly, setExcludeDevOnly] = useState(true);
+  // Default to hiding dev-only unless the repo opts dev deps into scope, so the
+  // tab matches what the SBOM includes. The operator can still toggle.
+  const [excludeDevOnly, setExcludeDevOnly] = useState(!includeDevDeps);
   // dismissed_statuses filter: empty = active only (backend default)
   const [dismissedStatuses, setDismissedStatuses] = useState<ScopeComponentDismissedStatus[]>([]);
 
@@ -2345,13 +2351,13 @@ export default function ScopeDetailPage() {
             not on first click. data-[state=inactive]:hidden hides inactive panels
             without unmounting them — eliminates the loading-flash layout shift. */}
         <TabsContent forceMount value="sca" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ScaIssuesTab scopeId={id} highlightIssueId={expandedIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setScaDisplayed} onUserInteraction={clearRowTarget} />}
+          {id && <ScaIssuesTab scopeId={id} highlightIssueId={expandedIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} includeDevDeps={scope?.include_dev_deps} onDisplayedTotalChange={setScaDisplayed} onUserInteraction={clearRowTarget} />}
         </TabsContent>
         <TabsContent forceMount value="sast" className="mt-4 min-h-80 data-[state=inactive]:hidden">
           {id && <SastIssuesTab scopeId={id} highlightIssueId={expandedIssueId} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setSastDisplayed} onUserInteraction={clearRowTarget} />}
         </TabsContent>
         <TabsContent forceMount value="components" className="mt-4 min-h-80 data-[state=inactive]:hidden">
-          {id && <ComponentsTab scopeId={id} sourceUrlTemplate={scope?.source_url_template ?? null} onDisplayedTotalChange={setComponentsDisplayed} expandedId={expandedComponentId} onUserInteraction={clearRowTarget} />}
+          {id && <ComponentsTab scopeId={id} sourceUrlTemplate={scope?.source_url_template ?? null} includeDevDeps={scope?.include_dev_deps} onDisplayedTotalChange={setComponentsDisplayed} expandedId={expandedComponentId} onUserInteraction={clearRowTarget} />}
         </TabsContent>
       </Tabs>
 

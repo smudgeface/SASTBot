@@ -170,7 +170,7 @@ export function repoToOut(repo: Repo): RepoOut {
     is_active: repo.isActive,
     retain_clone: repo.retainClone,
     reachability_enabled: repo.reachabilityEnabled,
-    reachability_include_dev_deps: repo.reachabilityIncludeDevDeps,
+    include_dev_deps: repo.includeDevDeps,
     llm_sast_effort: repo.llmSastEffort as "low" | "medium" | "high" | "xhigh" | "max",
     llm_recheck_effort: repo.llmRecheckEffort as "low" | "medium" | "high" | "xhigh" | "max",
     first_party_namespaces: repo.firstPartyNamespaces,

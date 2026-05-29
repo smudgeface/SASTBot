@@ -147,7 +147,7 @@ export interface Repo {
   credential_id: string | null;
   retain_clone: boolean;
   reachability_enabled: boolean;
-  reachability_include_dev_deps: boolean;
+  include_dev_deps: boolean;
   llm_sast_effort: LlmEffort;
   llm_recheck_effort: LlmEffort;
   /** M6p Stage 2: first-party namespace prefixes the LLM drops. */
@@ -179,7 +179,7 @@ export interface RepoUpsertInput {
   analysis_types: AnalysisType[];
   retain_clone?: boolean;
   reachability_enabled?: boolean;
-  reachability_include_dev_deps?: boolean;
+  include_dev_deps?: boolean;
   llm_sast_effort?: LlmEffort;
   llm_recheck_effort?: LlmEffort;
   /** M6p Stage 2: first-party namespace prefixes. */
@@ -613,6 +613,7 @@ export interface ScopeListItem {
   repo_id: string;
   repo_name: string;
   repo_branch: string;
+  include_dev_deps: boolean;
   path: string;
   display_name: string | null;
   is_active: boolean;

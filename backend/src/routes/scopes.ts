@@ -66,6 +66,9 @@ const ScopeListItemSchema = z.object({
   repo_id: z.string().uuid(),
   repo_name: z.string(),
   repo_branch: z.string(),
+  /** Repo's include_dev_deps flag — drives the Components/SCA tab's
+   *  dev-only-hide default so the GUI matches what the SBOM includes. */
+  include_dev_deps: z.boolean(),
   path: z.string(),
   display_name: z.string().nullable(),
   is_active: z.boolean(),
@@ -172,7 +175,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           ...(repo_id ? { repoId: repo_id } : {}),
           ...(include_inactive ? {} : { isActive: true }),
         },
-        include: { repo: { select: { name: true, defaultBranch: true } } },
+        include: { repo: { select: { name: true, defaultBranch: true, includeDevDeps: true } } },
         orderBy: [{ repo: { name: "asc" } }, { path: "asc" }],
       });
 
@@ -196,7 +199,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       }
 
       return Promise.all(scopes.map(async (scope) => {
-        const repo = scope.repo as { name: string; defaultBranch: string };
+        const repo = scope.repo as { name: string; defaultBranch: string; includeDevDeps: boolean };
 
         const TERMINAL = ["suppressed", "false_positive", "fixed"] as string[];
         // Mirror the SCA/SAST tab default filter: only count issues last seen
@@ -259,6 +262,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
           repo_id: scope.repoId,
           repo_name: repo.name,
           repo_branch: repo.defaultBranch,
+          include_dev_deps: repo.includeDevDeps,
           path: scope.path,
           display_name: scope.displayName,
           is_active: scope.isActive,
@@ -311,11 +315,11 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       const orgId = req.user?.orgId ?? null;
       const scope = await prisma.scanScope.findFirst({
         where: { id: req.params.id, orgId: orgId ?? null },
-        include: { repo: { select: { name: true, defaultBranch: true, sourceUrlTemplate: true } } },
+        include: { repo: { select: { name: true, defaultBranch: true, sourceUrlTemplate: true, includeDevDeps: true } } },
       });
       if (!scope) return reply.code(404).send({ detail: "Scope not found" });
 
-      const repo = scope.repo as { name: string; defaultBranch: string; sourceUrlTemplate: string | null };
+      const repo = scope.repo as { name: string; defaultBranch: string; sourceUrlTemplate: string | null; includeDevDeps: boolean };
       const lastScanRunId = scope.lastScanRunId;
 
       const TERMINAL_D = ["suppressed", "false_positive", "fixed"] as string[];
@@ -392,6 +396,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
         repo_id: scope.repoId,
         repo_name: repo.name,
         repo_branch: repo.defaultBranch,
+        include_dev_deps: repo.includeDevDeps,
         path: scope.path,
         display_name: scope.displayName,
         is_active: scope.isActive,
