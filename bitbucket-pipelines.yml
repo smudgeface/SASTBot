@@ -30,12 +30,31 @@ definitions:
         files:
           - frontend/package-lock.json
       path: $HOME/.npm
+  services:
+    # Ephemeral Postgres for the test gate. Several backend tests reach a real
+    # DB (some Prisma mocks are incomplete and fall through to a live client);
+    # they pass against an empty migrated schema, mirroring how the suite runs
+    # locally via `docker compose exec backend pnpm test`. Reachable at
+    # localhost:5432 from the step container.
+    postgres:
+      image: postgres:16
+      variables:
+        POSTGRES_USER: sastbot
+        POSTGRES_PASSWORD: sastbot
+        POSTGRES_DB: sastbot
+    # Some teardown paths open a BullMQ/ioredis connection; without a reachable
+    # Redis the suite logs ECONNREFUSED noise. Reachable at localhost:6379.
+    redis:
+      image: redis:7
   steps:
     - step: &test
         name: Test, typecheck & version-drift guard
         caches:
           - pnpm-store
           - frontend-npm
+        services:
+          - postgres
+          - redis
         script:
           - corepack enable && corepack prepare pnpm@10.33.4 --activate
           # --- version drift guard: enforce the CLAUDE.md 3-file policy in CI ---
@@ -44,11 +63,19 @@ definitions:
           - AV=$(node -e "const s=require('fs').readFileSync('backend/src/routes/version.ts','utf8');const m=s.match(/APP_VERSION\s*=\s*\"([^\"]+)\"/);process.stdout.write(m?m[1]:'MISSING')")
           - echo "versions backend=$BE frontend=$FE APP_VERSION=$AV"
           - if [ "$BE" != "$FE" ] || [ "$BE" != "$AV" ]; then echo "Version drift across the 3 surfaces (backend/frontend package.json + APP_VERSION) — fix before release"; exit 1; fi
-          # --- backend: typecheck + unit tests (Prisma is mocked; no DB needed) ---
+          # --- backend test env: empty migrated DB + Redis + writable artifact dirs.
+          # MASTER_KEY is an ephemeral throwaway (no real data) generated per run;
+          # some modules load config at import, before tests can set fake env. ---
+          - export DATABASE_URL="postgresql://sastbot:sastbot@localhost:5432/sastbot"
+          - export REDIS_URL="redis://localhost:6379/0"
+          - export ARTIFACT_DIR="/tmp/sastbot-artifacts"
+          - export CLONE_CACHE_DIR="/tmp/sastbot-clones"
+          - export MASTER_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")
           - cd backend
           - pnpm config set store-dir $HOME/.pnpm-store
           - pnpm install --frozen-lockfile
           - pnpm prisma generate
+          - pnpm prisma migrate deploy
           - pnpm typecheck
           - pnpm test
           - cd ..

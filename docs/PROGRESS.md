@@ -55,6 +55,22 @@ runtime change → **no version bump** (CI/build infra only).
   BuildKit-only features so the classic builder is equivalent). Local builds
   prove Dockerfile correctness, not the exact pushed artifact — the first cloud
   run is the real proof.
+- **The test gate needs Postgres + Redis services (caught by the first cloud
+  run).** The initial `bitbucket-pipelines.yml` assumed the backend suite was
+  fully Prisma-mocked — it isn't. Several tests have *incomplete* mocks that
+  fall through to a live `prisma` client (e.g. `sbomCurated` mocks
+  `scopeComponent.findMany` but not the M14-added `scaIssue.findMany`); they
+  only pass locally because `docker compose exec backend pnpm test` has a DB.
+  Fix: a `postgres:16` service + `prisma migrate deploy` (empty schema is
+  enough — no seed needed), a `redis:7` service (a teardown path opens a
+  BullMQ/ioredis connection), plus `MASTER_KEY` (config loads at import, before
+  tests set fake env) and writable `ARTIFACT_DIR`/`CLONE_CACHE_DIR`. Verified by
+  reproducing the exact CI commands in a `node:20-bookworm` container against a
+  throwaway Postgres/Redis: arm64-native = 521 tests green, exit 0; amd64
+  (`--platform`, emulated) = 515/516 with the lone failure a qemu `EBADF`
+  read-after-write fd artifact (not a logic bug). Lesson: "the tests mock the DB"
+  is not safe to assume from reading file headers — run the suite without a DB to
+  find the leaks.
 
 ## 2026-05-29 — Stage 2: repo migration to LMI Bitbucket Cloud (v0.16.1)
 
