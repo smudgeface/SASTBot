@@ -4,6 +4,58 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-29 — Stage 3: CI build + container registry via Bitbucket Pipelines (v0.16.1)
+
+Third session of the production push (Stage 3 of 4). Added `bitbucket-pipelines.yml`
+and a `.dockerignore`; no app code, no schema migration, no operator-visible
+runtime change → **no version bump** (CI/build infra only).
+
+**What shipped.**
+
+- **`bitbucket-pipelines.yml`** (replaced the GUI starter skeleton). Trigger
+  model is **tags-only** for releases: push to `main` runs the test gate only;
+  pushing a git tag `vX.Y.Z` runs the gate then builds & pushes images; a
+  `custom: build-and-push-images` pipeline gives an operator-triggered run from
+  the UI (used for the controlled first run).
+- **Test gate** runs a **version drift-guard** (fails the build if
+  `backend/package.json` ≠ `frontend/package.json` ≠ `APP_VERSION` in
+  `version.ts` — puts the CLAUDE.md 3-file policy into CI) plus backend (pnpm)
+  and frontend (npm) typecheck + vitest. Prisma is mocked in the tests, so the
+  gate needs **no Postgres/Redis service**.
+- **Build & push** to the Bitbucket Packages container registry at
+  **`crg.apkg.io`**. Two images — `sastbot-backend` (shared by backend+worker)
+  and `sastbot-frontend` — each tagged `latest` + `X.Y.Z` + `X.Y.Z-<short-sha>`.
+  Registry path is `crg.apkg.io/$BITBUCKET_WORKSPACE/...`: the workspace slug is
+  resolved at runtime, **never hardcoded** (keeps the public GitHub mirror free
+  of the tenant identifier). Push auth is **native** — Pipelines injects
+  `$BITBUCKET_PACKAGES_USERNAME`/`$BITBUCKET_PACKAGES_TOKEN`, so **no secret is
+  committed and none had to be created** for the push side.
+- **`.dockerignore`** (new — there was none). Shrinks the cloud build context
+  and keeps `.git`, `node_modules`, `.claude/`, the CRA reference dir and all
+  `.env*` out of image layers. Deliberately does NOT blanket-exclude `*.md`
+  (backend prompts + the Vite `?raw`-bundled manual markdown are build inputs).
+
+**What we learned.**
+
+- **Bitbucket Packages is GA** (was open beta) with a native container registry
+  at `crg.apkg.io`; images are workspace-scoped and linked to a repo. Caveat:
+  *not 100% OCI-compatible — no `DELETE` API, no tags API* → old tags can only be
+  pruned via the UI, never scripted. That shaped the tag scheme (immutable
+  version + sha, single mutable `latest`).
+- **1× runner sizing is sufficient.** The memory risk was the frontend
+  `vite build`; measured **~0.55 GB peak RSS** locally (`/usr/bin/time -l`), far
+  under the 1× docker-daemon cap (3 GB). Avoided defaulting to 2× and halved the
+  per-release build minutes. (Bump to 2× only on a cloud OOM / exit 137.)
+- **YAML-in-shell gotcha:** a `: ` (colon-space) inside an unquoted `sed`
+  expression is parsed by YAML as a mapping key and breaks the file. Switched the
+  version read to the same `node -p` one-liner the test step uses.
+- **Local-build validation has limits here:** Colima is arm64 while Pipelines
+  runners are amd64, and this Colima ships no buildx (the `# syntax=` directive
+  forced a fall back to `DOCKER_BUILDKIT=0`; the Dockerfiles use no
+  BuildKit-only features so the classic builder is equivalent). Local builds
+  prove Dockerfile correctness, not the exact pushed artifact — the first cloud
+  run is the real proof.
+
 ## 2026-05-29 — Stage 2: repo migration to LMI Bitbucket Cloud (v0.16.1)
 
 Second session of the production push (Stage 2 of 4). Migrated the repository

@@ -1,35 +1,101 @@
-# This is an example Starter pipeline configuration
-# Use a skeleton to build, test and deploy using manual and parallel steps
-# -----
-# You can specify a custom docker image from Docker Hub as your build environment.
+# SASTBot CI — test gates + container image build/push to Bitbucket Packages.
+#
+# Registry: crg.apkg.io/<workspace>  (workspace resolved at runtime via
+# $BITBUCKET_WORKSPACE — never hardcoded, so no tenant identifier lives here).
+#
+# Push auth is native: Bitbucket Pipelines injects $BITBUCKET_PACKAGES_USERNAME
+# and $BITBUCKET_PACKAGES_TOKEN into every step. No secrets are committed here.
+#
+# Trigger model (tags-only release builds):
+#   - push to main      -> test gate only (drift guard + typecheck + tests)
+#   - push tag vX.Y.Z   -> test gate, then build & push images
+#   - custom (manual)   -> "build-and-push-images" from the UI: full gate + push
+#
+# Image tags per build: latest, X.Y.Z, X.Y.Z-<short-sha>.
+# Version source of truth: backend/package.json .version (the CLAUDE.md 3-file
+# bump policy keeps it equal to frontend/package.json and APP_VERSION; the test
+# step's drift guard fails the build if they disagree).
 
-image: atlassian/default-image:3
+image: node:20-bookworm
+
+definitions:
+  caches:
+    pnpm-store:
+      key:
+        files:
+          - backend/pnpm-lock.yaml
+      path: $HOME/.pnpm-store
+    frontend-npm:
+      key:
+        files:
+          - frontend/package-lock.json
+      path: $HOME/.npm
+  steps:
+    - step: &test
+        name: Test, typecheck & version-drift guard
+        caches:
+          - pnpm-store
+          - frontend-npm
+        script:
+          - corepack enable && corepack prepare pnpm@10.33.4 --activate
+          # --- version drift guard: enforce the CLAUDE.md 3-file policy in CI ---
+          - BE=$(node -p "require('./backend/package.json').version")
+          - FE=$(node -p "require('./frontend/package.json').version")
+          - AV=$(node -e "const s=require('fs').readFileSync('backend/src/routes/version.ts','utf8');const m=s.match(/APP_VERSION\s*=\s*\"([^\"]+)\"/);process.stdout.write(m?m[1]:'MISSING')")
+          - echo "versions backend=$BE frontend=$FE APP_VERSION=$AV"
+          - if [ "$BE" != "$FE" ] || [ "$BE" != "$AV" ]; then echo "Version drift across the 3 surfaces (backend/frontend package.json + APP_VERSION) — fix before release"; exit 1; fi
+          # --- backend: typecheck + unit tests (Prisma is mocked; no DB needed) ---
+          - cd backend
+          - pnpm config set store-dir $HOME/.pnpm-store
+          - pnpm install --frozen-lockfile
+          - pnpm prisma generate
+          - pnpm typecheck
+          - pnpm test
+          - cd ..
+          # --- frontend: tsc + vitest (the vite build runs inside the docker build) ---
+          - cd frontend
+          - npm ci
+          - npm run typecheck
+          - npm test
+    - step: &build-push
+        name: Build & push images to crg.apkg.io
+        # 1x (4 GB; docker daemon capped at 3 GB) is sufficient: the heaviest
+        # in-build step is the frontend `vite build`, measured at ~0.55 GB peak
+        # RSS locally. Bump to `size: 2x` only if a cloud build OOMs (exit 137).
+        services:
+          - docker
+        caches:
+          - docker
+        script:
+          - export VERSION=$(node -p "require('./backend/package.json').version")
+          - export SHA=${BITBUCKET_COMMIT:0:7}
+          - export REG="crg.apkg.io/$BITBUCKET_WORKSPACE"
+          - echo "Building SASTBot $VERSION ($SHA) -> $REG"
+          # On a tag-triggered build, the git tag must match the package version.
+          - if [ -n "$BITBUCKET_TAG" ] && [ "$BITBUCKET_TAG" != "v$VERSION" ]; then echo "Git tag $BITBUCKET_TAG != v$VERSION (backend/package.json) — bump the 3 version files or retag"; exit 1; fi
+          - docker login crg.apkg.io -u "$BITBUCKET_PACKAGES_USERNAME" -p "$BITBUCKET_PACKAGES_TOKEN"
+          # backend image (shared by the backend + worker services)
+          - docker build -f docker/backend.Dockerfile  --target prod
+            -t "$REG/sastbot-backend:latest"
+            -t "$REG/sastbot-backend:$VERSION"
+            -t "$REG/sastbot-backend:$VERSION-$SHA" .
+          # frontend image (nginx serving the built SPA)
+          - docker build -f docker/frontend.Dockerfile --target prod
+            -t "$REG/sastbot-frontend:latest"
+            -t "$REG/sastbot-frontend:$VERSION"
+            -t "$REG/sastbot-frontend:$VERSION-$SHA" .
+          - docker push -a "$REG/sastbot-backend"
+          - docker push -a "$REG/sastbot-frontend"
 
 pipelines:
-  default:
-    - parallel:
-      - step:
-          name: 'Build and Test'
-          script:
-            - echo "Your build and test goes here..."
-      - step:
-          name: 'Lint'
-          script:
-            - echo "Your linting goes here..."
-      - step:
-          name: 'Security scan'
-          script:
-            - echo "Your security scan goes here..."
-
-    # The following deployment steps will be executed for each pipeline run. To configure your steps and conditionally deploy see https://support.atlassian.com/bitbucket-cloud/docs/configure-bitbucket-pipelinesyml/
-    - step:
-        name: 'Deployment to Staging'
-        deployment: staging
-        script:
-          - echo "Your deployment to staging script goes here..."
-    - step:
-        name: 'Deployment to Production'
-        deployment: production
-        trigger: 'manual'
-        script:
-          - echo "Your deployment to production script goes here..."
+  branches:
+    main:
+      - step: *test
+  tags:
+    "v*":
+      - step: *test
+      - step: *build-push
+  custom:
+    build-and-push-images:        # manual trigger from the Bitbucket UI
+      - step: *test
+      - step: *build-push

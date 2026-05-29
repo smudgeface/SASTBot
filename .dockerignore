@@ -1,0 +1,38 @@
+# Build-context exclusions for `docker build` (local + Bitbucket Pipelines).
+# Keeps the cloud build context small and ensures no local-only / sensitive
+# material ever lands in an image layer. Dependencies and build outputs are
+# regenerated inside the Dockerfiles, so they must NOT be copied in.
+
+# VCS + tooling
+.git
+.gitignore
+# NOTE: do NOT blanket-exclude *.md — backend/prompts/*.md are loaded at
+# runtime and frontend/src/manual/content/*.md are bundled by Vite (?raw)
+# at build time. Excluding them breaks the image builds.
+
+# Local Claude Code session state + any local reference material
+.claude
+docs/Claude CRA Analysis Reference
+
+# Dependencies (reinstalled in-image)
+**/node_modules
+
+# Build outputs (rebuilt in-image)
+backend/dist
+frontend/dist
+
+# Env + secrets (never baked into an image)
+.env
+**/.env
+**/.env.*
+!**/.env.example
+
+# Runtime/working data that may exist on a dev machine
+clones
+artifacts
+backups
+*.log
+
+# OS cruft
+.DS_Store
+**/.DS_Store
