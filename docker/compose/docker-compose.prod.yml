@@ -117,7 +117,7 @@ services:
     # No `ports:` block on purpose. Dokploy fronts every Compose stack with
     # Traefik; the reverse proxy reaches this container on its internal
     # network using the hostname + port that Dokploy's "Domains" UI
-    # configures (Host: sastbot.smudgeface.net -> frontend:80). Publishing
+    # configures (Host: sastbot.example.com -> frontend:80). Publishing
     # the host's port 80 here would collide with every other Dokploy app
     # on the same host that tries to do the same. The container still
     # listens on 80 internally (see nginx config + EXPOSE 80 in the

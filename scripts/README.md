@@ -44,7 +44,7 @@ For `deploy.py` set:
 ```bash
 export DOKPLOY_WEBHOOK_URL="http://<dokploy-host>:3000/api/deploy/compose/<webhook-id>"
 export DOKPLOY_REF="refs/heads/main"           # optional, default shown
-export DOKPLOY_REPO_FULL="smudgeface/SASTBot"  # optional, default shown
+export DOKPLOY_REPO_FULL="sastbot"  # optional, default shown
 ```
 
 The webhook URL is sensitive (contains a secret). Don't commit it.

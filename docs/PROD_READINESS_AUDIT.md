@@ -54,7 +54,7 @@ follow-up. See §6 for the proposed plan and the open questions for you.
 - `docs/Claude CRA Analysis Reference/` — contains `CRA_Compliance_Report.md`
   (31 KB) with **real LMI product firmware findings**: hardcoded firmware
   passwords, MongoDB credentials, RSA key paths, an internal IP
-  (`10.0.0.0`), plus a product SBOM and the generating prompt. This is not
+  address, plus a product SBOM and the generating prompt. This is not
   SASTBot code and must never land in a shared repo.
 - `.claude/` — local Claude Code session state: `settings.local.json`,
   screenshots, `worktrees/`, task locks. Machine-local, not for sharing.
@@ -126,11 +126,11 @@ into a small number of commits (security/ops fixes, doc fixes, frontend polish).
   `onError` toasts mirroring `ReposPage`. (MEDIUM) `ScopeDetailPage.tsx`,
   `ScansPage.tsx`
 - **PR-16 — Neutralize the hardcoded LLM default URL.** `SettingsPage.tsx` defaults
-  the LLM base URL to `https://llm.internal.example` (TKH/LMI-internal) and even
+  the LLM base URL to an internal TKH/LMI LLM-gateway URL and even
   falls back to it when the stored value is empty. Default to `""`. (MEDIUM)
   `frontend/src/routes/admin/SettingsPage.tsx:32,83`
 - **PR-17 — Generalize the LAN IP comment.** `clipboard.ts:7` hardcodes
-  `10.0.0.0` in a doc comment; replace with `http://<LAN-IP>:5173/`. (LOW)
+  a LAN IP in a doc comment; replace with `http://<LAN-IP>:5173/`. (LOW)
 - **PR-18 — Dashboard "Available in M3" placeholder.** Stale milestone label shown
   to operators; wire to real counts or change the hint. (MEDIUM) `DashboardPage.tsx`
 - **PR-19 — Error states.** `ScansPage` renders blank (no `isError` branch) on

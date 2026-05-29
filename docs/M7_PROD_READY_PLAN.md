@@ -816,8 +816,8 @@ nothing to gate on.
 - **(a) Local pre-push git hook.** Husky runs
   `pnpm -C backend lint && pnpm -C backend typecheck && pnpm -C backend test`
   and the frontend equivalents before push. Free, manual.
-- **(b) GitHub Actions** workflow (the personal repo
-  `smudgeface/SASTBot` is on GitHub per `reference_deployment.md`).
+- **(b) GitHub Actions** workflow (the repo was on personal GitHub at
+  the time per `reference_deployment.md`).
   Standard Node 20 matrix, run lint + typecheck + tests on PR. Free
   for public repos; private repo gets generous free minutes.
 

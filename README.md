@@ -40,8 +40,8 @@ SASTBot scans git repositories for security issues using:
 Prerequisites: Docker Desktop (or any engine with Compose v2).
 
 ```bash
-git clone https://github.com/smudgeface/SASTBot.git
-cd SASTBot
+git clone https://bitbucket.org/<your-workspace>/sastbot.git
+cd sastbot
 cp .env.example .env   # generate a fresh MASTER_KEY (see .env.example)
 docker compose -f docker/compose/docker-compose.yml --env-file .env up --build
 ```

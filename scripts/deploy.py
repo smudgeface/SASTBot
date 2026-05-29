@@ -11,11 +11,11 @@ Required env vars:
 
 Optional env vars:
   DOKPLOY_REF           Git ref to deploy (default: refs/heads/main)
-  DOKPLOY_REPO_FULL     Owner/repo display string (default: smudgeface/SASTBot)
+  DOKPLOY_REPO_FULL     Owner/repo display string (default: sastbot)
 
 Usage::
 
-    export DOKPLOY_WEBHOOK_URL=http://10.0.0.0:3000/api/deploy/compose/<id>
+    export DOKPLOY_WEBHOOK_URL=http://<dokploy-host>:3000/api/deploy/compose/<id>
     python -m scripts.deploy
 """
 
@@ -37,7 +37,7 @@ def run() -> int:
         return 2
 
     ref = os.environ.get("DOKPLOY_REF", "refs/heads/main")
-    repo_full = os.environ.get("DOKPLOY_REPO_FULL", "smudgeface/SASTBot")
+    repo_full = os.environ.get("DOKPLOY_REPO_FULL", "sastbot")
 
     body = json.dumps({"ref": ref, "repository": {"full_name": repo_full}}).encode()
     req = urllib.request.Request(

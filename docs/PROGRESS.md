@@ -4,6 +4,62 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-29 — Stage 2: repo migration to LMI Bitbucket Cloud (v0.16.1)
+
+Second session of the production push (Stage 2 of 4). Migrated the repository
+from the personal GitHub repo (personal/public) to **LMI Bitbucket Cloud**
+(private; the exact workspace/project are kept in local agent memory, not
+in-repo). No schema migration.
+
+**What shipped.**
+
+- **Full-history mirror.** All 277 commits + tag `v0.14.0` pushed to Bitbucket;
+  remote `main` SHA verified equal to local (`2689d0d`). Force-replaced the
+  GUI-created "Initial commit" (a stub `.gitignore`). History strategy: mirror
+  (not squash), pre-existing low-sensitivity items (RFC1918 IPs, the
+  `.env.example` example key) accepted as-is — already public on the old GitHub.
+- **Pre-flight leak scan (twice).** Re-confirmed across all reachable blobs that
+  `docs/Claude CRA Analysis Reference/` and `.claude/` were never committed, and
+  no firmware-password / `mongodb://` / private-key material exists in history.
+  Clean.
+- **Remotes.** `origin` → Bitbucket (default push/pull; `main` tracks
+  `origin/main`); GitHub kept as a secondary mirror under the remote name
+  `github`. Nothing pushed to GitHub this session.
+- **In-repo reference updates.** README clone URL → Bitbucket; `CLAUDE.md`
+  contributor note now states Bitbucket is canonical. Removed the tool-driver
+  `informationUri` (was a GitHub URL) from SARIF output — the Bitbucket repo is
+  private, so a link there isn't useful to SARIF consumers; the CWE taxonomy
+  `informationUri` is unchanged.
+- **Scrubbed the personal GitHub identity repo-wide.** Removed every reference
+  to the personal GitHub handle and homelab domain from the tracked tree
+  (README, CLAUDE.md, `scripts/deploy.py` + `scripts/README.md` defaults →
+  generic placeholders, the prod-compose Traefik-host comment → `example.com`,
+  and genericized the historical M2 / M7-plan log mentions). A follow-up pass
+  then scrubbed **all LMI-internal identifiers** too — Bitbucket workspace/
+  project, the internal git server + repo paths, the internal LLM-gateway URL,
+  the LMI product IP, and the personal homelab IPs — since the public GitHub
+  mirror would otherwise expose them. Real values now live only in local agent
+  memory / gitignored docs.
+- **Version bump.** 0.16.0 → 0.16.1 (PATCH — operator-visible: SARIF output
+  changed). All three surfaces moved together (`backend/package.json`,
+  `frontend/package.json` + lockfile, `APP_VERSION`). **Bump is not a deploy** —
+  nothing deployed.
+
+**What we learned.**
+
+- **Atlassian API tokens are not interchangeable across products.** An unscoped
+  id.atlassian.com token authenticates to Jira/Confluence but Bitbucket Cloud
+  rejects it (`401 "not supported for this endpoint"`). Bitbucket needs a token
+  created **with Bitbucket scopes** (or an app password / access token).
+- **Bitbucket uses two different Basic-auth usernames for the same token:** the
+  **email** for the REST API (`api.bitbucket.org/2.0`), but the **Bitbucket
+  username** (not the email) for git-over-HTTPS (push/pull). Getting REST working
+  said nothing about git working. Captured in the credential memory.
+- **`security add-generic-password -w` with no value reads the tty, not stdin** —
+  an interactive paste silently truncated a 192-char token to 128 and produced a
+  string of misleading 401s. Pass the value as the `-w` argument and verify
+  length first.
+
 ## 2026-05-29 — Production-readiness audit + Stage-1 cleanup (v0.16.0)
 
 First session of the production push (Stage 1 of 4: audit + cleanup; the
@@ -41,7 +97,7 @@ stages). No schema migration. Audit findings live in
   `componentMatch`, and `hasErrorWarnings`.
 - **Frontend.** Top-level error boundary; surfaced previously-swallowed
   scan/triage/dismiss mutation errors as toasts; global mid-session 401 → re-auth
-  redirect; removed the `example.com` LLM default URL; favicon + per-route
+  redirect; removed the hardcoded internal LLM default URL; favicon + per-route
   page titles; error states on the scans list + scope SBOM viewer.
 - **Docs / manual.** Version drift fixed (README, `versioning.md`, CLAUDE.md);
   `.env.example` corrected (`postgresql://` not `+asyncpg`, plus the previously
@@ -1538,14 +1594,14 @@ All four fixed during QA, but the root-cause lesson is on the process: parallel 
 - Vite proxy keeps the `bypass` for HTML requests so deep-links and reloads hit the SPA.
 
 **Next — M2**
-GitHub repo creation (`smudgeface/SASTBot`) and first deploy to Dokploy. Build-script pipeline (LMI convention — Python scripts in `scripts/`, not GitHub Actions). Real BullMQ job: admin "Scan now" drives a `scan_runs` row through pending → running → done (still a no-op handler — M3 fills in the scan logic). Publish `docs/OPERATIONS.md` with key-rotation and webhook-deploy procedures.
+Personal GitHub repo creation and first deploy to Dokploy. Build-script pipeline (LMI convention — Python scripts in `scripts/`, not GitHub Actions). Real BullMQ job: admin "Scan now" drives a `scan_runs` row through pending → running → done (still a no-op handler — M3 fills in the scan logic). Publish `docs/OPERATIONS.md` with key-rotation and webhook-deploy procedures.
 
 ---
 
 ## M2 — CI scripts, scan pipeline, first push (2026-04-22)
 
 **What shipped**
-- `smudgeface/SASTBot` created on GitHub; initial commit + M2 commit pushed.
+- Personal GitHub repo created; initial commit + M2 commit pushed.
 - **Build scripts** under `scripts/` (modern Python 3, stdlib only, package-relative imports): `ci`, `typecheck`, `lint`, `test`, `check_openapi` (detects OpenAPI drift between running backend and committed `schema.d.ts`), `build_images`, `deploy`. Runnable as `python -m scripts.<name>`. Designed to be wired into whatever build runner LMI eventually points at them — no Bitbucket-Pipelines dependency.
 - **Scan pipeline end-to-end:**
   - Backend: `POST /admin/repos/:id/scan` route + `scanService.triggerScan()` that creates a pending `scan_runs` row and enqueues a BullMQ job.
@@ -1562,7 +1618,7 @@ GitHub repo creation (`smudgeface/SASTBot`) and first deploy to Dokploy. Build-s
 - The M1 QA bugfix (renaming `new_credential` → `credential`) held — no contract drift reintroduced. Zod-as-single-source-of-truth paid off.
 
 **Outstanding for M2 close**
-Configuring the Dokploy application itself (Compose app pointing at `smudgeface/SASTBot`, env var wiring for `MASTER_KEY`, webhook ID copied into `~/.../DEPLOY_HOMELAB.md`) is a user-side step. Once the webhook is set, `DOKPLOY_WEBHOOK_URL=... python -m scripts.deploy` is the full deploy workflow.
+Configuring the Dokploy application itself (Compose app pointing at the personal GitHub repo, env var wiring for `MASTER_KEY`, webhook ID copied into `~/.../DEPLOY_HOMELAB.md`) is a user-side step. Once the webhook is set, `DOKPLOY_WEBHOOK_URL=... python -m scripts.deploy` is the full deploy workflow.
 
 **Next — M2.5 (below), then M3**
 
@@ -2660,7 +2716,7 @@ unconditionally.
   scans; the backfill captured it correctly from stored `sbom_json`.
 
 - **Phase 1.1 scan verification pending VPN reconnect.** The Gocator Classic
-  clone requires VPN to `git.example.com`. Two scan attempts during implementation
+  clone requires VPN to the internal git server. Two scan attempts during implementation
   failed with `RemoteUnreachableError`. The identity-path format change (from
   `../clones/<uuid>/...` to repo-relative) can only be confirmed by a fresh scan
   that runs cdxgen. The occurrence data is already correct in all scans (see above).
@@ -2779,7 +2835,7 @@ the browser. Each item shipped as its own commit; this is a roll-up.
 
 ### Addendum — onboarding-a-new-repo failures (2026-05-12)
 
-While intaking the FSS repo (`https://git.example.com/scm/internal/repo.git`) we
+While intaking an internal repo (over the corporate git server) we
 hit three "no helpful message in the GUI" failure modes and a confusing
 SBOM mismatch. All shipped as their own commits.
 

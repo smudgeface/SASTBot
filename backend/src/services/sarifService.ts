@@ -29,7 +29,6 @@ import type { SastIssue } from "@prisma/client";
 
 const SARIF_SCHEMA = "https://docs.oasis-open.org/sarif/sarif/v2.1.0/cs01/schemas/sarif-schema-2.1.0.json";
 const TOOL_NAME = "SASTBot";
-const TOOL_INFO_URI = "https://github.com/smudgeface/SASTBot";
 const ABSENCE_SNIPPET_PREFIX = "__absence__:";
 
 export interface SarifBuildOpts {
@@ -263,7 +262,6 @@ export function buildSarifFromIssues(issues: SastIssue[], opts: SarifBuildOpts):
   const driver: Record<string, unknown> = {
     name: TOOL_NAME,
     version: opts.toolVersion,
-    informationUri: TOOL_INFO_URI,
     rules: Array.from(ruleById.values()),
   };
   if (opts.modelName) driver.semanticVersion = opts.modelName;
@@ -504,7 +502,6 @@ export function buildSastSarifFromDetection(input: {
   const driver: Record<string, unknown> = {
     name: TOOL_NAME,
     version: input.toolVersion,
-    informationUri: TOOL_INFO_URI,
     rules: Array.from(ruleById.values()),
   };
   if (input.modelName) driver.semanticVersion = input.modelName;
