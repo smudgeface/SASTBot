@@ -57,23 +57,12 @@ export function prettyLicense(raw: string): string {
 
 /**
  * Returns the display label for the Ecosystem column in the Components tab.
- *
- * Design decision (per M6q investigation): 100% of `generic`-ecosystem rows
- * are LLM-augmentation finds in practice, but we key on discovery_method
- * rather than ecosystem to be forward-compatible with future non-LLM
- * `generic` rows.
- *
- * Returns a plain string — callers render it the same way for every variant
- * (no special badge for "Vendored", per UX feedback #8).
+ * Formats the stored ecosystem string verbatim (e.g. `generic` → "Generic");
+ * null/empty renders as an em-dash.
  *
  * @param ecosystem - raw ecosystem string (e.g. "npm", "nuget", "generic", null)
- * @param discoveryMethod - "manifest" | "llm_augmentation" | null
  */
-export function prettyEcosystem(
-  ecosystem: string | null | undefined,
-  discoveryMethod: string | null | undefined,
-): string {
-  if (discoveryMethod === "llm_augmentation") return "Vendored";
+export function prettyEcosystem(ecosystem: string | null | undefined): string {
   if (!ecosystem) return "—";
   return formatEcosystemLabel(ecosystem);
 }

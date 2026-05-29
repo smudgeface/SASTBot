@@ -344,7 +344,7 @@ function ScanComponentRow({
     }
   }, [autoExpand]);
 
-  const eco = prettyEcosystem(component.ecosystem, component.discovery_method);
+  const eco = prettyEcosystem(component.ecosystem);
   const occurrences = component.occurrences ?? [];
   const firstLicense = component.licenses[0] ? prettyLicense(component.licenses[0]) : null;
   const extraLicenses = component.licenses.length > 1 ? component.licenses.length - 1 : 0;

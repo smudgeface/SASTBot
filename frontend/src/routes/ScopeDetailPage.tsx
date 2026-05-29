@@ -1474,7 +1474,7 @@ function ScopeComponentRow({
     );
   };
 
-  const eco = prettyEcosystem(component.ecosystem, component.discovery_method);
+  const eco = prettyEcosystem(component.ecosystem);
   const linkedScaIds = component.linked_issue_ids?.sca ?? [];
   // Row badge column shows only NON-TERMINAL issues — operator action needed.
   // The detail panel below shows ALL linked issues (fixed included) as audit.
