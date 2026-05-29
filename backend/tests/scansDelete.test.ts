@@ -157,8 +157,8 @@ describe("deleteScanRun", () => {
     it("error carries scopeId and scanRunId", async () => {
       const err = await deleteScanRun(SCAN_ID, ORG_ID).catch((e) => e);
       expect(err).toBeInstanceOf(ScanIsCurrentLatestError);
-      expect((err as ScanIsCurrentLatestError).scopeId).toBe(SCOPE_ID);
-      expect((err as ScanIsCurrentLatestError).scanRunId).toBe(SCAN_ID);
+      expect((err as InstanceType<typeof ScanIsCurrentLatestError>).scopeId).toBe(SCOPE_ID);
+      expect((err as InstanceType<typeof ScanIsCurrentLatestError>).scanRunId).toBe(SCAN_ID);
     });
   });
 
@@ -190,7 +190,7 @@ describe("deleteScanRun", () => {
         });
         const err = await deleteScanRun(SCAN_ID, ORG_ID).catch((e) => e);
         expect(err).toBeInstanceOf(ScanStillRunningError);
-        expect((err as ScanStillRunningError).status).toBe(status);
+        expect((err as InstanceType<typeof ScanStillRunningError>).status).toBe(status);
       });
 
       it(`does NOT delete the DB row when status is '${status}'`, async () => {

@@ -144,8 +144,8 @@ function baseRecheckInput(
     issues: [
       {
         id: "issue-1",
-        file: "/test.ts",
-        line: 1,
+        file_path: "/test.ts",
+        start_line: 1,
         summary: "test",
         snippet: "code",
         cwe: "CWE-79",

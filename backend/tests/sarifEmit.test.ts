@@ -94,7 +94,7 @@ describe("B4 sarif_emit — disk artifact write", () => {
 
     const issues = [makeSastIssue(), makeSastIssue({ latestRuleId: "CWE-79", latestSeverity: "medium" })];
 
-    const sarif = buildSarifFromIssues(issues as Parameters<typeof buildSarifFromIssues>[0], {
+    const sarif = buildSarifFromIssues(issues as unknown as Parameters<typeof buildSarifFromIssues>[0], {
       toolVersion: "0.7.0",
       modelName: "claude-code-cli",
       scopePath: "/",

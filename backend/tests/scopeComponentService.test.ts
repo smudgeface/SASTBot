@@ -187,7 +187,7 @@ describe("upsertScaIssueFromDetection — worker sticky cascade (M14)", () => {
     vi.spyOn(prisma.scaIssue, "findUnique").mockResolvedValue(null);
     vi.spyOn(prisma.scaIssue, "upsert").mockImplementation(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async (args: any) => ({ ...args.create, id: "new-issue-id" }),
+      (async (args: any) => ({ ...args.create, id: "new-issue-id" })) as never,
     );
 
     const { upsertScaIssueFromDetection } = await import("../src/services/issueService.js");
@@ -230,7 +230,7 @@ describe("upsertScaIssueFromDetection — worker sticky cascade (M14)", () => {
     vi.spyOn(prisma.scaIssue, "findUnique").mockResolvedValue(null);
     vi.spyOn(prisma.scaIssue, "upsert").mockImplementation(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async (args: any) => ({ ...args.create, id: "new-issue-id" }),
+      (async (args: any) => ({ ...args.create, id: "new-issue-id" })) as never,
     );
 
     const { upsertScaIssueFromDetection } = await import("../src/services/issueService.js");
@@ -271,7 +271,7 @@ describe("upsertScaIssueFromDetection — worker sticky cascade (M14)", () => {
     vi.spyOn(prisma.scaIssue, "findUnique").mockResolvedValue(null);
     vi.spyOn(prisma.scaIssue, "upsert").mockImplementation(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async (args: any) => ({ ...args.create, id: "new-issue-id" }),
+      (async (args: any) => ({ ...args.create, id: "new-issue-id" })) as never,
     );
 
     const { upsertScaIssueFromDetection } = await import("../src/services/issueService.js");

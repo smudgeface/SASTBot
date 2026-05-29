@@ -810,7 +810,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
       // a recorded version fall into the `null` bucket so a version-less
       // component row still matches them.
       const scaKey = (name: string, version: string | null): string =>
-        `${name} ${version ?? ""}`;
+        `${name}\u0000${version ?? ""}`;
       const scaByKey = new Map<string, string[]>();
       for (const issue of scaIssues) {
         const k = scaKey(issue.packageName, issue.latestPackageVersion);

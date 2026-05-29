@@ -121,8 +121,8 @@ async function main(): Promise<void> {
 
     const issues: RecheckIssueInput[] = active.map((i) => ({
       id: i.id,
-      file: i.latestFilePath,
-      line: i.latestStartLine,
+      file_path: i.latestFilePath,
+      start_line: i.latestStartLine,
       summary: i.latestRuleMessage ?? i.latestRuleId,
       snippet: i.latestSnippet ?? "",
       cwe: (i.latestCweIds[0] ?? "CWE-UNKNOWN"),

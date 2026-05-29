@@ -1770,7 +1770,7 @@ export async function persistDetection(
           return {
             file: toRepoRelative(input.scopePath, s.file_path),
             line: s.line,
-            snippet: fileSnippet?.text ?? s.snippet ?? "",
+            snippet: fileSnippet?.text ?? ("snippet" in s ? s.snippet : undefined) ?? "",
           };
         }),
       );
@@ -1851,7 +1851,7 @@ export async function persistReachabilityRecords(
         return {
           file: toRepoRelative(input.scopePath, s.file_path),
           line: s.line,
-          snippet: fileSnippet?.text ?? s.snippet ?? "",
+          snippet: fileSnippet?.text ?? ("snippet" in s ? s.snippet : undefined) ?? "",
         };
       }),
     );
