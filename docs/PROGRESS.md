@@ -71,6 +71,16 @@ runtime change → **no version bump** (CI/build infra only).
   read-after-write fd artifact (not a logic bug). Lesson: "the tests mock the DB"
   is not safe to assume from reading file headers — run the suite without a DB to
   find the leaks.
+- **The test gate was also flaky until vitest switched to `pool: "forks"`.** A
+  later run aborted the test step in ~90s with `thread caused non-unwinding
+  panic` deep in `node::worker::Worker::Run` / `uv__finish_close` — a Rust
+  N-API addon (the Prisma query engine) crashing during teardown of vitest's
+  default worker-**thread** pool. Same commit passed on earlier runs, so it's
+  intermittent. Fix: `pool: "forks"` in `backend/vitest.config.ts` (one test
+  file per child process; the addon tears down with the process). Verified 3×
+  green locally (521 tests each). Same crash *class* showed up in local repro as
+  an arm64 segfault / amd64-qemu EBADF — native teardown under any
+  virtualization is the through-line.
 
 ## 2026-05-29 — Stage 2: repo migration to LMI Bitbucket Cloud (v0.16.1)
 
