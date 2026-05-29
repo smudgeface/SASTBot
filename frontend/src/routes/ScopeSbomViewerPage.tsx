@@ -4,6 +4,7 @@ import { ArrowLeft, Download, Loader2 } from "lucide-react";
 
 import { useScopeDetail, useScopeSbomJson } from "@/api/queries/scopes";
 import { Button } from "@/components/ui/button";
+import { ApiError } from "@/api/client";
 
 function downloadBlob(text: string, filename: string) {
   const blob = new Blob([text], { type: "application/json" });
@@ -66,8 +67,10 @@ export default function ScopeSbomViewerPage() {
             Loading SBOM…
           </div>
         ) : sbom.isError ? (
-          <div className="flex items-center justify-center h-full text-sm text-destructive">
-            Failed to load SBOM. No successful scan for this scope yet?
+          <div className="flex items-center justify-center h-full text-sm text-muted-foreground px-8 text-center">
+            {sbom.error instanceof ApiError && sbom.error.status === 404
+              ? (sbom.error.message || "SBOM artifact not available for this scope yet — re-run a scan to produce one.")
+              : "Failed to load SBOM."}
           </div>
         ) : (
           <Editor

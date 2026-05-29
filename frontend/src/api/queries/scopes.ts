@@ -127,7 +127,6 @@ export function useScopeScaIssues(scopeId: string | undefined, filters: ScaIssue
   });
 }
 
-// TODO: re-align with regenerated schema once backend agent lands (M14)
 export type ScopeComponentDismissedStatus = "active" | "not_found" | "ignored";
 
 export function useScopeComponents(
@@ -164,7 +163,6 @@ export function useScopeComponents(
  * SCA issues for this package. Sticky: future CVEs on the same package also
  * land as suppressed. Reversible via useUnignoreScopeComponent.
  *
- * TODO: re-align response type with regenerated schema once backend agent lands (M14)
  */
 export function useIgnoreScopeComponent(scopeId: string) {
   const queryClient = useQueryClient();
@@ -191,7 +189,6 @@ export function useIgnoreScopeComponent(scopeId: string) {
  * were created by the ignore cascade (dismissed_reason='component_ignored').
  * Dev-tree-policy suppressions are left alone.
  *
- * TODO: re-align response type with regenerated schema once backend agent lands (M14)
  */
 export function useUnignoreScopeComponent(scopeId: string) {
   const queryClient = useQueryClient();

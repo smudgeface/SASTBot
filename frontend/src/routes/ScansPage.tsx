@@ -5,6 +5,8 @@ import { useNavigate } from "react-router-dom";
 import { useMe } from "@/api/queries/auth";
 import { useRepos } from "@/api/queries/repos";
 import { useScans, useCancelScan } from "@/api/queries/scans";
+import { useToast } from "@/components/ui/use-toast";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -63,6 +65,7 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
 }
 
 export default function ScansPage() {
+  useDocumentTitle("Scans — SASTBot");
   const navigate = useNavigate();
   const [page, setPage] = useState(1);
   const scans = useScans({ page, page_size: PAGE_SIZE });
@@ -70,6 +73,7 @@ export default function ScansPage() {
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
   const cancelScan = useCancelScan();
+  const { toast } = useToast();
 
   const repoNameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -87,6 +91,10 @@ export default function ScansPage() {
         <h1 className="text-xl font-semibold tracking-tight">Scan Results</h1>
         <p className="text-sm text-muted-foreground">All scans run across your repositories. Click a row to view findings.</p>
       </div>
+
+      {scans.isError && (
+        <p className="text-sm text-destructive">Failed to load scans.</p>
+      )}
 
       {scans.isLoading ? (
         <Card>
@@ -176,7 +184,16 @@ export default function ScansPage() {
                         type="button"
                         className="text-xs text-destructive hover:underline disabled:opacity-50"
                         disabled={cancelScan.isPending}
-                        onClick={(e) => { e.stopPropagation(); cancelScan.mutate(scan.id); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          cancelScan.mutate(scan.id, {
+                            onError: (err) => toast({
+                              variant: "destructive",
+                              title: "Failed to cancel scan",
+                              description: err instanceof Error ? err.message : "Unknown error",
+                            }),
+                          });
+                        }}
                       >
                         Cancel
                       </button>

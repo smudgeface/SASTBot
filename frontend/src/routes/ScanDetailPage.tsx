@@ -47,6 +47,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { prettyEcosystem, prettyLicense } from "@/lib/componentLabels";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useNow } from "@/lib/useNow";
 import { FilterGroup, Pipe, ToggleGroup } from "@/components/filters";
 import { SortableTableHead } from "@/components/SortableTableHead";
@@ -819,6 +820,7 @@ export default function ScanDetailPage() {
   const repo = repos.data?.items.find((r) => r.id === scan.data?.repo_id);
   const repoName = repo?.name;
   const sourceUrlTemplate = repo?.source_url_template ?? null;
+  useDocumentTitle(repoName ? `${repoName} scan — SASTBot` : "Scan — SASTBot");
 
   // Live wall-clock for the elapsed-timer display. The hook ticks every
   // second while the scan is pending/running and freezes once terminal.

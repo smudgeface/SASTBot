@@ -29,7 +29,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 
 const LLM_DEFAULTS = {
-  base_url: "https://llm.internal.example",
+  base_url: "",
   api_format: "anthropic-messages" as LlmApiFormat,
   model: "claude-opus-4-7",
 };
@@ -80,7 +80,7 @@ export default function SettingsPage() {
     setJiraCredId(data.jira_credential_id ?? "");
     setJiraCredChoice(data.jira_credential_id ? "existing" : "new");
 
-    setLlmBaseUrl(data.llm_base_url || LLM_DEFAULTS.base_url);
+    setLlmBaseUrl(data.llm_base_url ?? "");
     setLlmApiFormat((data.llm_api_format as LlmApiFormat) || LLM_DEFAULTS.api_format);
     setLlmModel(data.llm_model || LLM_DEFAULTS.model);
     setLlmCredId(data.llm_credential_id ?? "");

@@ -80,6 +80,7 @@ import { SortableTableHead } from "@/components/SortableTableHead";
 import type { SortState } from "@/components/SortableTableHead";
 import type { IssueSortKey } from "@/api/queries/scopes";
 import { useToast } from "@/components/ui/use-toast";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { copyToClipboard } from "@/lib/clipboard";
 import { ContextSnippet } from "@/components/ContextSnippet";
 import { ReachabilityVerdict } from "@/components/ReachabilityVerdict";
@@ -425,7 +426,13 @@ function SastIssueRow({
   };
 
   const act = (status: "confirmed" | "false_positive" | "suppressed" | "pending" | "fixed" | "planned") => {
-    triage.mutate({ issueId: issue.id, status });
+    triage.mutate({ issueId: issue.id, status }, {
+      onError: (err) => toast({
+        variant: "destructive",
+        title: "Failed to update issue",
+        description: err instanceof Error ? err.message : "Unknown error",
+      }),
+    });
   };
 
   // LLM-mode SAST rule_ids are `llm:CWE-XXX` placeholders — the CWE field
@@ -856,7 +863,13 @@ function ScaIssueRow({
   };
 
   const act = (status: "pending" | "confirmed" | "suppressed" | "false_positive" | "fixed" | "planned") => {
-    dismiss.mutate({ issueId: issue.id, status });
+    dismiss.mutate({ issueId: issue.id, status }, {
+      onError: (err) => toast({
+        variant: "destructive",
+        title: "Failed to update issue",
+        description: err instanceof Error ? err.message : "Unknown error",
+      }),
+    });
   };
 
   // The honest dev/runtime classifier is `latest_is_dev_only` (cdxgen 12.2+
@@ -2074,6 +2087,7 @@ function RecentScansSection({ scopeId }: { scopeId: string }) {
   const [open, setOpen] = useState(false);
   const { data: scans } = useScopeScans(scopeId, 10);
   const cancelScan = useCancelScan();
+  const { toast } = useToast();
 
   return (
     <div className="border rounded-lg">
@@ -2134,7 +2148,16 @@ function RecentScansSection({ scopeId }: { scopeId: string }) {
                         type="button"
                         className="text-xs text-destructive hover:underline disabled:opacity-50"
                         disabled={cancelScan.isPending}
-                        onClick={(e) => { e.stopPropagation(); cancelScan.mutate(s.id); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          cancelScan.mutate(s.id, {
+                            onError: (err) => toast({
+                              variant: "destructive",
+                              title: "Failed to cancel scan",
+                              description: err instanceof Error ? err.message : "Unknown error",
+                            }),
+                          });
+                        }}
                       >
                         Cancel
                       </button>
@@ -2193,6 +2216,11 @@ export default function ScopeDetailPage() {
   const { data: appSettings } = useSettings();
   const { data: scans } = useScopeScans(id, 1);
   const triggerScan = useTriggerScan();
+  const { toast } = useToast();
+  const scopeTitle = scope
+    ? `${scope.repo_name}${scope.path !== "/" ? ` · ${scope.path}` : ""} — SASTBot`
+    : "Scope — SASTBot";
+  useDocumentTitle(scopeTitle);
   const llmConfigured = !!(appSettings?.llm_base_url && appSettings?.llm_model && appSettings?.llm_credential_id);
   const activeScanStatus = scans?.[0]?.status;
   const isScanning = activeScanStatus === "pending" || activeScanStatus === "running" || triggerScan.isPending;
@@ -2206,7 +2234,13 @@ export default function ScopeDetailPage() {
   if (isError || !scope) return <p className="text-sm text-destructive">Scope not found.</p>;
 
   const handleTriggerScan = () => {
-    triggerScan.mutate(scope.repo_id);
+    triggerScan.mutate(scope.repo_id, {
+      onError: (err) => toast({
+        variant: "destructive",
+        title: "Failed to start scan",
+        description: err instanceof Error ? err.message : "Unknown error",
+      }),
+    });
   };
 
   // Navigate to a tab URL when the Radix Tabs value changes

@@ -2,12 +2,14 @@ import { GitBranch, ShieldCheck, Zap } from "lucide-react";
 
 import { useRepos } from "@/api/queries/repos";
 import { useScans } from "@/api/queries/scans";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export default function DashboardPage() {
+  useDocumentTitle("Dashboard — SASTBot");
   const repos = useRepos();
   const scans = useScans();
 
@@ -45,7 +47,7 @@ export default function DashboardPage() {
           icon={ShieldCheck}
           title="Open findings"
           value="—"
-          hint="Available in M3"
+          hint="See Scopes for issue counts"
         />
       </div>
     </div>

@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { CheckCircle2, Clock, Layers, Loader2 } from "lucide-react";
 
 import { useScopes } from "@/api/queries/scopes";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -41,6 +42,7 @@ function ActiveScanCell({ scan }: { scan: ActiveScan }) {
 }
 
 export default function ScopesPage() {
+  useDocumentTitle("Scopes — SASTBot");
   const { data: scopes, isLoading, isError } = useScopes();
   const navigate = useNavigate();
 

@@ -4,7 +4,7 @@
  * `navigator.clipboard.writeText` is only available in **secure contexts**
  * (HTTPS or `localhost`). When the app is served from a LAN IP over plain
  * HTTP — which is how the homelab is currently reached, e.g.
- * `http://10.0.0.0:5173/` — `navigator.clipboard` is `undefined` and a
+ * `http://<LAN-IP>:5173/` — `navigator.clipboard` is `undefined` and a
  * direct call throws a TypeError that the click handler silently swallows.
  *
  * The fallback creates an off-screen `<textarea>`, selects its contents, and
