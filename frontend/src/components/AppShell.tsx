@@ -29,8 +29,8 @@ interface NavItem {
 }
 
 const MAIN_NAV: NavItem[] = [
-  { to: "/scopes", label: "Scopes", icon: Layers },
   { to: "/dashboard", label: "Dashboard", icon: Home },
+  { to: "/scopes", label: "Scopes", icon: Layers },
   { to: "/scans", label: "Scans", icon: FileSearch },
 ];
 

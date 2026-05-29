@@ -2,6 +2,7 @@ import { GitBranch, ShieldCheck, Zap } from "lucide-react";
 
 import { useRepos } from "@/api/queries/repos";
 import { useScans } from "@/api/queries/scans";
+import { useScopes } from "@/api/queries/scopes";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +13,7 @@ export default function DashboardPage() {
   useDocumentTitle("Dashboard — SASTBot");
   const repos = useRepos();
   const scans = useScans();
+  const scopes = useScopes();
 
   const repoCount = repos.data?.total ?? 0;
 
@@ -19,6 +21,29 @@ export default function DashboardPage() {
     if (!scans.data) return null;
     const cutoff = Date.now() - ONE_WEEK_MS;
     return scans.data.items.filter((s) => new Date(s.created_at).getTime() >= cutoff).length;
+  })();
+
+  // Open findings across all scopes — summed from the scope list, which already
+  // carries per-scope active issue + severity counts (no extra request).
+  const findings = (() => {
+    if (!scopes.data) return null;
+    let open = 0;
+    let critical = 0;
+    let high = 0;
+    for (const s of scopes.data) {
+      open += s.active_sast_issue_count + s.active_sca_issue_count;
+      critical += s.critical_count;
+      high += s.high_count;
+    }
+    return { open, critical, high };
+  })();
+
+  const findingsHint = (() => {
+    if (scopes.isError) return "Unable to load";
+    if (!findings) return "Active issues across scopes";
+    if (findings.open === 0) return "No open findings";
+    if (findings.critical === 0 && findings.high === 0) return "Across all scopes";
+    return `${findings.critical} critical · ${findings.high} high`;
   })();
 
   return (
@@ -46,8 +71,8 @@ export default function DashboardPage() {
         <SummaryCard
           icon={ShieldCheck}
           title="Open findings"
-          value="—"
-          hint="See Scopes for issue counts"
+          value={scopes.isLoading || findings === null ? "—" : String(findings.open)}
+          hint={findingsHint}
         />
       </div>
     </div>
