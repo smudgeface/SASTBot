@@ -9,6 +9,7 @@
 #   docker build -f docker/backend.Dockerfile --target prod -t sastbot-backend:prod .
 
 # ---------- base ----------
+# TODO: pin to a specific digest or dated tag at release (e.g. node:20.19.0-bookworm-slim)
 FROM node:20-bookworm-slim AS base
 
 ENV NODE_ENV=development \
@@ -95,6 +96,7 @@ RUN pnpm prune --prod
 # ---------- prod ----------
 # Plain `node` runs the compiled JS. `prisma migrate deploy` is invoked by
 # the compose `command:` override (backend service) or inline entrypoint.
+# TODO: pin to a specific digest or dated tag at release (e.g. node:20.19.0-bookworm-slim)
 FROM node:20-bookworm-slim AS prod
 
 ENV NODE_ENV=production \
@@ -134,6 +136,10 @@ COPY docker/backend-entrypoint.sh /usr/local/bin/sastbot-entrypoint.sh
 RUN chmod +x /usr/local/bin/sastbot-entrypoint.sh
 
 EXPOSE 8000
+
+# curl is already present in this image (installed above via apt-get).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
+  CMD curl -sf http://localhost:8000/healthz || exit 1
 
 ENTRYPOINT ["/usr/local/bin/sastbot-entrypoint.sh"]
 CMD ["node", "dist/server.js"]

@@ -68,6 +68,12 @@ services:
       - sastbot_repo_cache:/app/clones
       - sastbot_artifacts:/var/lib/sastbot/artifacts
     working_dir: /app/backend
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,7 +115,7 @@ services:
       redis:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
     # BullMQ worker. Regenerate the Prisma client first so it can't drift
     # behind the backend container after a schema change (the worker doesn't
     # run migrate deploy — the backend service does that — but it shares the

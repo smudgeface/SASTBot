@@ -35,6 +35,7 @@
 # https://github.com/npm/cli/issues/4828). The glibc-x64 variant IS in the
 # lockfile and works. Image is ~100MB larger but only affects the build
 # stage — the prod stage is still nginx:alpine.
+# TODO: pin to a specific digest or dated tag at release (e.g. node:20.19.0-bookworm-slim)
 FROM node:20-bookworm-slim AS base
 WORKDIR /app
 ENV CI=1
@@ -74,6 +75,7 @@ RUN npm run build
 ############################
 # Prod (nginx serves /dist + reverse-proxies /api/* to backend)
 ############################
+# TODO: pin to a specific patch tag at release (e.g. nginx:1.27.4-alpine); verify tag exists first
 FROM nginx:1.27-alpine AS prod
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY docker/nginx.prod.conf /etc/nginx/conf.d/default.conf
