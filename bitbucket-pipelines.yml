@@ -6,9 +6,11 @@
 # Push auth is native: Bitbucket Pipelines injects $BITBUCKET_PACKAGES_USERNAME
 # and $BITBUCKET_PACKAGES_TOKEN into every step. No secrets are committed here.
 #
-# Trigger model (tags-only release builds):
-#   - push to main      -> test gate only (drift guard + typecheck + tests)
-#   - push tag vX.Y.Z   -> test gate, then build & push images
+# Trigger model (tags-only release builds; see CONTRIBUTING.md for the branch flow):
+#   - pull requests     -> test gate only (guards every feature branch pre-merge)
+#   - push to develop   -> test gate only (the primary integration branch)
+#   - push to main      -> test gate only (release candidate)
+#   - push tag vX.Y.Z   -> test gate, then build & push images (the deploy step)
 #   - custom (manual)   -> "build-and-push-images" from the UI: full gate + push
 #
 # Image tags per build: latest, X.Y.Z, X.Y.Z-<short-sha>.
@@ -115,7 +117,12 @@ definitions:
           - docker push -a "$REG/sastbot-frontend"
 
 pipelines:
+  pull-requests:
+    "**":                         # any source branch → test gate before merge
+      - step: *test
   branches:
+    develop:
+      - step: *test
     main:
       - step: *test
   tags:
