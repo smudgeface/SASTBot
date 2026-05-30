@@ -4,11 +4,23 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
-## 2026-05-29 — Stage 3: CI build + container registry via Bitbucket Pipelines (v0.16.1)
+## 2026-05-29 — Stage 3: CI build + container registry via Bitbucket Pipelines (v0.16.1) — ✅ COMPLETE
 
 Third session of the production push (Stage 3 of 4). Added `bitbucket-pipelines.yml`
 and a `.dockerignore`; no app code, no schema migration, no operator-visible
 runtime change → **no version bump** (CI/build infra only).
+
+**Status: DONE and validated end-to-end in the real environment.** Three commits
+on `main` (both remotes): `8109845` (pipeline + `.dockerignore`), `6b3e1b9`
+(Postgres + Redis test services), `e3adc33` (vitest `pool: forks`). Cloud test
+gate green (builds #3, #7); custom `build-and-push-images` run (#8) published both
+images to the registry: `crg.apkg.io/<workspace>/sastbot-backend` and
+`…/sastbot-frontend`, each tagged `latest` + `0.16.1` + `0.16.1-<sha>`. Required
+two operator UI steps that aren't in the repo: enabling Pipelines (done via the
+GUI skeleton) and **pre-creating the two container packages linked to the repo**
+(Bitbucket does not auto-create them on push — see below). Next: **Stage 4**
+(Proxmox compose that pulls these images + a read-only `read:packages` pull
+credential + IT handoff runbook) in a separate session.
 
 **What shipped.**
 
