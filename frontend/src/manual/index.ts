@@ -18,6 +18,7 @@ import componentsSbomBody from "./content/components-sbom.md?raw";
 import jiraBody from "./content/jira.md?raw";
 import credentialsBody from "./content/credentials.md?raw";
 import adminSettingsBody from "./content/admin-settings.md?raw";
+import adminConfigurationBody from "./content/admin-configuration.md?raw";
 import adminBackupRestoreBody from "./content/admin-backup-restore.md?raw";
 import adminVersioningBody from "./content/admin-versioning.md?raw";
 import adminDeploymentBody from "./content/admin-deployment.md?raw";
@@ -48,6 +49,7 @@ export const MANUAL_SECTIONS: ManualSection[] = [
   { slug: "jira", title: "Jira integration", kind: "markdown", group: "Day-to-day use", body: jiraBody },
   { slug: "credentials", title: "Credentials", kind: "markdown", group: "Administration", body: credentialsBody },
   { slug: "admin-settings", title: "Settings page", kind: "markdown", group: "Administration", body: adminSettingsBody },
+  { slug: "admin-configuration", title: "Configuration", kind: "markdown", group: "Administration", body: adminConfigurationBody },
   { slug: "admin-backup-restore", title: "Backup & restore", kind: "markdown", group: "Administration", body: adminBackupRestoreBody },
   { slug: "admin-versioning", title: "Versioning & upgrades", kind: "markdown", group: "Administration", body: adminVersioningBody },
   { slug: "admin-deployment", title: "Deployment", kind: "markdown", group: "Administration", body: adminDeploymentBody },

@@ -138,11 +138,12 @@ git push origin v0.17.0
 PATCH = bug fix · MINOR = backwards-compatible feature · MAJOR reserved for
 post-1.0 breaking changes. The full policy (and the schema-migration ordering) is
 in the **⚠️ Versioning policy** section of [`CLAUDE.md`](CLAUDE.md) and
-[`docs/user/versioning.md`](docs/user/versioning.md).
+[`docs/user-manual/admin-versioning.md`](docs/user-manual/admin-versioning.md).
 
 Operator-visible changes (new screen/flow/env var/endpoint) must also update the
-matching user-manual section under `frontend/src/manual/content/` and get a
-`docs/PROGRESS.md` entry.
+matching user-manual section under `docs/user-manual/` (the source of truth — the
+frontend build syncs it into the app; a new page also needs a manifest entry in
+`frontend/src/manual/index.ts`) and get a `docs/PROGRESS.md` entry.
 
 ## Continuous integration
 

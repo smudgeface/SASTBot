@@ -7,8 +7,9 @@
 .git
 .gitignore
 # NOTE: do NOT blanket-exclude *.md — backend/prompts/*.md are loaded at
-# runtime and frontend/src/manual/content/*.md are bundled by Vite (?raw)
-# at build time. Excluding them breaks the image builds.
+# runtime and docs/user-manual/*.md are synced into the frontend and bundled by
+# Vite (?raw) at build time (see frontend/scripts/sync-manual.mjs). Excluding
+# them breaks the image builds.
 
 # Local Claude Code session state + any local reference material
 .claude

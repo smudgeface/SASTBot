@@ -74,12 +74,15 @@ SASTBot/
 
 ## User documentation
 
-Operator-facing guides live in [`docs/user/`](docs/user/README.md):
+The complete operator manual lives at [`docs/user-manual/`](docs/user-manual/) —
+section-per-feature markdown (quick start, scanning, SCA/SAST triage, components
+& SBOM, Jira, and the admin sections: credentials, settings, **configuration**,
+backup & restore, versioning, deployment, troubleshooting).
 
-- [Configuration](docs/user/configuration.md) — all config keys, three-source precedence (env / YAML / CLI), worked examples
-- [Versioning](docs/user/versioning.md) — app version (SemVer), DB schema version, backup tarball format, cross-version restore behaviour
-
-More pages (installation, scanning, triage workflow, Jira, SARIF export) are in progress.
+The **same manual is browsable inside the running app** at `/manual` (no login
+required), where it also renders a live API reference from the backend's OpenAPI
+schema. The on-disk files under `docs/user-manual/` are the source of truth; the
+frontend build syncs them into the SPA at build time.
 
 ## Versioning — read before cutting a release
 
@@ -96,7 +99,7 @@ Contributors and AI agents: see the prominent **⚠️ Versioning policy** secti
 
 ## Configuration
 
-All configuration flows through environment variables, an optional YAML file, or CLI arguments (see [docs/user/configuration.md](docs/user/configuration.md) for the full reference and precedence rules). The admin UI persists runtime settings (Jira, LLM gateway, etc.) in the Postgres `app_settings` table; credentials are AES-256-GCM encrypted at rest using `MASTER_KEY`.
+All configuration flows through environment variables, an optional YAML file, or CLI arguments (see [docs/user-manual/admin-configuration.md](docs/user-manual/admin-configuration.md), also at `/manual/admin-configuration` in-app, for the full reference and precedence rules). The admin UI persists runtime settings (Jira, LLM gateway, etc.) in the Postgres `app_settings` table; credentials are AES-256-GCM encrypted at rest using `MASTER_KEY`.
 
 ## Development
 
