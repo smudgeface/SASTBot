@@ -48,6 +48,11 @@ COPY frontend/package.json frontend/package-lock.json* ./
 # package-lock.json may not exist yet on a fresh checkout.
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 COPY frontend/ .
+# Canonical user-manual content lives at <repo>/docs/user-manual. The `predev`
+# sync (scripts/sync-manual.mjs) resolves it at /docs/user-manual (= /app/../../docs/user-manual).
+# Compose also bind-mounts it here so live edits are picked up; this COPY makes
+# the image self-contained if run without the mount.
+COPY docs/user-manual /docs/user-manual
 EXPOSE 5173
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
 
@@ -70,6 +75,10 @@ FROM base AS build
 COPY frontend/package.json ./
 RUN npm install --no-audit --no-fund
 COPY frontend/ .
+# User-manual source-of-truth. `prebuild` (scripts/sync-manual.mjs) copies it
+# into src/manual/ before `vite build` so it's bundled into the SPA. Resolves at
+# /docs/user-manual (= /app/../../docs/user-manual). Build context is the repo root.
+COPY docs/user-manual /docs/user-manual
 RUN npm run build
 
 ############################

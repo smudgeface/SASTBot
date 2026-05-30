@@ -65,7 +65,7 @@ import { APP_VERSION, getExpectedSchemaVersion, SASTBOT_DUMP_FORMAT_VERSION } fr
  *              app_settings, encryption_canary) keep their current values.
  *              Requires dump.schema_version == running expected_schema_version.
  *
- * See backend/src/services/restoreService.ts and docs/user/backup-restore.md
+ * See backend/src/services/restoreService.ts and docs/user-manual/admin-backup-restore.md
  * for the details and the FK edge case.
  */
 const RestoreModeSchema = z.enum(["full", "runtime"]).default("full");

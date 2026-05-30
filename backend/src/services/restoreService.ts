@@ -8,7 +8,7 @@
  * backup) — surprising for an operator who just wants to undo bad scan data.
  *
  * mode=runtime preserves the "Auth + Admin config" bucket and rebuilds only
- * the scan-output bucket from the dump. See docs/user/backup-restore.md for
+ * the scan-output bucket from the dump. See docs/user-manual/admin-backup-restore.md for
  * the operator-facing description and CLAUDE.md / docs/M8_PROD_DB_OPS_PLAN.md
  * for the architecture.
  *

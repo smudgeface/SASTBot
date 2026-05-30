@@ -75,3 +75,9 @@ SASTBot Initial Prompt.txt
 # Sensitive reference material — real customer/firmware audit findings, NOT part of
 # this product's source. Contains plaintext credentials; must never enter the repo.
 docs/Claude CRA Analysis Reference/
+
+# Generated: user-manual content synced from docs/user-manual/ by
+# frontend/scripts/sync-manual.mjs (runs on predev/prebuild). Canonical source
+# of truth is docs/user-manual/. Do not edit or commit these copies.
+frontend/src/manual/content/
+frontend/src/manual/assets/*.png

@@ -135,6 +135,10 @@ services:
     volumes:
       - ../../frontend:/app
       - sastbot_frontend_node_modules:/app/node_modules
+      # Canonical user-manual content. The `predev` sync copies it into
+      # src/manual/ so Vite bundles it. After editing a page under
+      # docs/user-manual/, run `npm run sync-manual` (or restart) to pick it up.
+      - ../../docs/user-manual:/docs/user-manual:ro
     working_dir: /app
     depends_on:
       - backend
