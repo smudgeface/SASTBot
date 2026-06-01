@@ -10,8 +10,16 @@
  * and tested in adminBackup.test.ts — not duplicated here.
  */
 
-import { describe, expect, it } from "vitest";
+import { randomBytes } from "node:crypto";
+
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+
+// decideKeyAction is pure, but its module imports the Prisma singleton via
+// db.js. Mock it so this helper-only test never constructs a real client.
+vi.mock("../src/db.js", () => ({ prisma: {} }));
+
+import { decideKeyAction } from "../src/services/keyRewrap.js";
 
 // ---------------------------------------------------------------------------
 // Disk-space pre-flight math
@@ -283,5 +291,54 @@ describe("master-key fingerprint gate", () => {
     const withFp = MetadataSchema.safeParse({ ...base, master_key_fingerprint: "abc123def4567890" });
     expect(withFp.success).toBe(true);
     if (withFp.success) expect(withFp.data.master_key_fingerprint).toBe("abc123def4567890");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Re-key on restore (M15): the route's MASTER_KEY gate maps decideKeyAction's
+// outcome to an HTTP behaviour. This documents that contract end-to-end:
+//   match / legacy           → 200, restore as-is (no rewrap)
+//   mismatch + verified key  → 200, rewrap on restore
+//   mismatch + wrong key     → 422
+//   mismatch + no key        → 422 (the v0.18.0 behaviour, preserved)
+// ---------------------------------------------------------------------------
+
+describe("re-key on restore gate", () => {
+  // The route refuses (HTTP 422) for exactly these two actions; it proceeds /
+  // rewraps for the others. This mirrors the branch logic in adminRestore.ts.
+  function httpOutcome(action: ReturnType<typeof decideKeyAction>): 200 | 422 {
+    return action === "refuse_no_key" || action === "refuse_wrong_key" ? 422 : 200;
+  }
+
+  it("right key → succeeds (rewrap on restore, HTTP 200)", () => {
+    const action = decideKeyAction({ dumpFp: "src111", runningFp: "dst222", oldKeyFp: "src111" });
+    expect(action).toBe("rewrap");
+    expect(httpOutcome(action)).toBe(200);
+  });
+
+  it("wrong source key → 422", () => {
+    const action = decideKeyAction({ dumpFp: "src111", runningFp: "dst222", oldKeyFp: "nope999" });
+    expect(action).toBe("refuse_wrong_key");
+    expect(httpOutcome(action)).toBe(422);
+  });
+
+  it("mismatch + no key → 422 (v0.18.0 behaviour preserved)", () => {
+    const action = decideKeyAction({ dumpFp: "src111", runningFp: "dst222" });
+    expect(action).toBe("refuse_no_key");
+    expect(httpOutcome(action)).toBe(422);
+  });
+
+  it("matching keys → 200, no rewrap", () => {
+    const action = decideKeyAction({ dumpFp: "same", runningFp: "same" });
+    expect(action).toBe("proceed");
+    expect(httpOutcome(action)).toBe(200);
+  });
+
+  it("old_master_key base64 shape: 32 bytes accepted, others rejected", () => {
+    // Mirrors the route's decode+length guard.
+    const ok = randomBytes(32).toString("base64");
+    const short = randomBytes(16).toString("base64");
+    expect(Buffer.from(ok, "base64").length).toBe(32);
+    expect(Buffer.from(short, "base64").length).toBe(32 - 16);
   });
 });

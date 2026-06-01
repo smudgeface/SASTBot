@@ -50,8 +50,9 @@ import { z } from "zod";
 
 import { loadConfig } from "../config.js";
 import { ErrorSchema } from "../schemas.js";
-import { masterKeyFingerprint } from "../security/crypto.js";
+import { loadMasterKey, masterKeyFingerprint } from "../security/crypto.js";
 import { clearDirContents } from "../services/artifactStore.js";
+import { decideKeyAction, KeyRewrapError, rewrapAllSecrets } from "../services/keyRewrap.js";
 import { runRuntimeRestore } from "../services/restoreService.js";
 import { pgEnvFromUrl } from "./adminBackup.js";
 import { APP_VERSION, getExpectedSchemaVersion, SASTBOT_DUMP_FORMAT_VERSION } from "./version.js";
@@ -294,6 +295,9 @@ const RestoreResponseSchema = z.object({
   migrations_applied: z.array(z.string()).optional(),
   migration_warning: z.string().optional(),
   app_version_warning: z.string().optional(),
+  // Set when the restore re-keyed the dump (old_master_key supplied + verified):
+  // the number of credential rows re-encrypted to this instance's MASTER_KEY.
+  rewrapped_credentials: z.number().int().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -309,7 +313,10 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
     limits: {
       fileSize: config.dbRestoreMaxBytes,
       files: 1,       // one file per request
-      fields: 0,      // no extra form fields expected
+      // One optional non-file field: `old_master_key` (base64, for re-key on
+      // restore). It MUST arrive before the file part — busboy only exposes
+      // fields parsed ahead of the file on `data.fields`.
+      fields: 1,
     },
   });
 
@@ -414,6 +421,11 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
       if (format === "tarball") {
         const extractDir = path.join(TMP_DIR, `sastbot-restore-${uploadId}`, "extracted");
 
+        // When re-keying on restore, this holds the verified SOURCE key
+        // (KEY_OLD) for the post-restore rewrap pass. It is zeroed the moment
+        // it is no longer needed. Never logged.
+        let rewrapOldKey: Buffer | null = null;
+
         // Cleanup helper for the tarball path.
         const cleanupTarball = async (): Promise<void> => {
           await fsPromises.unlink(tmpPath).catch(() => undefined);
@@ -498,30 +510,86 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
         // canary and every credential ciphertext, all encrypted under the SOURCE
         // instance's MASTER_KEY. Restoring under a different key would fail the
         // canary on next boot (backend refuses to start) and leave every stored
-        // credential undecryptable. Catch it here, before applying, with an
-        // actionable message — rather than letting it surface as a silent,
-        // delayed boot brick. Legacy dumps with no fingerprint are skipped
-        // (we log a note); the canary still backstops a true mismatch at boot.
+        // credential undecryptable.
+        //
+        // Three outcomes (see decideKeyAction):
+        //   - keys match (or legacy dump, no fingerprint) → proceed as-is.
+        //   - keys differ + a verified `old_master_key` supplied → re-key the
+        //     restored canary + credentials KEY_OLD → this instance's key after
+        //     pg_restore (the rewrap pass below).
+        //   - keys differ + no/invalid source key → refuse (HTTP 422) before
+        //     touching anything.
         if (mode === "full" && metadata) {
-          if (metadata.master_key_fingerprint) {
-            const runningFingerprint = masterKeyFingerprint();
-            if (metadata.master_key_fingerprint !== runningFingerprint) {
+          // Read the optional source key from the multipart body. It must arrive
+          // BEFORE the file part (busboy only exposes pre-file fields here).
+          let suppliedOldKey: Buffer | null = null;
+          const oldKeyField = (data as unknown as {
+            fields?: Record<string, { value?: unknown } | undefined>;
+          }).fields?.["old_master_key"];
+          const rawOldKey =
+            oldKeyField && typeof oldKeyField.value === "string"
+              ? oldKeyField.value.trim()
+              : null;
+          if (rawOldKey) {
+            const decoded = Buffer.from(rawOldKey, "base64");
+            if (decoded.length !== 32) {
+              decoded.fill(0);
               await cleanupTarball();
-              return reply.code(422).send({
+              return reply.code(400).send({
                 detail:
-                  `Cannot restore: this backup's data is encrypted with a different ` +
-                  `MASTER_KEY than this instance (backup key fingerprint ` +
-                  `"${metadata.master_key_fingerprint}", this instance ` +
-                  `"${runningFingerprint}"). Restoring would fail the encryption canary ` +
-                  `on the next boot and leave every stored credential undecryptable. ` +
-                  `Set MASTER_KEY to the value used by the instance that produced this ` +
-                  `backup, restart the backend, then retry the restore.`,
+                  "old_master_key must be base64 that decodes to exactly 32 bytes " +
+                  "(the same shape as MASTER_KEY).",
               });
             }
-          } else {
-            app.log.warn(
-              "Restore: backup has no master_key_fingerprint (legacy dump) — cannot verify MASTER_KEY match before applying; relying on the boot-time canary check.",
+            suppliedOldKey = decoded;
+          }
+
+          const dumpFp = metadata.master_key_fingerprint;
+          const runningFp = masterKeyFingerprint();
+          const oldKeyFp = suppliedOldKey ? masterKeyFingerprint(suppliedOldKey) : undefined;
+          const action = decideKeyAction({ dumpFp, runningFp, oldKeyFp });
+
+          if (action === "refuse_no_key") {
+            if (suppliedOldKey) suppliedOldKey.fill(0);
+            await cleanupTarball();
+            return reply.code(422).send({
+              detail:
+                `Cannot restore: this backup's data is encrypted with a different ` +
+                `MASTER_KEY than this instance (backup key fingerprint ` +
+                `"${dumpFp}", this instance "${runningFp}"). ` +
+                `To migrate this backup, either (a) supply the source instance's key ` +
+                `as the "old_master_key" field — the restore will re-encrypt the canary ` +
+                `and every credential to this instance's MASTER_KEY — or (b) set ` +
+                `MASTER_KEY to the source value, restart the backend, then retry.`,
+            });
+          }
+          if (action === "refuse_wrong_key") {
+            if (suppliedOldKey) suppliedOldKey.fill(0);
+            await cleanupTarball();
+            return reply.code(422).send({
+              detail:
+                `Cannot restore: the supplied source key does not match this backup ` +
+                `(backup key fingerprint "${dumpFp}"). Provide the exact MASTER_KEY ` +
+                `the backup was taken under, then retry.`,
+            });
+          }
+          if (action === "rewrap") {
+            // Defer the actual rewrap until after pg_restore (+ migrate) so it
+            // operates on the restored, schema-current rows.
+            rewrapOldKey = suppliedOldKey;
+            app.log.info(
+              { dumpFp, runningFp },
+              "Restore: source/target MASTER_KEY differ; verified old_master_key supplied — will re-key on restore",
             );
+          } else {
+            // action === "proceed": keys match, or a legacy dump with no
+            // fingerprint. Any supplied key is unused — scrub it.
+            if (suppliedOldKey) suppliedOldKey.fill(0);
+            if (!dumpFp) {
+              app.log.warn(
+                "Restore: backup has no master_key_fingerprint (legacy dump) — cannot verify MASTER_KEY match before applying; relying on the boot-time canary check. (old_master_key, if supplied, is ignored for legacy dumps.)",
+              );
+            }
           }
         }
 
@@ -632,6 +700,7 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
         const restoreResult = await runPgRestore(dumpPath, pgEnv);
 
         if (restoreResult.exitCode !== 0) {
+          if (rewrapOldKey) rewrapOldKey.fill(0);
           app.log.error(
             { code: restoreResult.exitCode, stderr: restoreResult.stderr, dumpPath },
             "pg_restore failed — temp files retained for inspection",
@@ -665,6 +734,7 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
           }
           app.log.info({ artifactCount: metadata?.artifact_count ?? 0 }, "A6: artifact dir overlaid (mode=full)");
         } catch (err) {
+          if (rewrapOldKey) rewrapOldKey.fill(0);
           app.log.error({ err }, "A6: artifact overlay failed (mode=full) — DB is restored but artifact dir is empty");
           return reply.code(500).send({
             detail: `pg_restore succeeded but artifact overlay failed: ${err instanceof Error ? err.message : String(err)}. The database is restored from the backup; the artifact directory is empty. Re-run mode=full with the same tarball to retry the artifact overlay (idempotent).`,
@@ -681,6 +751,7 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
           const migrateResult = await runPrismaMigrateDeploy(config.databaseUrl);
 
           if (!migrateResult.ok) {
+            if (rewrapOldKey) rewrapOldKey.fill(0);
             // DB is in a partially-migrated state — return 500 with guidance.
             app.log.error(
               { stderr: migrateResult.stderr, extractDir },
@@ -699,6 +770,44 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
           app.log.info({ migrationsApplied }, "prisma migrate deploy completed");
         }
 
+        // Re-key on restore: the restored canary + credentials are KEY_OLD-
+        // encrypted; rewrap them to THIS instance's key so the backend can
+        // decrypt them on the next boot. Runs after migrate so the rows match
+        // the Prisma client's schema. Atomic ($transaction) — a failure rolls
+        // back, leaving the data intact (still KEY_OLD-encrypted) rather than
+        // a mixed-key half-migration. The rewrap target is the running key, so
+        // after success the canary validates on boot and auto-restart is safe.
+        let rewrappedCredentials: number | undefined;
+        if (rewrapOldKey) {
+          const newKey = loadMasterKey();
+          try {
+            const counts = await rewrapAllSecrets(rewrapOldKey, newKey);
+            rewrappedCredentials = counts.credentials;
+            app.log.info(
+              { credentials: counts.credentials },
+              "Restore: re-keyed canary + credentials to this instance's MASTER_KEY",
+            );
+          } catch (err) {
+            const isRewrapErr = err instanceof KeyRewrapError;
+            app.log.error(
+              { err: (err as Error).message },
+              "Restore: rewrap failed after pg_restore — data is intact but KEY_OLD-encrypted",
+            );
+            return reply.code(500).send({
+              detail:
+                `The database was restored, but re-keying it to this instance's MASTER_KEY ` +
+                `failed${isRewrapErr ? ` (${(err as Error).message})` : ""}. ` +
+                `The restored data is intact but is still encrypted with the source key. ` +
+                `Recover by retrying the restore with the correct old_master_key, or by ` +
+                `temporarily setting MASTER_KEY to the source value and restarting. ` +
+                `No mixed-key rows were committed.`,
+            });
+          } finally {
+            rewrapOldKey.fill(0);
+            rewrapOldKey = null;
+          }
+        }
+
         // Full success
         await cleanupTarball();
         app.log.info({ filename: uploadedFilename }, "Restore (tarball) completed successfully — backend will restart");
@@ -709,6 +818,7 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
           migrations_applied: migrationsApplied,
           ...(metadataWarning ? { migration_warning: metadataWarning } : {}),
           ...(appVersionWarning ? { app_version_warning: appVersionWarning } : {}),
+          ...(rewrappedCredentials !== undefined ? { rewrapped_credentials: rewrappedCredentials } : {}),
         };
 
         await reply.code(200).send(responseBody);

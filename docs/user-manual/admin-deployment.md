@@ -66,29 +66,30 @@ The backend's startup `ensureCanary()` decrypts a known ciphertext to
 verify the key works. If decryption fails, the backend aborts boot
 with a clear error.
 
-**Once you have credentials in the system, you cannot rotate
-MASTER_KEY without re-entering every credential.** The ciphertexts
-are not recoverable without the old key. Treat the key the same as
-you'd treat the root password to a credential vault: written down in
+The ciphertexts are not recoverable without the key. Treat it the same
+as you'd treat the root password to a credential vault: written down in
 exactly one place, never edited casually.
 
 ### MASTER_KEY rotation
 
-If you do need to rotate (compromised key, etc.):
+To rotate (compromised key, etc.), use the built-in flow rather than
+re-entering every credential by hand:
 
-1. Take a backup. Note: the canary won't decrypt against the new key,
-   so this backup is "rescue" only.
-2. Note every credential by name (the credentials page shows kinds
-   and names; values are not exportable).
-3. Stop the backend.
-4. Set the new `MASTER_KEY`.
-5. **Delete the canary row** from the DB (this lets the new key
-   re-bootstrap the canary).
-6. Start the backend.
-7. Recreate every credential via the admin UI.
+1. **Take a backup** (Admin → Settings → Backup & restore).
+2. **Admin → Settings → Rotate MASTER_KEY.** Generate or paste a new
+   32-byte base64 key, save it, and type `ROTATE` to confirm. The server
+   re-encrypts the canary and every credential to the new key, atomically.
+3. The backend does **not** auto-restart — it still holds the old key in
+   its environment. **Update `MASTER_KEY` in your `.env` (backend and
+   worker share it) to the new value and restart both services now.**
+   Until you do, the instance can't decrypt credentials, and a restart
+   under the old key would fail the canary.
 
-There's no automated rotation flow because in practice this is rare
-and the operator should be a real human re-keying the vault.
+See [Backup & restore → Rotating the MASTER_KEY](admin-backup-restore)
+for the full walkthrough. (If you ever need the old manual path — stop
+the backend, set the new key, delete the canary row, restart, recreate
+every credential — it still works, but the rotation flow makes it
+unnecessary.)
 
 ## Bringing the stack up — first time
 

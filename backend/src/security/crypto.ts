@@ -16,7 +16,15 @@ import { prisma } from "../db.js";
 const ALGO = "aes-256-gcm";
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
-const CANARY_PLAINTEXT = Buffer.from("sastbot-canary-v1");
+
+/**
+ * Fixed canary plaintext. NOT a secret — it's a known sentinel used only to
+ * prove a key can decrypt. Exported so the key-rewrap pass (services/keyRewrap.ts)
+ * can sanity-check a freshly-restored canary under the source key before
+ * re-encrypting any credentials. Changing this value would invalidate every
+ * existing canary row — don't.
+ */
+export const CANARY_PLAINTEXT = Buffer.from("sastbot-canary-v1");
 
 export class CryptoConfigError extends Error {
   constructor(message: string) {

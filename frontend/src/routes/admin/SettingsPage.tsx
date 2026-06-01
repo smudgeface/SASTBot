@@ -525,6 +525,21 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* MASTER_KEY rotation */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Rotate MASTER_KEY</CardTitle>
+          <CardDescription>
+            Re-encrypt the encryption canary and every stored credential to a new
+            <code className="font-mono text-xs"> MASTER_KEY</code>. Use this to retire a key you
+            believe is compromised, without re-entering every credential by hand.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <RotateMasterKeySection />
+        </CardContent>
+      </Card>
+
       {/* Version footer */}
       <div className="pt-2 pb-4">
         {versionInfo.data ? (
@@ -575,6 +590,12 @@ function RestoreSection() {
   const [migrationWarning, setMigrationWarning] = useState<string | null>(null);
   const [migrationsApplied, setMigrationsApplied] = useState<string[]>([]);
   const [appVersionWarning, setAppVersionWarning] = useState<string | null>(null);
+  const [rewrappedCredentials, setRewrappedCredentials] = useState<number | null>(null);
+  // Optional source MASTER_KEY for re-keying a backup taken under a different
+  // key (full mode only). `showOldKeyField` lets the operator opt in, and a 422
+  // key-mismatch auto-reveals it so they can retry without re-selecting the file.
+  const [oldMasterKey, setOldMasterKey] = useState("");
+  const [showOldKeyField, setShowOldKeyField] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -586,6 +607,9 @@ function RestoreSection() {
     setMigrationWarning(null);
     setMigrationsApplied([]);
     setAppVersionWarning(null);
+    setRewrappedCredentials(null);
+    setOldMasterKey("");
+    setShowOldKeyField(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
     // intentionally do NOT reset restoreMode — let the operator keep their selection
   }, []);
@@ -636,6 +660,11 @@ function RestoreSection() {
     setPhase("uploading");
 
     const formData = new FormData();
+    // old_master_key MUST be appended before the file — the backend reads
+    // multipart fields parsed ahead of the file part. Only meaningful in full mode.
+    if (restoreMode === "full" && oldMasterKey.trim()) {
+      formData.append("old_master_key", oldMasterKey.trim());
+    }
     formData.append("file", selectedFile, selectedFile.name);
 
     try {
@@ -652,15 +681,23 @@ function RestoreSection() {
           migrations_applied?: string[];
           migration_warning?: string;
           app_version_warning?: string;
+          rewrapped_credentials?: number;
         };
         if (body.migration_warning) setMigrationWarning(body.migration_warning);
         if (body.migrations_applied) setMigrationsApplied(body.migrations_applied);
         if (body.app_version_warning) setAppVersionWarning(body.app_version_warning);
+        if (typeof body.rewrapped_credentials === "number") setRewrappedCredentials(body.rewrapped_credentials);
         setPhase("restarting");
         startPolling();
       } else {
         const body = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` })) as { detail?: string };
-        setErrorDetail(body.detail ?? `HTTP ${resp.status}`);
+        const detail = body.detail ?? `HTTP ${resp.status}`;
+        setErrorDetail(detail);
+        // A 422 key-mismatch is recoverable: reveal the source-key field so the
+        // operator can supply it and retry without re-selecting the file.
+        if (resp.status === 422 && /MASTER_KEY|source key|fingerprint/i.test(detail)) {
+          setShowOldKeyField(true);
+        }
         setPhase("error");
       }
     } catch (err) {
@@ -680,6 +717,12 @@ function RestoreSection() {
           The restore completed successfully. The backend process is restarting to establish fresh database connections.
           This page will reload automatically once it is reachable again.
         </p>
+        {rewrappedCredentials !== null && (
+          <p className="text-xs text-amber-700 dark:text-amber-400 border-t border-amber-200 dark:border-amber-800 pt-2">
+            Re-keyed this backup to this instance's MASTER_KEY:{" "}
+            {rewrappedCredentials} credential{rewrappedCredentials === 1 ? "" : "s"} re-encrypted.
+          </p>
+        )}
         {appVersionWarning && (
           <p className="text-xs text-amber-700 dark:text-amber-400 border-t border-amber-200 dark:border-amber-800 pt-2">
             Note: {appVersionWarning}
@@ -763,6 +806,46 @@ function RestoreSection() {
         )}
       </div>
 
+      {/* Source MASTER_KEY — re-key on restore (full mode only). Advanced /
+          optional; auto-revealed on a 422 key-mismatch. */}
+      {restoreMode === "full" && (
+        <div className="space-y-1.5">
+          {!showOldKeyField ? (
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              onClick={() => setShowOldKeyField(true)}
+            >
+              Restoring a backup from a different installation?
+            </button>
+          ) : (
+            <>
+              <Label htmlFor="restore-old-key" className="text-xs font-medium">
+                Source MASTER_KEY{" "}
+                <span className="font-normal text-muted-foreground">
+                  (only when restoring a backup taken under a different key)
+                </span>
+              </Label>
+              <Input
+                id="restore-old-key"
+                type="password"
+                autoComplete="off"
+                value={oldMasterKey}
+                onChange={(e) => setOldMasterKey(e.target.value)}
+                placeholder="base64 of the source instance's 32-byte key"
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                The backup's canary and credentials will be re-encrypted to{" "}
+                <em>this</em> instance's MASTER_KEY during the restore. Leave blank if the backup
+                was taken under this instance's own key. The key is sent once over your
+                authenticated session and never stored.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center gap-3">
         <input
           ref={fileInputRef}
@@ -841,6 +924,200 @@ function RestoreSection() {
               disabled={!isConfirmed || phase === "uploading"}
             >
               {phase === "uploading" ? "Uploading…" : "Restore database"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// MASTER_KEY rotation subcomponent
+// --------------------------------------------------------------------------
+
+type RotatePhase = "idle" | "confirming" | "rotating" | "done" | "error";
+
+/** Generate a fresh base64-encoded 32-byte key in the browser. */
+function generateMasterKey(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+function RotateMasterKeySection() {
+  const { toast } = useToast();
+  const [phase, setPhase] = useState<RotatePhase>("idle");
+  const [newKey, setNewKey] = useState("");
+  const [confirmText, setConfirmText] = useState("");
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
+  const [result, setResult] = useState<{ fingerprint: string; rewrapped: number; nextSteps: string } | null>(null);
+
+  const reset = () => {
+    setPhase("idle");
+    setNewKey("");
+    setConfirmText("");
+    setErrorDetail(null);
+    setResult(null);
+  };
+
+  const onRotate = async () => {
+    if (confirmText !== "ROTATE" || !newKey.trim()) return;
+    setPhase("rotating");
+    setErrorDetail(null);
+    try {
+      const resp = await fetch("/api/admin/db/rotate-master-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ new_master_key: newKey.trim(), confirm: "ROTATE" }),
+      });
+      if (resp.ok) {
+        const body = (await resp.json()) as { rewrapped_credentials: number; new_key_fingerprint: string; next_steps: string };
+        setResult({ fingerprint: body.new_key_fingerprint, rewrapped: body.rewrapped_credentials, nextSteps: body.next_steps });
+        setPhase("done");
+      } else {
+        const body = (await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }))) as { detail?: string };
+        setErrorDetail(body.detail ?? `HTTP ${resp.status}`);
+        setPhase("error");
+      }
+    } catch (err) {
+      setErrorDetail(err instanceof Error ? err.message : "Network error");
+      setPhase("error");
+    }
+  };
+
+  // Success state: the backend did NOT restart. The operator must now update
+  // MASTER_KEY in the environment and restart, or the next boot will brick.
+  if (phase === "done" && result) {
+    return (
+      <div className="rounded-md border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950 px-4 py-3 space-y-3">
+        <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+          Key rotated — action required before the next restart
+        </p>
+        <p className="text-xs text-amber-800 dark:text-amber-300">
+          The database is now encrypted with the new key ({result.rewrapped} credential
+          {result.rewrapped === 1 ? "" : "s"} re-encrypted, fingerprint{" "}
+          <span className="font-mono">{result.fingerprint}</span>). {result.nextSteps}
+        </p>
+        <div className="space-y-1.5">
+          <Label className="text-xs font-medium text-amber-900 dark:text-amber-200">
+            New MASTER_KEY — set this in your environment now
+          </Label>
+          <div className="flex items-center gap-2">
+            <Input readOnly value={newKey} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void navigator.clipboard?.writeText(newKey);
+                toast({ title: "Copied", description: "New MASTER_KEY copied to clipboard." });
+              }}
+            >
+              Copy
+            </Button>
+          </div>
+          <p className="text-xs text-amber-800 dark:text-amber-300">
+            Update <code className="font-mono">MASTER_KEY</code> in your <code className="font-mono">.env</code>{" "}
+            (backend <em>and</em> worker share it), then restart both services. Until you do, this
+            instance cannot decrypt credentials and a restart under the old key will fail to boot.
+          </p>
+        </div>
+        <Button type="button" variant="ghost" size="sm" onClick={reset}>
+          I've saved the key
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        Rotation re-encrypts at-rest secrets in place. It does <strong>not</strong> restart the
+        backend — after it completes you must set the new <code className="font-mono">MASTER_KEY</code>{" "}
+        in the environment and restart. <strong>Take a backup first.</strong>
+      </p>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="rotate-new-key" className="text-xs font-medium">
+          New MASTER_KEY (base64, 32 bytes)
+        </Label>
+        <div className="flex items-center gap-2">
+          <Input
+            id="rotate-new-key"
+            type="text"
+            autoComplete="off"
+            value={newKey}
+            onChange={(e) => setNewKey(e.target.value)}
+            placeholder="paste a key or generate one"
+            className="font-mono text-xs"
+          />
+          <Button type="button" variant="outline" size="sm" onClick={() => setNewKey(generateMasterKey())}>
+            Generate
+          </Button>
+        </div>
+      </div>
+
+      <Button
+        type="button"
+        variant="destructive"
+        size="sm"
+        disabled={!newKey.trim()}
+        onClick={() => { setConfirmText(""); setErrorDetail(null); setPhase("confirming"); }}
+      >
+        Rotate MASTER_KEY…
+      </Button>
+
+      {phase === "error" && errorDetail && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          <p className="font-medium">Rotation failed</p>
+          <p className="mt-1 whitespace-pre-wrap break-all">{errorDetail}</p>
+          <p className="mt-1 text-muted-foreground">No data was changed — the instance is still running normally on the current key.</p>
+        </div>
+      )}
+
+      <Dialog open={phase === "confirming" || phase === "rotating"} onOpenChange={(open) => { if (!open && phase === "confirming") reset(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rotate MASTER_KEY?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-3 pt-1">
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive font-medium">
+                  This re-encrypts all stored secrets to the new key. Immediately afterward you
+                  MUST update <code className="font-mono">MASTER_KEY</code> in the environment and
+                  restart the backend and worker — otherwise the next restart will fail to boot.
+                  Save the new key somewhere safe first.
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="rotate-confirm">
+                    Type <span className="font-mono font-bold">ROTATE</span> to confirm
+                  </Label>
+                  <Input
+                    id="rotate-confirm"
+                    value={confirmText}
+                    onChange={(e) => setConfirmText(e.target.value)}
+                    placeholder="ROTATE"
+                    autoComplete="off"
+                    disabled={phase === "rotating"}
+                  />
+                </div>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={reset} disabled={phase === "rotating"}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void onRotate()}
+              disabled={confirmText !== "ROTATE" || phase === "rotating"}
+            >
+              {phase === "rotating" ? "Rotating…" : "Rotate key"}
             </Button>
           </DialogFooter>
         </DialogContent>

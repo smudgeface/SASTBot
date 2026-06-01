@@ -232,12 +232,23 @@ Restore a tarball through the admin UI (**Admin → Backup & restore**) or the
 `POST /api/admin/db/restore` endpoint. Restore compares schema versions and will
 refuse a dump that is newer than the running app (HTTP 422).
 
-> **Restoring onto a *different* instance? Match the `MASTER_KEY` first.** A full
-> backup carries the encryption canary + all credential ciphertexts encrypted
-> under the source instance's `MASTER_KEY`. Set this host's `MASTER_KEY` to the
-> source value **before** restoring — otherwise the restore is refused (HTTP 422,
-> key-fingerprint mismatch), and even if forced the backend would fail its canary
-> on next boot. Without the original key, the encrypted data is unrecoverable.
+> **Restoring onto a *different* instance? Two options.** A full backup carries
+> the encryption canary + all credential ciphertexts encrypted under the source
+> instance's `MASTER_KEY`. You can either:
+>
+> 1. **Match the key first** — set this host's `MASTER_KEY` to the source value
+>    **before** restoring (the host permanently adopts the source key); or
+> 2. **Re-key on restore** (v0.19.0+) — keep this host's own `MASTER_KEY` and, in
+>    the restore dialog, paste the *source* instance's key into the **Source
+>    MASTER_KEY** field. The restore re-encrypts the canary + credentials to this
+>    host's key, atomically. The source key is never written to disk or logs.
+>
+> Either way, without the original key the encrypted data is unrecoverable. A
+> mismatch with no source key is refused (HTTP 422, key-fingerprint mismatch).
+>
+> **Rotating a key you suspect is compromised?** Use **Admin → Settings → Rotate
+> MASTER_KEY**, then update `MASTER_KEY` in this host's `.env` (§5) and restart
+> the backend + worker. It re-encrypts all secrets in place — no re-entry needed.
 
 **B. Volume snapshots (recommended for true DR).** The DB backup tarball does
 **not** include the artifact files. Snapshot these volumes at the storage layer
