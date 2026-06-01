@@ -29,6 +29,7 @@ describe("buildBackupMetadata", () => {
         "artifact_count",
         "expected_schema_version",
         "exported_at",
+        "master_key_fingerprint",
         "sastbot_dump_format_version",
         "schema_version",
       ].sort(),
@@ -83,6 +84,18 @@ describe("buildBackupMetadata", () => {
     expect(out.artifact_bytes_total).toBe(0);
   });
 
+  it("master_key_fingerprint passes through when provided, defaults to empty string", () => {
+    const withFp = buildBackupMetadata({
+      schemaVersion: "x",
+      expectedSchemaVersion: "x",
+      masterKeyFingerprint: "abc123def4567890",
+    });
+    expect(withFp.master_key_fingerprint).toBe("abc123def4567890");
+
+    const without = buildBackupMetadata({ schemaVersion: "x", expectedSchemaVersion: "x" });
+    expect(without.master_key_fingerprint).toBe("");
+  });
+
   it("artifact_count and artifact_bytes_total are populated when provided", () => {
     const out = buildBackupMetadata({
       schemaVersion: "x",
@@ -111,6 +124,7 @@ describe("buildBackupMetadata", () => {
         "artifact_count",
         "expected_schema_version",
         "exported_at",
+        "master_key_fingerprint",
         "sastbot_dump_format_version",
         "schema_version",
       ].sort(),

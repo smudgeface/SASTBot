@@ -232,6 +232,13 @@ Restore a tarball through the admin UI (**Admin → Backup & restore**) or the
 `POST /api/admin/db/restore` endpoint. Restore compares schema versions and will
 refuse a dump that is newer than the running app (HTTP 422).
 
+> **Restoring onto a *different* instance? Match the `MASTER_KEY` first.** A full
+> backup carries the encryption canary + all credential ciphertexts encrypted
+> under the source instance's `MASTER_KEY`. Set this host's `MASTER_KEY` to the
+> source value **before** restoring — otherwise the restore is refused (HTTP 422,
+> key-fingerprint mismatch), and even if forced the backend would fail its canary
+> on next boot. Without the original key, the encrypted data is unrecoverable.
+
 **B. Volume snapshots (recommended for true DR).** The DB backup tarball does
 **not** include the artifact files. Snapshot these volumes at the storage layer
 (ZFS/LVM/Proxmox backup):
@@ -309,6 +316,7 @@ curl -s http://localhost:${SASTBOT_HTTP_PORT:-80}/version
 | Scans never start / fail immediately | LLM not configured | Set **Settings → LLM** (base URL, model, credential) |
 | SARIF/SBOM downloads 404 | backend/worker `ARTIFACT_DIR` or volume mismatch | Both must mount `sastbot_artifacts` at `/var/lib/sastbot/artifacts` (the compose does this — don't override) |
 | Worker can't decrypt credentials | Different `MASTER_KEY` on backend vs worker | They share one `.env`; ensure you didn't override it per-service |
+| Restore refused: `different MASTER_KEY than this instance` (422) | Restoring a backup taken under a different key | Set `MASTER_KEY` to the source instance's value, restart, then retry — see §9 |
 | Port 80 already in use | Another service owns it | Set `SASTBOT_HTTP_PORT` to a free port and update `APP_ORIGIN` |
 
 ---

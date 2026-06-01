@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { decrypt, encrypt } from "../src/security/crypto.js";
+import { decrypt, encrypt, masterKeyFingerprint } from "../src/security/crypto.js";
 
 function makeKey(): Buffer {
   return randomBytes(32);
@@ -52,5 +52,25 @@ describe("AES-256-GCM envelope", () => {
     const k2 = makeKey();
     const blob = encrypt(Buffer.from("key-mismatch"), k1);
     expect(() => decrypt(blob.ciphertext, blob.nonce, blob.tag, k2)).toThrow();
+  });
+});
+
+describe("masterKeyFingerprint", () => {
+  it("is deterministic for the same key", () => {
+    const key = makeKey();
+    expect(masterKeyFingerprint(key)).toBe(masterKeyFingerprint(key));
+  });
+
+  it("differs for different keys", () => {
+    expect(masterKeyFingerprint(makeKey())).not.toBe(masterKeyFingerprint(makeKey()));
+  });
+
+  it("is a 16-char lowercase hex string and not the raw key material", () => {
+    const key = makeKey();
+    const fp = masterKeyFingerprint(key);
+    expect(fp).toMatch(/^[0-9a-f]{16}$/);
+    // one-way: the fingerprint must not be a slice of the key's own encodings
+    expect(key.toString("hex")).not.toContain(fp);
+    expect(key.toString("base64")).not.toContain(fp);
   });
 });

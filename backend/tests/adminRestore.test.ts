@@ -145,6 +145,7 @@ const MetadataSchema = z.object({
   sastbot_dump_format_version: z.number().int(),
   artifact_count: z.number().int().optional(),
   artifact_bytes_total: z.number().int().optional(),
+  master_key_fingerprint: z.string().optional(),
 });
 
 describe("A6: MetadataSchema artifact fields", () => {
@@ -242,5 +243,45 @@ describe("dump format version gate", () => {
 
   it("accepts older dump format (backwards-compat)", () => {
     expect(shouldRefuseDumpFormat(1, 2)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MASTER_KEY fingerprint gate (mode=full): refuse a dump encrypted under a
+// different key. Mirrors the inline guard in adminRestore.ts — a present,
+// non-empty fingerprint that differs from the running instance's is refused;
+// absent/empty (legacy) is skipped (relies on the boot-time canary).
+// ---------------------------------------------------------------------------
+
+function shouldRefuseKeyMismatch(dumpFp: string | undefined, runningFp: string): boolean {
+  return !!dumpFp && dumpFp !== runningFp;
+}
+
+describe("master-key fingerprint gate", () => {
+  it("refuses when the dump fingerprint differs from the running instance", () => {
+    expect(shouldRefuseKeyMismatch("aaaa1111bbbb2222", "cccc3333dddd4444")).toBe(true);
+  });
+
+  it("accepts when the fingerprints match", () => {
+    expect(shouldRefuseKeyMismatch("aaaa1111bbbb2222", "aaaa1111bbbb2222")).toBe(false);
+  });
+
+  it("skips the check for legacy dumps with no fingerprint", () => {
+    expect(shouldRefuseKeyMismatch(undefined, "cccc3333dddd4444")).toBe(false);
+    expect(shouldRefuseKeyMismatch("", "cccc3333dddd4444")).toBe(false);
+  });
+
+  it("parses metadata with and without master_key_fingerprint (backwards-compat)", () => {
+    const base = {
+      app_version: "0.18.0",
+      schema_version: "20260528173420_rename_include_dev_deps",
+      expected_schema_version: "20260528173420_rename_include_dev_deps",
+      exported_at: "2026-06-01T20:00:00.000Z",
+      sastbot_dump_format_version: 2,
+    };
+    expect(MetadataSchema.safeParse(base).success).toBe(true);
+    const withFp = MetadataSchema.safeParse({ ...base, master_key_fingerprint: "abc123def4567890" });
+    expect(withFp.success).toBe(true);
+    if (withFp.success) expect(withFp.data.master_key_fingerprint).toBe("abc123def4567890");
   });
 });

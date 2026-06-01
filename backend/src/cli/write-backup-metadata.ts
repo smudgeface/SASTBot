@@ -14,6 +14,7 @@ import * as path from "node:path";
 
 import { buildBackupMetadata } from "../services/backupMetadata.js";
 import { getAppliedSchemaVersion, getExpectedSchemaVersion } from "../routes/version.js";
+import { masterKeyFingerprint } from "../security/crypto.js";
 import { prisma } from "../db.js";
 
 async function main(): Promise<void> {
@@ -29,7 +30,11 @@ async function main(): Promise<void> {
     getExpectedSchemaVersion(),
   ]);
 
-  const metadata = buildBackupMetadata({ schemaVersion, expectedSchemaVersion });
+  const metadata = buildBackupMetadata({
+    schemaVersion,
+    expectedSchemaVersion,
+    masterKeyFingerprint: masterKeyFingerprint(),
+  });
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.writeFile(outputPath, JSON.stringify(metadata, null, 2), "utf8");

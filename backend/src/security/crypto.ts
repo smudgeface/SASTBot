@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 
 import { loadConfig } from "../config.js";
 import { prisma } from "../db.js";
@@ -40,6 +40,26 @@ export function loadMasterKey(): Buffer {
     );
   }
   return key;
+}
+
+// Fixed domain-separation label for the master-key fingerprint. Bumping the
+// suffix would change every fingerprint — don't, or old backups stop matching.
+const KEY_FINGERPRINT_LABEL = "sastbot-master-key-fingerprint-v1";
+
+/**
+ * Deterministic, non-reversible fingerprint of the master key.
+ *
+ * Embedded in backup metadata so a restore can detect a MASTER_KEY mismatch
+ * BEFORE applying the dump — a full dump carries the encryption canary + all
+ * credential ciphertexts encrypted under the source key, so restoring under a
+ * different key bricks the canary on next boot and orphans every credential.
+ *
+ * HMAC(key, label) is one-way: the fingerprint reveals nothing about the key,
+ * so it is safe to store in plaintext metadata. 16 hex chars (64 bits) is ample
+ * to answer "same key or not?" — this is an equality check, not a secret.
+ */
+export function masterKeyFingerprint(key: Buffer = loadMasterKey()): string {
+  return createHmac("sha256", key).update(KEY_FINGERPRINT_LABEL).digest("hex").slice(0, 16);
 }
 
 export interface EncryptedBlob {

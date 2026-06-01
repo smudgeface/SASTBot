@@ -26,11 +26,15 @@ The tarball contains exactly two files:
   "schema_version": "20260522110000_drop_scan_run_sbom_sast_jsonb",
   "expected_schema_version": "20260522110000_drop_scan_run_sbom_sast_jsonb",
   "taken_at": "2026-05-24T10:42:00Z",
-  "kind": "manual"
+  "kind": "manual",
+  "master_key_fingerprint": "a1b2c3d4e5f60718"
 }
 ```
 
-The two version fields matter for the restore guard (next section).
+The two version fields matter for the restore guard (next section). The
+`master_key_fingerprint` is a non-reversible HMAC of the `MASTER_KEY` the
+dump's data was encrypted under — it reveals nothing about the key, and the
+restore guard uses it to catch a key mismatch *before* applying the dump.
 
 > Backups capture the database only. On-disk artifacts
 > (`/var/lib/sastbot/artifacts/sbom/`, `/sarif/`) and the retained
@@ -91,6 +95,29 @@ tarball uses an older format than the backend supports, restore
 refuses with a clear "this backup was taken by an unsupported older
 version" message.
 
+## The MASTER_KEY guard (cross-key migrations)
+
+A **full** restore replaces the encryption canary and every credential
+ciphertext — all of which were encrypted under the **source instance's
+`MASTER_KEY`**. If you restore that dump onto an instance running a
+*different* key, the canary fails to decrypt on the next boot and the backend
+**refuses to start**, and every stored credential is undecryptable.
+
+To catch this before any damage, a full restore compares the dump's
+`master_key_fingerprint` to the running instance's:
+
+| Comparison | Outcome |
+|---|---|
+| Match | Restore proceeds. |
+| **Differ** | **Refuse with HTTP 422**, naming both fingerprints and telling you to set `MASTER_KEY` to the source instance's value first. |
+| Dump has no fingerprint (legacy backup) | Skipped — can't verify; the boot-time canary still backstops a true mismatch. |
+
+**So to migrate to a new installation: set `MASTER_KEY` on the target to the
+value the backup was taken with *before* restoring.** This is a key-management
+fact, not a limitation we can engineer away — without the original key the
+encrypted data is unrecoverable by design. (Runtime-only restores don't touch
+the canary or credentials, so this guard doesn't apply to them.)
+
 ## Restart after restore
 
 A successful restore triggers a `process.exit(0)` on the backend so
@@ -115,7 +142,7 @@ auto-reloads when `/healthz` returns 200 with the new schema.
 | Bad scan run produced garbage | Delete the scan from the audit page; or runtime-only restore from yesterday's backup |
 | DB corruption / lost volume | Full restore from the most recent good backup |
 | Upgraded to a broken release | Downgrade the image first, then full restore |
-| Migrating to a new host | Full restore against the empty target DB |
+| Migrating to a new host | Set `MASTER_KEY` on the target to the source instance's value **first**, then full restore against the empty target DB. A mismatched key is refused at restore (see the MASTER_KEY guard). |
 | Lost `MASTER_KEY` | Backup-and-restore won't save you. Without the key the credential ciphertexts are unrecoverable. See [Deployment](admin-deployment) for `MASTER_KEY` provisioning. |
 
 ## What restore does NOT touch

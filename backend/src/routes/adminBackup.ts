@@ -60,6 +60,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
 import { loadConfig } from "../config.js";
 import { ErrorSchema } from "../schemas.js";
+import { masterKeyFingerprint } from "../security/crypto.js";
 import { buildBackupMetadata } from "../services/backupMetadata.js";
 import { getAppliedSchemaVersion, getExpectedSchemaVersion } from "./version.js";
 
@@ -216,6 +217,7 @@ const adminBackupRoutes: FastifyPluginAsync = async (app) => {
         expectedSchemaVersion,
         artifactCount,
         artifactBytesTotal,
+        masterKeyFingerprint: masterKeyFingerprint(),
       });
       try {
         await fsPromises.writeFile(metaPath, JSON.stringify(metadata, null, 2), "utf8");

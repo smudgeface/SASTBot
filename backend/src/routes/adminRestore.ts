@@ -50,6 +50,7 @@ import { z } from "zod";
 
 import { loadConfig } from "../config.js";
 import { ErrorSchema } from "../schemas.js";
+import { masterKeyFingerprint } from "../security/crypto.js";
 import { clearDirContents } from "../services/artifactStore.js";
 import { runRuntimeRestore } from "../services/restoreService.js";
 import { pgEnvFromUrl } from "./adminBackup.js";
@@ -84,6 +85,9 @@ const MetadataSchema = z.object({
   sastbot_dump_format_version: z.number().int(),
   artifact_count: z.number().int().optional(),
   artifact_bytes_total: z.number().int().optional(),
+  // Optional so legacy dumps (pre-fingerprint) still validate. Empty/absent =
+  // unknown → restore skips the MASTER_KEY match check.
+  master_key_fingerprint: z.string().optional(),
 });
 
 type BackupMetadata = z.infer<typeof MetadataSchema>;
@@ -488,6 +492,37 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
               `Upgrade the backend to at least the version that produced this backup, ` +
               `then retry the restore.`,
           });
+        }
+
+        // MASTER_KEY check (mode=full only). A full dump replaces the encryption
+        // canary and every credential ciphertext, all encrypted under the SOURCE
+        // instance's MASTER_KEY. Restoring under a different key would fail the
+        // canary on next boot (backend refuses to start) and leave every stored
+        // credential undecryptable. Catch it here, before applying, with an
+        // actionable message — rather than letting it surface as a silent,
+        // delayed boot brick. Legacy dumps with no fingerprint are skipped
+        // (we log a note); the canary still backstops a true mismatch at boot.
+        if (mode === "full" && metadata) {
+          if (metadata.master_key_fingerprint) {
+            const runningFingerprint = masterKeyFingerprint();
+            if (metadata.master_key_fingerprint !== runningFingerprint) {
+              await cleanupTarball();
+              return reply.code(422).send({
+                detail:
+                  `Cannot restore: this backup's data is encrypted with a different ` +
+                  `MASTER_KEY than this instance (backup key fingerprint ` +
+                  `"${metadata.master_key_fingerprint}", this instance ` +
+                  `"${runningFingerprint}"). Restoring would fail the encryption canary ` +
+                  `on the next boot and leave every stored credential undecryptable. ` +
+                  `Set MASTER_KEY to the value used by the instance that produced this ` +
+                  `backup, restart the backend, then retry the restore.`,
+              });
+            }
+          } else {
+            app.log.warn(
+              "Restore: backup has no master_key_fingerprint (legacy dump) — cannot verify MASTER_KEY match before applying; relying on the boot-time canary check.",
+            );
+          }
         }
 
         // Version check: compare dump's schema_version to running expected_schema_version.
