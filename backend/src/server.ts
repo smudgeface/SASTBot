@@ -17,6 +17,7 @@ import authPlugin from "./plugins/auth.js";
 import { closeRedis, getRedis } from "./queue/connection.js";
 import { closeScanQueue } from "./queue/scanQueue.js";
 import adminBackupRoutes from "./routes/adminBackup.js";
+import adminKeyRotationRoutes from "./routes/adminKeyRotation.js";
 import adminRestoreRoutes from "./routes/adminRestore.js";
 import adminCredentialsRoutes from "./routes/adminCredentials.js";
 import adminReposRoutes from "./routes/adminRepos.js";
@@ -123,6 +124,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       await api.register(adminCredentialsRoutes);
       await api.register(adminBackupRoutes);
       await api.register(adminRestoreRoutes);
+      await api.register(adminKeyRotationRoutes);
       await api.register(scansRoutes);
       await api.register(scopesRoutes);
     },

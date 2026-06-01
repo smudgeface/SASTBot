@@ -77,6 +77,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/readyz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Readiness probe (verifies Postgres + Redis connectivity) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "ready" | "degraded";
+                            version: string;
+                            checks: {
+                                database: boolean;
+                                redis: boolean;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "ready" | "degraded";
+                            version: string;
+                            checks: {
+                                database: boolean;
+                                redis: boolean;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/version": {
         parameters: {
             query?: never;
@@ -2415,6 +2476,7 @@ export interface paths {
                             migrations_applied?: string[];
                             migration_warning?: string;
                             app_version_warning?: string;
+                            rewrapped_credentials?: number;
                         };
                     };
                 };
@@ -2464,6 +2526,102 @@ export interface paths {
                 };
                 /** @description Default Response */
                 507: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/db/rotate-master-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate the MASTER_KEY: re-encrypt the canary and all credentials to a new key
+         * @description Re-encrypts the encryption canary and every stored credential from this instance's current MASTER_KEY to a new operator-supplied key, atomically. Does NOT restart the backend — after a successful rotation you MUST set the MASTER_KEY environment variable to the new value and restart, or the next boot will fail the encryption canary. Take a backup first.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        new_master_key: string;
+                        /** @enum {string} */
+                        confirm: "ROTATE";
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            rewrapped_credentials: number;
+                            new_key_fingerprint: string;
+                            next_steps: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                500: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -3009,6 +3167,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * Download the curated CycloneDX 1.7 SBOM for a scan run
+         * @description Returns the post-augmentation curated CycloneDX 1.7 JSON for this specific scan run as a file download (ETag-cached). 404 if the scan has no artifact file (still running, legacy pre-M9 scan, or an sbom_emit failure). For the operator-edited scope-level SBOM, use GET /api/scopes/:id/sbom-json.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -3021,11 +3183,26 @@ export interface paths {
             requestBody?: never;
             responses: {
                 /** @description Default Response */
-                200: {
+                401: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
                 };
             };
         };
@@ -3044,6 +3221,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * Download the SARIF v2.1.0 SAST report for a scan run
+         * @description Returns the SARIF v2.1.0 document of the LLM SAST findings for this scan run as a file download (ETag-cached). 404 if the scan has no artifact file (still running, legacy pre-M9 scan, or a sarif_emit failure) — re-trigger the scan to produce one.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -3056,11 +3237,26 @@ export interface paths {
             requestBody?: never;
             responses: {
                 /** @description Default Response */
-                200: {
+                401: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                        };
+                    };
                 };
             };
         };

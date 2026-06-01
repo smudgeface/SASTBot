@@ -4,6 +4,73 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-06-01 — M15: re-key on restore + in-place MASTER_KEY rotation (v0.19.0)
+
+Part B of the backup-key-safety work (Part A shipped in v0.18.0). Lets an
+operator migrate a full backup across installations with **different**
+`MASTER_KEY`s, and rotate a key in place — both without LMI IT key-wrangling and
+without re-entering credentials. Plan: `docs/M15_BACKUP_REKEY_PLAN.md`.
+
+**What shipped.**
+
+- **Encrypted-column audit (the mandated first step).** Confirmed the complete
+  set of AES-GCM blobs is exactly two tables — `encryption_canary` and
+  `credentials`, both `(ciphertext, nonce, tag)`. `app_settings` references
+  credentials by ID only; the only `decrypt()` callers outside `crypto.ts` are
+  both in `credentialService.ts`. `services/keyRewrap.ts` is now the single
+  source of truth for "what holds key-bound ciphertext" — a comment there warns
+  any future encrypted column must be added to the rewrap or a cross-key
+  migration silently half-migrates.
+- **`rewrapAllSecrets(oldKey, newKey)`** (`services/keyRewrap.ts`) — re-encrypts
+  the canary + every credential OLD→NEW in one `prisma.$transaction`. Sanity-
+  decrypts the canary under OLD and aborts before any write if it doesn't yield
+  the sentinel. Pure `rewrapBlob` + a `decideKeyAction` gate helper are split out
+  for exhaustive unit testing.
+- **Re-key on restore** — optional `old_master_key` multipart field on
+  `POST /api/admin/db/restore` (base64→32 bytes; never logged; zeroed after use).
+  Extends the v0.18.0 fingerprint guard: keys match → restore as-is; differ +
+  verified source key → rewrap after `pg_restore`; differ + wrong/absent key →
+  422. The rewrap targets the *running* key, so auto-restart stays safe (canary
+  validates on boot). Failure rolls back (data intact, source-key encrypted; no
+  mixed-key rows) and returns 500 with recovery steps.
+- **In-place rotation** — new `POST /api/admin/db/rotate-master-key`. Re-keys
+  CURRENT→NEW (operator supplies only the target; current key comes from the
+  instance's own env). **Does NOT auto-restart** — the running process still
+  holds the old env key, so it returns next-steps ("set MASTER_KEY + restart")
+  instead. Replaces the manual canary-delete dance.
+- **Frontend** — restore dialog gains an advanced "Source MASTER_KEY" field
+  (full mode; auto-revealed on a 422 key-mismatch so the operator can retry
+  without re-selecting the file) and reports credentials re-keyed on success. New
+  "Rotate MASTER_KEY" card with client-side key generation, type-to-confirm, and
+  a prominent post-rotation "update env + restart now" banner with copy-to-
+  clipboard for the new key.
+- **Tests** — `keyRewrap.test.ts` (rewrapBlob round-trip, decideKeyAction table,
+  transactional re-key with a Prisma mock, abort-before-write on wrong key,
+  reject identical/short keys); restore-gate cases added to `adminRestore.test.ts`
+  (right key → 200/rewrap; wrong key → 422; mismatch+no key → 422 = the A
+  behaviour). Full suite: 547 backend + 6 frontend green; `npm ci --dry-run`
+  clean; types regenerated.
+- **Version** 0.18.0 → 0.19.0 (MINOR — new capability). Three surfaces + lockfile
+  (two app-version lines only).
+- **Docs** — `admin-backup-restore.md` (re-key-on-restore + a Rotating-the-key
+  section), `admin-deployment.md` (rotation now points at the button),
+  `DEPLOY_PROXMOX.md` §9. Manual sections touched, per the docs-as-code rule.
+
+**What we learned.**
+
+- **The restore vs rotation auto-restart asymmetry is the crux.** Both call the
+  same rewrap helper, but restore re-keys *to the running key* (boot canary will
+  pass → exit(0) is safe) while rotation re-keys *to a key not yet in env* (a
+  restart would brick boot → must NOT exit; hand the operator the next steps).
+  Getting this backwards would turn rotation into a self-inflicted outage.
+- **Multipart field ordering is load-bearing.** `@fastify/multipart`'s `req.file()`
+  only exposes fields parsed *before* the file part, so the frontend appends
+  `old_master_key` first and the `fields` limit moved 0→1. Documented at both
+  ends.
+- **Defence in depth on the source key.** The fingerprint match gates *before*
+  `pg_restore` (avoids a doomed restore); the canary sanity-decrypt gates *before*
+  any credential write (avoids a half-rewrap). Belt and suspenders, cheap.
+
 ## 2026-06-01 — Backup MASTER_KEY safety: fingerprint + restore guard (v0.18.0)
 
 Fell out of the Stage 4 Dokploy test: restoring a laptop-dev backup onto the
