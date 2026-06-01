@@ -43,6 +43,14 @@ hotfix/y ───────────────────┘ (off main;
    ```
 4. Open a **pull request into `develop`**. CI runs the test gate on the PR; it must
    be green. Get a review, then merge.
+5. **Delete the feature branch once it's merged.** Keep the branch list to the
+   long-lived branches (`develop`, `main`) plus only genuinely in-flight work —
+   stale merged branches accumulate and obscure what's actually active.
+   ```bash
+   git branch -d feature/short-name          # -d refuses unless fully merged —
+                                             # doubles as a check the work landed
+   git push origin --delete feature/short-name   # only if you pushed the branch
+   ```
 
 ### Promoting to test / release
 - **Ready to test:** merge `develop` → `main`. The push to `main` runs the test
