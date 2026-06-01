@@ -168,6 +168,14 @@ const EnvSchema = z.object({
   REDIS_URL: z.string().default("redis://redis:6379/0"),
   APP_ORIGIN: z.string().default("http://localhost:5173"),
   SESSION_COOKIE_SECURE: boolString.default(false),
+  // Escape hatch for a deliberately trusted internal HTTP-only deployment (e.g. a
+  // LAN-only host with no TLS in front): allow SESSION_COOKIE_SECURE=false even when
+  // NODE_ENV=production. Default false — the production guard below stands unless
+  // this is explicitly set. Keeps NODE_ENV=production semantics (JSON logs, the
+  // bootstrap-password guard) instead of forcing operators to fake a non-production
+  // environment. Cookies travel in clear text when this is on — only safe on a
+  // trusted network. See docs/DEPLOY_PROXMOX.md.
+  ALLOW_INSECURE_COOKIES: boolString.default(false),
   BOOTSTRAP_ADMIN_EMAIL: z.string().default("admin@sastbot.local"),
   // DEV-ONLY convenience: when set, bootstrapIfEmpty uses this exact value
   // for the bootstrap admin password instead of a random base64url string.
@@ -221,6 +229,7 @@ export type AppConfig = {
   redisUrl: string;
   appOrigin: string;
   sessionCookieSecure: boolean;
+  allowInsecureCookies: boolean;
   bootstrapAdminEmail: string;
   bootstrapAdminPassword: string | undefined;
   logLevel: string;
@@ -319,11 +328,25 @@ export function loadConfig(): AppConfig {
   // deployment would send the session cookie over plaintext HTTP, exposing it to
   // interception. Fail fast rather than silently accept an insecure cookie.
   if (parsed.data.SESSION_COOKIE_SECURE === false && process.env["NODE_ENV"] === "production") {
-    throw new ConfigError(
-      "SESSION_COOKIE_SECURE must be true in production (NODE_ENV=production). " +
-      "Set SESSION_COOKIE_SECURE=true so session cookies are only sent over HTTPS. " +
-      "Only leave it false for local HTTP development.",
-    );
+    if (parsed.data.ALLOW_INSECURE_COOKIES) {
+      // Operator has explicitly opted into plaintext-HTTP session cookies for a
+      // trusted internal deployment. Allowed, but warn loudly on every boot so it
+      // can't slip into an internet-facing deploy unnoticed.
+      console.warn(
+        "[config] WARNING: running in production with SESSION_COOKIE_SECURE=false " +
+        "because ALLOW_INSECURE_COOKIES=true. Session cookies are sent over plaintext " +
+        "HTTP and can be intercepted — only safe on a trusted internal network. Put TLS " +
+        "in front and set SESSION_COOKIE_SECURE=true (and drop this override) as soon as possible.",
+      );
+    } else {
+      throw new ConfigError(
+        "SESSION_COOKIE_SECURE must be true in production (NODE_ENV=production). " +
+        "Set SESSION_COOKIE_SECURE=true so session cookies are only sent over HTTPS. " +
+        "For a deliberately trusted internal HTTP-only deployment you can set " +
+        "ALLOW_INSECURE_COOKIES=true to override (cookies then travel in clear text). " +
+        "Only leave SESSION_COOKIE_SECURE false for local HTTP development.",
+      );
+    }
   }
 
   cached = {
@@ -332,6 +355,7 @@ export function loadConfig(): AppConfig {
     redisUrl: parsed.data.REDIS_URL,
     appOrigin: parsed.data.APP_ORIGIN,
     sessionCookieSecure: parsed.data.SESSION_COOKIE_SECURE,
+    allowInsecureCookies: parsed.data.ALLOW_INSECURE_COOKIES,
     bootstrapAdminEmail: parsed.data.BOOTSTRAP_ADMIN_EMAIL,
     bootstrapAdminPassword: parsed.data.BOOTSTRAP_ADMIN_PASSWORD,
     logLevel: parsed.data.LOG_LEVEL,
