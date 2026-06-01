@@ -198,6 +198,44 @@ describe("loadConfig", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // SESSION_COOKIE_SECURE production gate + ALLOW_INSECURE_COOKIES override
+  // ---------------------------------------------------------------------------
+
+  it("rejects SESSION_COOKIE_SECURE=false when NODE_ENV=production", () => {
+    process.env.MASTER_KEY = validKey;
+    process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/db";
+    process.env.SESSION_COOKIE_SECURE = "false";
+    process.env.NODE_ENV = "production";
+    delete process.env.ALLOW_INSECURE_COOKIES;
+
+    expect(() => loadConfig()).toThrow(ConfigError);
+    expect(() => loadConfig()).toThrow(/SESSION_COOKIE_SECURE must be true/);
+  });
+
+  it("allows SESSION_COOKIE_SECURE=false in production when ALLOW_INSECURE_COOKIES=true", () => {
+    process.env.MASTER_KEY = validKey;
+    process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/db";
+    process.env.SESSION_COOKIE_SECURE = "false";
+    process.env.ALLOW_INSECURE_COOKIES = "true";
+    process.env.NODE_ENV = "production";
+
+    const cfg = loadConfig();
+    expect(cfg.sessionCookieSecure).toBe(false);
+    expect(cfg.allowInsecureCookies).toBe(true);
+  });
+
+  it("ALLOW_INSECURE_COOKIES defaults to false", () => {
+    process.env.MASTER_KEY = validKey;
+    process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/db";
+    process.env.SESSION_COOKIE_SECURE = "true";
+    delete process.env.ALLOW_INSECURE_COOKIES;
+    delete process.env.NODE_ENV;
+
+    const cfg = loadConfig();
+    expect(cfg.allowInsecureCookies).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
   // Rate-limit config defaults (Stream A)
   // ---------------------------------------------------------------------------
 
