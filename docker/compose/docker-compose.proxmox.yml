@@ -1,0 +1,190 @@
+# SASTBot production Compose stack — PULL-based (pre-built images).
+#
+# Target: a manually-managed Docker host (e.g. a Proxmox VM/LXC) that does NOT
+# build images from source. Unlike docker-compose.prod.yml (which BUILDS images
+# for Dokploy), every service here references a PRE-BUILT image pulled from the
+# container registry. The deploy host never needs the source tree.
+#
+# How it differs from the other two compose files:
+#   - docker-compose.yml          → local dev: build:, bind-mounts, dev targets.
+#   - docker-compose.prod.yml     → Dokploy: build: target prod, Traefik fronts it.
+#   - docker-compose.proxmox.yml  → THIS FILE: image: (no build), pulls tags from
+#                                   a registry, publishes an HTTP port directly.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Operator-set environment (put these in an .env file next to this compose, or
+# export them; see .env.proxmox.example and docs/DEPLOY_PROXMOX.md):
+#
+#   SASTBOT_REGISTRY    Registry + namespace prefix for the images, e.g.
+#                       crg.apkg.io/<your-workspace>. REQUIRED — the default
+#                       below (.../REPLACE_ME) is a deliberate fail-loud
+#                       placeholder so an unconfigured host errors on pull.
+#   SASTBOT_IMAGE_TAG   Image tag to run. Defaults to `latest`. Pin an immutable
+#                       X.Y.Z (e.g. 0.16.1) for a deterministic, repeatable
+#                       deploy. Bumping this + `up -d` IS the upgrade.
+#   SASTBOT_HTTP_PORT   Host port to publish the frontend on. Default 80.
+#
+#   MASTER_KEY          32-byte base64 AES key. Backend refuses to boot without
+#                       it. Generate once: openssl rand -base64 32
+#   POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+#   APP_ORIGIN          The exact origin the browser hits — scheme + host + port,
+#                       no trailing slash. Works with a hostname OR a bare IP:
+#                         http://sastbot.internal.example   (port 80)
+#                         http://192.168.20.50:8080         (IP + custom port)
+#                       Only gates cross-origin API calls; the bundled UI is
+#                       same-origin, but set it correctly anyway.
+#   SESSION_COOKIE_SECURE   Default false (HTTP-only deploy). Set true ONLY once
+#                           the host is fronted by HTTPS — see the runbook.
+#   ALLOW_INSECURE_COOKIES  Default true here. Required to boot with
+#                           SESSION_COOKIE_SECURE=false under NODE_ENV=production
+#                           (the app guards against accidentally shipping
+#                           plaintext-HTTP cookies). Cookies travel in clear text
+#                           while this is on — only safe on a trusted LAN. Flip to
+#                           false (and SESSION_COOKIE_SECURE=true) once TLS is in front.
+#
+# All domain HTTP (the SPA, /api/*, /healthz, /version, /openapi.json, /docs)
+# enters through the `frontend` nginx container, which reverse-proxies the API
+# routes to `backend:8000` on the internal network. Postgres, Redis, backend
+# and worker are NOT published — they are reachable only inside this stack.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: sastbot
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - sastbot_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    volumes:
+      - sastbot_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    image: ${SASTBOT_REGISTRY:-crg.apkg.io/REPLACE_ME}/sastbot-backend:${SASTBOT_IMAGE_TAG:-latest}
+    environment:
+      MASTER_KEY: ${MASTER_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      APP_ORIGIN: ${APP_ORIGIN}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      # The app refuses to boot with SESSION_COOKIE_SECURE=false under
+      # NODE_ENV=production unless you explicitly opt in here. Default true in
+      # this file because the stack ships HTTP-only — cookies then travel in
+      # clear text, which is only safe on a trusted internal network. Set both
+      # SESSION_COOKIE_SECURE=true and ALLOW_INSECURE_COOKIES=false once TLS
+      # fronts the host (see docs/DEPLOY_PROXMOX.md §8).
+      ALLOW_INSECURE_COOKIES: ${ALLOW_INSECURE_COOKIES:-true}
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SCAN_WORKER_CONCURRENCY: ${SCAN_WORKER_CONCURRENCY:-2}
+      PORT: "8000"
+      CLONE_CACHE_DIR: /app/clones
+      # Artifact store for canonical SBOM + SARIF files. Shared with the worker
+      # so the API can serve files the worker wrote. Must match the volume mount
+      # below AND the worker's ARTIFACT_DIR — a mismatch makes downloads 404.
+      ARTIFACT_DIR: /var/lib/sastbot/artifacts
+      # Pre-deploy backup + migrate are owned by the backend container — see
+      # docker/backend-entrypoint.sh. The worker disables both below.
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_COUNT: ${BACKUP_RETENTION_COUNT:-10}
+      ALLOW_DEPLOY_WITHOUT_BACKUP: ${ALLOW_DEPLOY_WITHOUT_BACKUP:-false}
+      SASTBOT_TAKE_BACKUP: "true"
+      SASTBOT_RUN_MIGRATIONS: "true"
+    volumes:
+      - sastbot_repo_cache:/app/clones
+      - sastbot_artifacts:/var/lib/sastbot/artifacts
+      - sastbot_backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # The image's ENTRYPOINT (sastbot-entrypoint.sh) runs backup → migrate →
+    # exec this CMD. The image also bakes a HEALTHCHECK hitting /healthz.
+    command: ["node", "dist/server.js"]
+    restart: unless-stopped
+
+  worker:
+    image: ${SASTBOT_REGISTRY:-crg.apkg.io/REPLACE_ME}/sastbot-backend:${SASTBOT_IMAGE_TAG:-latest}
+    environment:
+      MASTER_KEY: ${MASTER_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      NODE_ENV: ${NODE_ENV:-production}
+      # The worker shares the backend's config loader and hits the same
+      # production cookie guard on boot, so it must see the SAME cookie config
+      # even though it never serves cookies. Without these two, the worker falls
+      # back to the schema default (SESSION_COOKIE_SECURE=false) and crash-loops
+      # under NODE_ENV=production. Keep in lock-step with the backend.
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      ALLOW_INSECURE_COOKIES: ${ALLOW_INSECURE_COOKIES:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SCAN_WORKER_CONCURRENCY: ${SCAN_WORKER_CONCURRENCY:-2}
+      CLONE_CACHE_DIR: /app/clones
+      # Must match the backend's ARTIFACT_DIR + volume so the worker writes the
+      # SBOM/SARIF files the backend serves.
+      ARTIFACT_DIR: /var/lib/sastbot/artifacts
+      # Backup + migrate are owned by the backend container. The worker just
+      # runs its job process — don't let it double-backup or race migrate.
+      # LLM (claude-p) auth is sourced per-scan from the Settings page and
+      # injected into the subprocess env; no container-wide LLM secret here.
+      SASTBOT_TAKE_BACKUP: "false"
+      SASTBOT_RUN_MIGRATIONS: "false"
+    volumes:
+      - sastbot_repo_cache:/app/clones
+      - sastbot_artifacts:/var/lib/sastbot/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: ["node", "dist/worker.js"]
+    restart: unless-stopped
+
+  frontend:
+    image: ${SASTBOT_REGISTRY:-crg.apkg.io/REPLACE_ME}/sastbot-frontend:${SASTBOT_IMAGE_TAG:-latest}
+    # Published so a browser on the network can reach the SPA + proxied API.
+    # On a manual host there is no Traefik/ingress, so we bind a host port
+    # directly. Default 80; override SASTBOT_HTTP_PORT if 80 is taken.
+    #
+    # TLS: this publishes plain HTTP. To serve HTTPS (required before setting
+    # SESSION_COOKIE_SECURE=true), put a host-level reverse proxy (nginx/Caddy)
+    # in front of this port and terminate TLS there — see docs/DEPLOY_PROXMOX.md.
+    ports:
+      - "${SASTBOT_HTTP_PORT:-80}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  sastbot_pgdata:
+  sastbot_redisdata:
+  # Retained git clones the worker reuses between scans. Purging just forces a
+  # fresh clone on the next scan.
+  sastbot_repo_cache:
+  # Canonical per-scan SBOM + SARIF artifact files. Shared backend↔worker.
+  # NOT included in the DB backup tarball — snapshot this volume separately.
+  sastbot_artifacts:
+  # Pre-deploy backup tarballs (rotated to BACKUP_RETENTION_COUNT). Copy out via:
+  #   docker compose -f docker-compose.proxmox.yml cp backend:/backups/<file> ./
+  sastbot_backups:

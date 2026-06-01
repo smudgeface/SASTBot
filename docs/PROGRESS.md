@@ -4,6 +4,146 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-05-29 — Stage 4: Proxmox pull-based deploy artifacts + IT runbook (v0.17.0)
+
+Fourth and final session of the production push (Stage 4 of 4). Produced the
+artifacts LMI IT needs to run SASTBot on a manually-managed Docker host (Proxmox)
+from the **pre-built images published in Stage 3** — no source build on the host.
+Started as docs/tooling-only (no bump), but a Dokploy smoke-test of the pull stack
+(2026-06-01) surfaced a real boot-blocking config contradiction that forced a code
+change → **version bumped 0.16.1 → 0.17.0** (MINOR: new `ALLOW_INSECURE_COOKIES`
+env knob; all three surfaces moved together). Nothing deployed to prod — these are
+handoff artifacts, validated on the homelab Dokploy.
+
+**What shipped.**
+
+- **`docker/compose/docker-compose.proxmox.yml`** — a third compose flavour
+  alongside dev (`docker-compose.yml`) and Dokploy (`docker-compose.prod.yml`),
+  which are left untouched. Every service uses `image:` (no `build:`), pulling
+  from a registry. The registry path is parameterised so the public GitHub
+  mirror never carries the workspace slug:
+  `image: ${SASTBOT_REGISTRY:-crg.apkg.io/REPLACE_ME}/sastbot-backend:${SASTBOT_IMAGE_TAG:-latest}`.
+  The `…/REPLACE_ME` default is a deliberate fail-loud placeholder. Mirrors the
+  prod stack's env/volumes/healthcheck/backup wiring (backend owns
+  backup+migrate; worker disables both), and publishes the frontend on
+  `${SASTBOT_HTTP_PORT:-80}` since a manual host has no Traefik.
+- **Fixed a latent gap vs the Dokploy prod compose:** the Proxmox stack mounts
+  the shared `sastbot_artifacts` volume + sets `ARTIFACT_DIR` on **both** backend
+  and worker. `docker-compose.prod.yml` omits this — on that stack the worker's
+  SBOM/SARIF files aren't readable by the API (downloads 404) and don't survive a
+  restart. Flagged for a separate follow-up; not changed here (Stage 4 scope).
+- **`.env.proxmox.example`** — placeholder-only env template (no secrets, no
+  workspace slug, no internal hosts) covering the image source, `MASTER_KEY`,
+  Postgres creds, `APP_ORIGIN`, and `SESSION_COOKIE_SECURE`.
+- **`docs/DEPLOY_PROXMOX.md`** — the IT handoff runbook: read-only pull
+  credential creation (an **Atlassian API token with `read:package:bitbucket`** —
+  see the 2026-06-01 finding below; separate from the Pipelines push auth),
+  `docker login`, get-files-on-host, `.env` config, `pull`
+  + `up -d`, first-boot bootstrap-admin retrieval, the **Settings → LLM**
+  first-login step (LLM auth is DB-stored, not an env var), `/healthz` + `/version`
+  verification, HTTP-only-now vs the host-reverse-proxy TLS upgrade path,
+  backups (auto pre-deploy dump + volume snapshots), the pull-a-new-tag upgrade
+  flow, and a troubleshooting table.
+- **`ALLOW_INSECURE_COOKIES` config flag (`backend/src/config.ts`) — the 0.17.0
+  code change.** The backend already hard-refused to boot with
+  `SESSION_COOKIE_SECURE=false` under `NODE_ENV=production` (a guard against
+  shipping plaintext-HTTP session cookies). The HTTP-only Proxmox stack tripped
+  exactly that guard. Rather than fake `NODE_ENV=development` in production, added
+  an explicit opt-in: `ALLOW_INSECURE_COOKIES=true` lets the insecure-cookie combo
+  boot **while keeping `NODE_ENV=production`** (real JSON logs, the
+  bootstrap-password guard stays active), logging a loud warning every boot.
+  Wired into the Proxmox compose (backend **and** worker — both run `loadConfig`)
+  defaulting to `true`; documented in `.env.example`, `.env.proxmox.example`, the
+  runbook, and the in-app manual; covered by 3 new `config.test.ts` cases.
+- **Manual:** added a "Pull-based deployment" pointer + an `ALLOW_INSECURE_COOKIES`
+  row to `docs/user-manual/admin-deployment.md`.
+
+**Decisions (operator-confirmed).** Float `latest` by default (tag still
+parameterised so IT can pin); HTTP-only first deploy with `SESSION_COOKIE_SECURE=false`
++ `ALLOW_INSECURE_COOKIES=true` and a documented TLS upgrade path; **Atlassian API
+token with `read:package:bitbucket`** for the pull credential (see the finding
+below — the initial "Repository Access Token" recommendation was wrong); env vars
+`SASTBOT_REGISTRY` + `SASTBOT_IMAGE_TAG`; a **new** compose file rather than
+adapting the Dokploy one; resolve the HTTP-only/prod-guard conflict with an
+explicit `ALLOW_INSECURE_COOKIES` flag (not a `NODE_ENV` fudge).
+
+**What we learned.**
+
+- **The Dokploy prod compose was missing the artifacts volume.** Tracing
+  `ARTIFACT_DIR` through the dev compose (shared `sastbot_artifacts` on backend +
+  worker) surfaced that `docker-compose.prod.yml` never wired it — a real bug
+  that would 404 SARIF/SBOM downloads in prod. Building the pull stack from the
+  dev compose's volume set, not the prod one, avoided inheriting it.
+- **LLM auth is not a deploy concern.** It's stored encrypted in the DB
+  (Settings → LLM) and injected into the `claude -p` subprocess at scan time, so
+  the compose needs no `ANTHROPIC_*` env. The runbook makes "configure LLM on
+  first login" an explicit step instead — scans silently won't run otherwise.
+- **`docker compose config` is a cheap pre-flight.** Rendering the file against
+  `.env.proxmox.example` (exit 0, no warnings) confirmed interpolation, the
+  fail-loud placeholder, the shared artifacts volume on both services, and the
+  published port — all without a daemon or a pull.
+- **Registry pull auth ≠ what the runbook first assumed (caught testing on
+  Dokploy, 2026-06-01).** The first draft told IT to make a **Repository Access
+  Token** with `read:packages`. That is wrong: Bitbucket repo/workspace Access
+  Tokens (`ATCTT…`) carry **no** package scope and `crg.apkg.io` rejects them
+  with `unauthorized` regardless of `docker login` username (proven by probing
+  the token-exchange realm directly — every username + Bearer 401'd). The only
+  Atlassian-documented pull cred outside Pipelines is an **Atlassian API token
+  with scopes** (`ATATT…`) carrying **`read:package:bitbucket`**, used with the
+  account **email** as the docker username. Runbook §3 + the troubleshooting row
+  corrected. Caveat recorded: API tokens are personal-account-bound (no
+  repo/workspace robot for pull), so a deploy host should use a dedicated service
+  Atlassian account.
+- **The HTTP-only deploy mode I shipped literally could not boot — caught only by
+  the live Dokploy test.** Images pulled and started, then backend + worker
+  crash-looped on `ConfigError: SESSION_COOKIE_SECURE must be true in production`.
+  The defaults were self-contradictory: `SESSION_COOKIE_SECURE=false` (the chosen
+  HTTP-only posture) + `NODE_ENV` defaulting to `production` (which the app guards
+  against). `docker compose config` validates *syntax/interpolation*, not
+  *runtime config invariants* — only a real boot surfaced this. Lesson: a compose
+  that renders cleanly is not a compose that runs; smoke-test the actual
+  containers. Resolved with the `ALLOW_INSECURE_COOKIES` opt-in above rather than
+  shipping `NODE_ENV=development` in production. The flag ships in 0.17.0, so
+  testing it end-to-end needs a 0.17.0 image build (release tag) — the 0.16.1
+  images on the registry predate it.
+- **`NODE_ENV=development` is NOT a usable workaround on a prod image — a second
+  crash proved it (2026-06-01 Dokploy test).** After setting `NODE_ENV=development`
+  to dodge the cookie guard, the backend got past the guard + migrations, then
+  crash-looped on `unable to determine transport target for "pino-pretty"`:
+  `server.ts` loads the `pino-pretty` transport whenever `NODE_ENV !== production`,
+  but `pino-pretty` is a devDependency pruned from the prod image. So a prod image
+  simply cannot run in development mode. This is the clinching argument for the
+  `ALLOW_INSECURE_COOKIES` flag (keeps `NODE_ENV=production`). To smoke-test the
+  current 0.16.1 image over HTTP you must run `NODE_ENV=production` +
+  `SESSION_COOKIE_SECURE=true`: it boots and serves `/healthz`, `/version`, and the
+  SPA (proving the pull/boot/migrate/serve chain), but login won't persist over
+  plain HTTP. A fully working HTTP login needs 0.17.0 + `ALLOW_INSECURE_COOKIES=true`.
+- **The worker env block didn't pass `SESSION_COOKIE_SECURE` → crash-loop (caught
+  on the same Dokploy test: backend "running", worker stuck restarting).** Only the
+  backend service listed `SESSION_COOKIE_SECURE` in its compose `environment:`, so
+  the worker fell back to the schema default `false`, hit the same production
+  cookie guard, and crash-looped. This would also break the *proper HTTPS* config
+  (`SESSION_COOKIE_SECURE=true` never reaches the worker). Fix: pass both
+  `SESSION_COOKIE_SECURE` and `ALLOW_INSECURE_COOKIES` to the worker so it makes
+  the identical config decision. Principle: backend + worker share one image and
+  must share one config — any guard in `loadConfig` runs in both.
+- **nginx caches the backend's upstream IP at startup → stale-IP 502s after a
+  backend-only recreate.** During the iterate-redeploy loop, the frontend kept
+  502ing with `connect() failed (113: Host is unreachable) upstream 172.21.0.4`
+  even after the backend was healthy — `proxy_pass http://backend:8000` (hostname
+  literal) is resolved once at nginx start, so a backend container that gets a new
+  IP on recreate leaves nginx pointing at the dead one until nginx restarts. Benign
+  for a clean single `up` (all containers come up together), but the upgrade flow
+  (pull new backend tag → `up -d` recreates only the backend) would trip it on
+  every backend upgrade. **Hardened in `nginx.prod.conf`** (shared by the Dokploy +
+  Proxmox stacks): added `resolver 127.0.0.11 valid=10s ipv6=off` + a
+  `set $sastbot_backend "backend:8000"` and switched all five `proxy_pass`
+  directives to `http://$sastbot_backend` (every proxied path is identical on the
+  upstream, so the explicit URI parts were dropped). The variable form forces
+  per-request re-resolution via Docker's embedded DNS, so a recreated backend is
+  picked up within ~10s. `nginx -t` passes. Dev is unaffected (it uses the Vite
+  proxy, not this file).
+
 ## 2026-05-29 — Stage 3: CI build + container registry via Bitbucket Pipelines (v0.16.1) — ✅ COMPLETE
 
 Third session of the production push (Stage 3 of 4). Added `bitbucket-pipelines.yml`

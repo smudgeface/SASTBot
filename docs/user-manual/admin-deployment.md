@@ -36,6 +36,7 @@ via the Dokploy / your-orchestrator UI:
 | `REDIS_URL` | Auto from compose | `redis://redis:6379/0`. |
 | `APP_ORIGIN` | Yes in prod | CORS allowlist for the frontend origin. Defaults to `http://localhost:5173` for dev. |
 | `SESSION_COOKIE_SECURE` | `true` in prod | Required when behind HTTPS. `false` for plain-HTTP dev. |
+| `ALLOW_INSECURE_COOKIES` | Optional | Override that lets `SESSION_COOKIE_SECURE=false` boot under `NODE_ENV=production` — for a deliberately trusted internal HTTP-only deploy. Without it the backend refuses to start in that combination. Cookies travel in clear text while on; only safe on a trusted LAN. Default `false`. |
 | `BOOTSTRAP_ADMIN_EMAIL` | Optional | Email of the auto-created admin on first boot. Default `admin@sastbot.local`. |
 | `PORT` | Optional | Backend listen port. Default `8000`. |
 | `LOG_LEVEL` | Optional | Pino log level. Default `info`. |
@@ -133,6 +134,16 @@ built-in):
 - Do NOT publish backend / postgres / redis ports on the host. Only
   the frontend (or the reverse proxy in front of it) needs an
   external interface.
+
+### Pull-based deployment (pre-built images)
+
+If your host does not build images from source — for example a
+manually-managed Proxmox VM that pulls pre-built images from a
+container registry — use `docker/compose/docker-compose.proxmox.yml`
+with `.env.proxmox.example`. The step-by-step IT runbook (registry
+login, env vars, first boot, TLS, backups, the pull-a-new-tag upgrade
+flow, and troubleshooting) lives in `docs/DEPLOY_PROXMOX.md` in the
+repository.
 
 ## Volume sizing
 
