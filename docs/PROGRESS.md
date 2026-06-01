@@ -4,6 +4,57 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-06-01 — Backup MASTER_KEY safety: fingerprint + restore guard (v0.18.0)
+
+Fell out of the Stage 4 Dokploy test: restoring a laptop-dev backup onto the
+test box (different `MASTER_KEY`) "succeeded," then would have bricked the
+backend on next boot (canary can't decrypt) and orphaned every credential — a
+silent, delayed failure. This is **option A + C** of the backup-key-safety plan
+(operator chose A+C now, B = re-key-on-restore next session). **MINOR bump
+0.17.0 → 0.18.0** (operator-visible restore behavior + new metadata field).
+
+**What shipped (A — fail fast).**
+
+- **`masterKeyFingerprint()` in `security/crypto.ts`** — a non-reversible
+  HMAC-SHA256(key, fixed-label) truncated to 16 hex chars. Reveals nothing about
+  the key (safe in plaintext metadata); answers "same key or not?".
+- **Backup metadata carries it.** `services/backupMetadata.ts` gains
+  `master_key_fingerprint`; both producers pass it — the HTTP backup route
+  (`adminBackup.ts`) and the entrypoint CLI (`write-backup-metadata.ts`). The
+  pure builder defaults it to `""` (kept crypto/config-free for unit tests); real
+  backups always populate it.
+- **Restore guard (`adminRestore.ts`, mode=full).** After the dump-format check,
+  compare the dump's fingerprint to the running instance's. Mismatch → **422**
+  with both fingerprints + "set MASTER_KEY to the source value first". Absent
+  (legacy dump) → skip + log a note (boot canary still backstops). Field added to
+  the restore `MetadataSchema` as optional, so old dumps still validate; the
+  schema is non-strict so **old backends ignore the new field** → no
+  `dump_format_version` bump needed (fully back/forward compatible).
+- **Tests:** +8 (3 `crypto` fingerprint, 1 `backupMetadata`, 4 `adminRestore`
+  schema + mismatch-predicate). Backend suite 524 → **532 green**; typecheck clean.
+
+**What shipped (C — docs).**
+
+- `docs/user-manual/admin-backup-restore.md`: new "MASTER_KEY guard" section +
+  metadata example + the migrate-to-new-host recovery row now says "set the key
+  first".
+- `docs/DEPLOY_PROXMOX.md`: §9 restore caveat + a troubleshooting row for the 422.
+
+**B is planned, not built.** `docs/M15_BACKUP_REKEY_PLAN.md` has the full design
+(optional `old_master_key` on restore → re-encrypt canary + credentials OLD→NEW,
+transactional, fingerprint-verified). Operator wants it next session — they don't
+want to depend on LMI IT for key-migration issues. Queued in pending-features.
+
+**What we learned.**
+
+- **The failure mode is inherent to the security model, not a bug** — without the
+  source key the data is unrecoverable by design. The fix isn't to weaken that;
+  it's to turn a *silent, delayed boot-brick* into a *loud, early, actionable*
+  refusal. A restore that "succeeds" but strands the canary is the worst shape.
+- **Non-strict Zod is what makes this back-compatible.** Because the restore
+  metadata schema strips unknowns, adding an optional field needs no format-version
+  bump — old backends silently ignore it, new backends use it.
+
 ## 2026-05-29 — Stage 4: Proxmox pull-based deploy artifacts + IT runbook (v0.17.0)
 
 Fourth and final session of the production push (Stage 4 of 4). Produced the

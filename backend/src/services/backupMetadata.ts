@@ -20,6 +20,11 @@ export interface BackupMetadata {
   sastbot_dump_format_version: number;
   artifact_count: number;
   artifact_bytes_total: number;
+  // Non-reversible fingerprint of the MASTER_KEY this dump's data was encrypted
+  // under (see security/crypto.ts:masterKeyFingerprint). Lets restore detect a
+  // key mismatch before it bricks the canary. Empty string = unknown (legacy
+  // dumps, or a caller that didn't supply it) → restore skips the key check.
+  master_key_fingerprint: string;
 }
 
 export interface BackupMetadataInput {
@@ -30,6 +35,10 @@ export interface BackupMetadataInput {
   dumpFormatVersion?: number;
   artifactCount?: number;
   artifactBytesTotal?: number;
+  // Callers with access to the key (the HTTP backup route + the CLI) pass the
+  // computed fingerprint here. Kept out of this pure builder so it stays
+  // crypto/config-free and unit-testable without a MASTER_KEY.
+  masterKeyFingerprint?: string;
 }
 
 export function buildBackupMetadata(input: BackupMetadataInput): BackupMetadata {
@@ -41,5 +50,6 @@ export function buildBackupMetadata(input: BackupMetadataInput): BackupMetadata 
     sastbot_dump_format_version: input.dumpFormatVersion ?? SASTBOT_DUMP_FORMAT_VERSION,
     artifact_count: input.artifactCount ?? 0,
     artifact_bytes_total: input.artifactBytesTotal ?? 0,
+    master_key_fingerprint: input.masterKeyFingerprint ?? "",
   };
 }
