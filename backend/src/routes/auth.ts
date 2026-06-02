@@ -3,6 +3,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
 import { loadConfig } from "../config.js";
 import {
+  ChangePasswordBodySchema,
   ErrorSchema,
   LoginBodySchema,
   LogoutOutSchema,
@@ -20,6 +21,11 @@ import {
 import { countAdmins } from "../services/bootstrap.js";
 import { userToOut } from "../services/mappers.js";
 import { createFirstAdmin, SetupAlreadyCompleteError } from "../services/setupService.js";
+import {
+  changeOwnPassword,
+  InvalidCurrentPasswordError,
+  SamePasswordError,
+} from "../services/userService.js";
 
 /** Build the rate-limit config for auth endpoints from app config. */
 function authRateLimit() {
@@ -136,6 +142,43 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(401).send({ detail: "Not authenticated" });
       }
       return userToOut(req.user);
+    },
+  );
+
+  typed.post(
+    "/auth/change-password",
+    {
+      config: { rateLimit: authRateLimit() },
+      preHandler: [app.authenticate],
+      schema: {
+        tags: ["auth"],
+        summary: "Change your own password",
+        body: ChangePasswordBodySchema,
+        response: {
+          200: UserOutSchema,
+          400: ErrorSchema,
+          401: ErrorSchema,
+          429: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      if (!req.user) return reply.code(401).send({ detail: "Not authenticated" });
+      const currentToken = req.cookies?.[SESSION_COOKIE_NAME];
+      try {
+        const updated = await changeOwnPassword(
+          req.user.id,
+          req.body.current_password,
+          req.body.new_password,
+          currentToken,
+        );
+        return userToOut(updated);
+      } catch (err) {
+        if (err instanceof InvalidCurrentPasswordError || err instanceof SamePasswordError) {
+          return reply.code(400).send({ detail: err.message });
+        }
+        throw err;
+      }
     },
   );
 

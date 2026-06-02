@@ -5,6 +5,7 @@ import { RequireAuth } from "@/components/RequireAuth";
 import { RequireAdmin } from "@/components/RequireAdmin";
 import LoginPage from "@/routes/LoginPage";
 import SetupPage from "@/routes/SetupPage";
+import ChangePasswordPage from "@/routes/ChangePasswordPage";
 import DashboardPage from "@/routes/DashboardPage";
 import ScopesPage from "@/routes/ScopesPage";
 import ScopeDetailPage from "@/routes/ScopeDetailPage";
@@ -16,6 +17,7 @@ import SastSarifViewerPage from "@/routes/SastSarifViewerPage";
 import ReposPage from "@/routes/admin/ReposPage";
 import SettingsPage from "@/routes/admin/SettingsPage";
 import CredentialsPage from "@/routes/admin/CredentialsPage";
+import UsersPage from "@/routes/admin/UsersPage";
 import NotFoundPage from "@/routes/NotFoundPage";
 import { ManualLayout } from "@/routes/manual/ManualLayout";
 import { ManualSection } from "@/routes/manual/ManualSection";
@@ -26,6 +28,8 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       {/* First-run onboarding — public; LoginPage bounces here when no admin exists. */}
       <Route path="/setup" element={<SetupPage />} />
+      {/* Standalone (no app shell) — also the forced-change target for one-time passwords. */}
+      <Route path="/account/change-password" element={<ChangePasswordPage />} />
 
       {/* Manual route — public (no auth wall). Operators need to read
           quick-start before they have a session. */}
@@ -91,6 +95,14 @@ export default function App() {
           element={
             <RequireAdmin>
               <CredentialsPage />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/users"
+          element={
+            <RequireAdmin>
+              <UsersPage />
             </RequireAdmin>
           }
         />

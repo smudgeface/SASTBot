@@ -68,3 +68,21 @@ export async function revokeSession(tokenStr: string | undefined | null): Promis
     .deleteMany({ where: { tokenHash: sha256(tokenStr) } })
     .catch(() => undefined);
 }
+
+/**
+ * Revoke every session for a user — used on password change/reset so a changed
+ * credential immediately invalidates other logins. Pass `exceptTokenStr` to keep
+ * the caller's own session alive (e.g. a self-service password change).
+ * Returns the number of sessions deleted.
+ */
+export async function revokeUserSessions(
+  userId: string,
+  exceptTokenStr?: string | null,
+): Promise<number> {
+  const where: { userId: string; tokenHash?: { not: string } } = { userId };
+  if (exceptTokenStr) {
+    where.tokenHash = { not: sha256(exceptTokenStr) };
+  }
+  const res = await prisma.session.deleteMany({ where });
+  return res.count;
+}

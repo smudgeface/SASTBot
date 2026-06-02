@@ -17,6 +17,8 @@ Then:
 
 First boot creates no admin — open the frontend and complete the first-run setup screen (`/setup`) to create your administrator account (or restore a backup to migrate). The dev-only `BOOTSTRAP_ADMIN_PASSWORD` env var still auto-creates the admin and skips setup for local iteration (rejected under `NODE_ENV=production`).
 
+**User management (M17).** Local accounts are managed under `/admin/users` (`routes/adminUsers.ts` → `services/userService.ts`); self-service password change is `POST /auth/change-password`. Two invariants are enforced in `userService` (advisory-locked, NOT just the UI): never leave **zero active admins** (demote/disable/delete of the last admin → 409) and **no self-lockout** (an admin can't change their own role/active or delete themselves). Admin-created/reset accounts get `mustChangePassword=true`; `plugins/auth.ts` blocks them (403 `password_change_required`) from everything except change-password/logout/me until they change it. When adding any path that mutates users/roles, keep both invariants. OIDC/Google-Workspace SSO is the planned Phase 2 — the `AuthBackend` interface in `security/authBackend.ts` is the hook.
+
 ## ⚠️ Versioning policy — READ BEFORE TOUCHING SCHEMA OR CUTTING A RELEASE
 
 Two versions matter, and they have different rules:

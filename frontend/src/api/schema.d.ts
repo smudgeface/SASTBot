@@ -219,6 +219,7 @@ export interface paths {
                             role: "admin" | "user";
                             /** Format: uuid */
                             org_id: string | null;
+                            must_change_password: boolean;
                         };
                     };
                 };
@@ -230,6 +231,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -310,6 +312,7 @@ export interface paths {
                             role: "admin" | "user";
                             /** Format: uuid */
                             org_id: string | null;
+                            must_change_password: boolean;
                         };
                     };
                 };
@@ -321,6 +324,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -328,6 +332,94 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change your own password */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        current_password: string;
+                        new_password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            email: string;
+                            /** @enum {string} */
+                            role: "admin" | "user";
+                            /** Format: uuid */
+                            org_id: string | null;
+                            must_change_password: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -413,6 +505,7 @@ export interface paths {
                             role: "admin" | "user";
                             /** Format: uuid */
                             org_id: string | null;
+                            must_change_password: boolean;
                         };
                     };
                 };
@@ -424,6 +517,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -435,6 +529,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -525,6 +620,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -536,6 +632,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -723,6 +820,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -734,6 +832,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -745,6 +844,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -829,6 +929,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -840,6 +941,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -851,6 +953,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1003,6 +1106,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1014,6 +1118,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1025,6 +1130,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1036,6 +1142,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1071,6 +1178,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1082,6 +1190,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1093,6 +1202,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1181,6 +1291,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1192,6 +1303,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1203,6 +1315,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1260,6 +1373,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1271,6 +1385,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1282,6 +1397,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1338,6 +1454,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1349,6 +1466,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1360,6 +1478,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1464,6 +1583,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1475,6 +1595,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1486,6 +1607,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1550,6 +1672,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1561,6 +1684,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1731,6 +1855,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1742,6 +1867,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1797,6 +1923,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1808,6 +1935,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1864,6 +1992,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1875,6 +2004,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1924,6 +2054,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1935,6 +2066,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1946,6 +2078,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2024,6 +2157,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2035,6 +2169,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2143,6 +2278,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2154,6 +2290,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2165,6 +2302,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2215,6 +2353,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2226,6 +2365,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2237,6 +2377,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2248,6 +2389,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2315,6 +2457,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2326,6 +2469,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2337,6 +2481,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2451,6 +2596,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2462,6 +2608,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2473,6 +2620,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2484,6 +2632,425 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List user accounts */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            email: string;
+                            name: string | null;
+                            /** @enum {string} */
+                            role: "admin" | "user";
+                            is_active: boolean;
+                            must_change_password: boolean;
+                            last_login_at: string | null;
+                            created_at: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a user (admin sets a one-time password; user must change it on first login) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: email */
+                        email: string;
+                        name?: string;
+                        /** @enum {string} */
+                        role: "admin" | "user";
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            email: string;
+                            name: string | null;
+                            /** @enum {string} */
+                            role: "admin" | "user";
+                            is_active: boolean;
+                            must_change_password: boolean;
+                            last_login_at: string | null;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a user account */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Update a user's name, role, or active status */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        name?: string | null;
+                        /** @enum {string} */
+                        role?: "admin" | "user";
+                        is_active?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            email: string;
+                            name: string | null;
+                            /** @enum {string} */
+                            role: "admin" | "user";
+                            is_active: boolean;
+                            must_change_password: boolean;
+                            last_login_at: string | null;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/admin/users/{id}/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set a one-time password for a user (forces a change on their next login) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            email: string;
+                            name: string | null;
+                            /** @enum {string} */
+                            role: "admin" | "user";
+                            is_active: boolean;
+                            must_change_password: boolean;
+                            last_login_at: string | null;
+                            created_at: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2520,6 +3087,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2531,6 +3099,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2542,6 +3111,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2600,6 +3170,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2611,6 +3182,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2622,6 +3194,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2633,6 +3206,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2644,6 +3218,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2707,6 +3282,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2718,6 +3294,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2729,6 +3306,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2740,6 +3318,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2843,6 +3422,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2942,6 +3522,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2953,6 +3534,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2992,6 +3574,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3003,6 +3586,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3014,6 +3598,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3025,6 +3610,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3123,6 +3709,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3134,6 +3721,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3145,6 +3733,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3248,6 +3837,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3259,6 +3849,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3302,6 +3893,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3313,6 +3905,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3356,6 +3949,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3367,6 +3961,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3450,6 +4045,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3461,6 +4057,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3559,6 +4156,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3570,6 +4168,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3657,6 +4256,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3746,6 +4346,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3757,6 +4358,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3858,6 +4460,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3869,6 +4472,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3996,6 +4600,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4007,6 +4612,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4107,6 +4713,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4118,6 +4725,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4171,6 +4779,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4182,6 +4791,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4193,6 +4803,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4244,6 +4855,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4255,6 +4867,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4266,6 +4879,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4322,6 +4936,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4333,6 +4948,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4344,6 +4960,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4402,6 +5019,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4413,6 +5031,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4424,6 +5043,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4527,6 +5147,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4538,6 +5159,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4634,6 +5256,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4645,6 +5268,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4656,6 +5280,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4768,6 +5393,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4779,6 +5405,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4790,6 +5417,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4881,6 +5509,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -4892,6 +5521,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5002,6 +5632,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5013,6 +5644,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5092,6 +5724,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5103,6 +5736,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5114,6 +5748,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5125,6 +5760,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5159,6 +5795,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5170,6 +5807,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5181,6 +5819,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5258,6 +5897,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5269,6 +5909,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5280,6 +5921,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5291,6 +5933,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5325,6 +5968,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5336,6 +5980,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5347,6 +5992,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5416,6 +6062,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5427,6 +6074,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5501,6 +6149,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5512,6 +6161,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };
@@ -5523,6 +6173,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             detail: string;
+                            code?: string;
                         };
                     };
                 };

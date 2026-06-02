@@ -83,6 +83,27 @@ export function useSetup() {
   });
 }
 
+export interface ChangePasswordInput {
+  current_password: string;
+  new_password: string;
+}
+
+/** Self-service password change. Clears must_change_password on success. */
+export function useChangePassword() {
+  const qc = useQueryClient();
+  const setUser = useAuthStore((s) => s.setUser);
+
+  return useMutation({
+    mutationFn: (input: ChangePasswordInput) =>
+      apiFetch<User>("/auth/change-password", { method: "POST", json: input }),
+    onSuccess: (user) => {
+      setUser(user);
+      qc.setQueryData(meQueryKey, user);
+      qc.invalidateQueries({ queryKey: meQueryKey });
+    },
+  });
+}
+
 export function useLogout() {
   const qc = useQueryClient();
   const clearUser = useAuthStore((s) => s.clearUser);

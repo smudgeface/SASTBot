@@ -33,5 +33,11 @@ export function RequireAuth({ children }: Props) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
+  // Forced password change: a user on a one-time admin-set password must set
+  // their own before reaching any app screen. The backend enforces this too.
+  if (user.must_change_password) {
+    return <Navigate to="/account/change-password" replace />;
+  }
+
   return <>{children}</>;
 }

@@ -33,6 +33,7 @@ import type {
   ScanScopeOut,
   ScanWarning,
   Severity,
+  UserAdminOut,
   UserOut,
 } from "../schemas.js";
 
@@ -109,6 +110,21 @@ export function userToOut(user: User): UserOut {
     email: user.email,
     role: user.role === "admin" ? "admin" : "user",
     org_id: user.orgId,
+    must_change_password: user.mustChangePassword,
+  };
+}
+
+/** Full admin-facing view of a user (no password material). */
+export function userToAdminOut(user: User): UserAdminOut {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role === "admin" ? "admin" : "user",
+    is_active: user.isActive,
+    must_change_password: user.mustChangePassword,
+    last_login_at: user.lastLoginAt ? user.lastLoginAt.toISOString() : null,
+    created_at: user.createdAt.toISOString(),
   };
 }
 

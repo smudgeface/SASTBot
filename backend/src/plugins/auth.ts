@@ -25,13 +25,28 @@ declare module "fastify" {
 const authPlugin: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.decorateRequest("user", null);
 
-  app.addHook("preHandler", async (req) => {
+  app.addHook("preHandler", async (req, reply) => {
     const cookieToken = req.cookies?.[SESSION_COOKIE_NAME];
-    if (!cookieToken) {
-      req.user = null;
-      return;
+    req.user = cookieToken ? await getUserFromToken(cookieToken) : null;
+
+    // Forced-password-change gate: a user on a one-time admin-set password may
+    // only reach the change-password / logout / me endpoints until they change
+    // it. Scoped to /api/* domain routes (root utility routes like /healthz are
+    // never gated). Enforcement lives here; the SPA also reads must_change_password
+    // off /auth/me to redirect proactively.
+    if (req.user?.mustChangePassword) {
+      const path = req.url.split("?")[0];
+      const allowed =
+        path === "/api/auth/change-password" ||
+        path === "/api/auth/logout" ||
+        path === "/api/auth/me";
+      if (path.startsWith("/api/") && !allowed) {
+        await reply.code(403).send({
+          detail: "You must change your password before continuing.",
+          code: "password_change_required",
+        });
+      }
     }
-    req.user = await getUserFromToken(cookieToken);
   });
 
   app.decorate(

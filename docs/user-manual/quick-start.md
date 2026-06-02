@@ -29,7 +29,8 @@ you migrate or restore.
 ## 2. Get going
 
 Once you're in, head to the next step to set up the LLM gateway. You can change
-your password later from the admin screens — see [Credentials](credentials).
+your password anytime from **Change password** in the sidebar, and add more
+accounts under **Admin → Users** — see [Users](admin-users).
 
 ## 3. Configure the LLM gateway
 
