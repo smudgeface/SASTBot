@@ -4,6 +4,54 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-06-01 — M16: first-run onboarding (v0.20.0)
+
+Replaced the random "bootstrap admin password printed to the logs" first-boot
+experience with an operator-driven setup screen. The first admin is now a real,
+operator-chosen account — bcrypt-hashed and carried in backups like any other
+local account. Plan: `docs/M16_ONBOARDING_PLAN.md`.
+
+**What shipped.**
+
+- **Boot no longer auto-creates an admin.** `bootstrapIfEmpty` still seeds the
+  `default` org but leaves the instance in a "needs setup" state. The dev-only
+  `BOOTSTRAP_ADMIN_PASSWORD` hatch (kept by operator request; already a hard
+  config error under `NODE_ENV=production`) still auto-creates the admin so local
+  `down -v` iteration skips the screen.
+- **`GET /auth/setup-status`** (`{ needs_setup }`) + **`POST /auth/setup`**
+  (`{ email, password ≥12 }` → creates the first admin, auto-logs-in). 409 once an
+  admin exists; race-safe via a Postgres advisory lock around the zero-admins
+  check + insert (`services/setupService.ts`).
+- **Restore during the setup window** — the existing `POST /admin/db/restore`
+  route is *reused* (not duplicated); its gate moved `requireAdmin` →
+  `requireAdminOrSetupWindow`, which allows an unauthenticated caller **only while
+  zero admins exist**. Solves the migration chicken-and-egg (restoring a backup
+  needs an admin, but the backup *contains* the admin): on a fresh box, restore
+  from the setup screen → the dump's real admin lands → log in as it. The pure
+  `decideSetupGate(role, adminCount)` truth-table is unit-tested.
+- **Frontend** `/setup` route (public) with **Create admin** / **Restore a
+  backup** tabs (the restore tab reuses M15's optional Source MASTER_KEY).
+  `/login` bounces to `/setup` when `needs_setup`, and back once an admin exists.
+- **Tests** — `setup.test.ts` (gate truth table, bootstrap with/without the dev
+  hatch, `createFirstAdmin` create + advisory-locked conflict). 556 backend + 6
+  frontend green; types regenerated; `npm ci --dry-run` clean.
+- **Version** 0.19.0 → 0.20.0. Docs swept: quick-start, admin-deployment,
+  admin-backup-restore (migration row), DEPLOY_PROXMOX §7, `.env.example`,
+  README, CLAUDE.md. No schema migration (uses the existing `users` table).
+
+**What we learned.**
+
+- **Reusing the restore route beat building a parallel setup-restore endpoint.**
+  Widening one auth gate (`requireAdminOrSetupWindow`) inherited all 780 lines of
+  format detection, version checks, and the M15 re-key path for free. The trust
+  argument is clean: during the setup window *anyone* can already create the admin
+  (and thus restore), so an unauthenticated restore in the same window doesn't
+  widen exposure — and both close together the instant an admin exists.
+- **The first-run window is the security boundary, not authentication.** Setup and
+  setup-window-restore are unauthenticated by necessity (no admin exists yet); the
+  zero-admins gate + advisory lock are what make it safe. Same urgency as grabbing
+  the old log password: complete setup promptly on first deploy.
+
 ## 2026-06-01 — M15: re-key on restore + in-place MASTER_KEY rotation (v0.19.0)
 
 Part B of the backup-key-safety work (Part A shipped in v0.18.0). Lets an

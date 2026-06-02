@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { RequireAuth } from "@/components/RequireAuth";
 import { RequireAdmin } from "@/components/RequireAdmin";
 import LoginPage from "@/routes/LoginPage";
+import SetupPage from "@/routes/SetupPage";
 import DashboardPage from "@/routes/DashboardPage";
 import ScopesPage from "@/routes/ScopesPage";
 import ScopeDetailPage from "@/routes/ScopeDetailPage";
@@ -23,6 +24,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* First-run onboarding — public; LoginPage bounces here when no admin exists. */}
+      <Route path="/setup" element={<SetupPage />} />
 
       {/* Manual route — public (no auth wall). Operators need to read
           quick-start before they have a session. */}

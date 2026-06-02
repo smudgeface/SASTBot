@@ -4,37 +4,32 @@ This page gets you from a fresh SASTBot deployment to your first scan in
 about fifteen minutes. It assumes the administrator has already brought
 the stack up (see [Deployment](admin-deployment) if not).
 
-## 1. Find the bootstrap admin password
+## 1. Create your admin account
 
-The very first time SASTBot boots against an empty database, it creates an
-admin user and prints a one-time random password to the backend logs:
+The very first time SASTBot boots against an empty database, it has **no
+users**. Open the frontend in your browser (the default is
+`http://localhost:5173`) and you'll be taken straight to a first-run setup
+screen. Enter an email and a password (at least 12 characters) and click
+**Create admin & sign in** — you're logged in immediately as the administrator.
 
-```sh
-docker compose -f docker/compose/docker-compose.yml logs backend | grep BOOTSTRAP
-```
+This account is a normal user account: it's stored with a bcrypt-hashed
+password and is included in database backups, so it travels with your data when
+you migrate or restore.
 
-You'll see a line like:
+> **Migrating from another installation?** The setup screen also has a **Restore
+> a backup** tab — upload a full backup and SASTBot restores it (bringing the
+> backup's user accounts with it) instead of creating a new admin. See
+> [Backup & restore](admin-backup-restore).
 
-```text
-BOOTSTRAP admin login — email=admin@sastbot.local password=…
-```
+> **Tip (developers):** setting the dev-only `BOOTSTRAP_ADMIN_PASSWORD` env var
+> skips this screen and auto-creates the admin with that password, so a
+> `docker compose down -v` lets you log straight back in. It's a hard config
+> error under `NODE_ENV=production`.
 
-Copy the password. It is printed only once. If you missed it, run the
-bootstrap CLI manually:
+## 2. Get going
 
-```sh
-docker compose -f docker/compose/docker-compose.yml exec backend \
-  pnpm run bootstrap-admin --email you@example.com
-```
-
-A fresh random password is printed to stdout.
-
-## 2. Sign in
-
-Open the frontend in your browser (the default is
-`http://localhost:5173`) and sign in with the bootstrap email and the
-password from step 1. The first thing you should do is change that
-password — see [Credentials](credentials).
+Once you're in, head to the next step to set up the LLM gateway. You can change
+your password later from the admin screens — see [Credentials](credentials).
 
 ## 3. Configure the LLM gateway
 

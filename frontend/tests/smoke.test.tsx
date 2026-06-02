@@ -12,6 +12,8 @@ vi.mock("@/api/queries/auth", () => {
       isPending: false,
     }),
     useMe: () => ({ data: null, isLoading: false, isError: false }),
+    // No admin-less instance in this test → don't bounce to /setup.
+    useSetupStatus: () => ({ data: { needs_setup: false }, isLoading: false }),
   };
 });
 

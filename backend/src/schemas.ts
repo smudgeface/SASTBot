@@ -50,6 +50,21 @@ export type LoginBody = z.infer<typeof LoginBodySchema>;
 
 export const LogoutOutSchema = z.object({ ok: z.boolean() });
 
+// First-run setup. `needs_setup` is true exactly when the instance has no admin
+// user yet — the UI shows the onboarding screen instead of the login form.
+export const SetupStatusOutSchema = z.object({ needs_setup: z.boolean() });
+
+/** Minimum length for the first admin password. Length beats complexity rules. */
+export const SETUP_PASSWORD_MIN_LENGTH = 12;
+
+export const SetupBodySchema = z.object({
+  email: z.string().email("Enter a valid email address"),
+  password: z
+    .string()
+    .min(SETUP_PASSWORD_MIN_LENGTH, `Password must be at least ${SETUP_PASSWORD_MIN_LENGTH} characters`),
+});
+export type SetupBody = z.infer<typeof SetupBodySchema>;
+
 // ---------------------------------------------------------------------------
 // Credentials
 // ---------------------------------------------------------------------------

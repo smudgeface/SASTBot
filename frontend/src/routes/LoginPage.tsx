@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { BookOpen, ShieldCheck } from "lucide-react";
 
-import { useLogin, useMe } from "@/api/queries/auth";
+import { useLogin, useMe, useSetupStatus } from "@/api/queries/auth";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const login = useLogin();
   const { data: user } = useMe();
+  const { data: setupStatus } = useSetupStatus();
   const { toast } = useToast();
 
   const [email, setEmail] = useState("");
@@ -22,6 +23,11 @@ export default function LoginPage() {
   // Rate-limit countdown: number of seconds remaining, null when not rate-limited.
   const [retryAfterSecs, setRetryAfterSecs] = useState<number | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // First-run instance with no admin yet → send the operator to onboarding.
+  useEffect(() => {
+    if (setupStatus?.needs_setup) navigate("/setup", { replace: true });
+  }, [setupStatus, navigate]);
 
   // If the user is already authenticated (e.g. returning visit), skip login.
   useEffect(() => {

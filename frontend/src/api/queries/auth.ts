@@ -50,6 +50,39 @@ export function useLogin() {
   });
 }
 
+export const setupStatusQueryKey = ["setup-status"] as const;
+
+/** Whether the instance still needs first-run admin setup. Public endpoint. */
+export function useSetupStatus() {
+  return useQuery<{ needs_setup: boolean }>({
+    queryKey: setupStatusQueryKey,
+    queryFn: () => apiFetch<{ needs_setup: boolean }>("/auth/setup-status"),
+    staleTime: 30_000,
+  });
+}
+
+export interface SetupInput {
+  email: string;
+  password: string;
+}
+
+/** Create the first admin account; the backend auto-logs-in on success. */
+export function useSetup() {
+  const qc = useQueryClient();
+  const setUser = useAuthStore((s) => s.setUser);
+
+  return useMutation({
+    mutationFn: (input: SetupInput) =>
+      apiFetch<User>("/auth/setup", { method: "POST", json: input }),
+    onSuccess: (user) => {
+      setUser(user);
+      qc.setQueryData(meQueryKey, user);
+      qc.setQueryData(setupStatusQueryKey, { needs_setup: false });
+      qc.invalidateQueries({ queryKey: meQueryKey });
+    },
+  });
+}
+
 export function useLogout() {
   const qc = useQueryClient();
   const clearUser = useAuthStore((s) => s.clearUser);

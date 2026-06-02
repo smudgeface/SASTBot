@@ -37,7 +37,8 @@ via the Dokploy / your-orchestrator UI:
 | `APP_ORIGIN` | Yes in prod | CORS allowlist for the frontend origin. Defaults to `http://localhost:5173` for dev. |
 | `SESSION_COOKIE_SECURE` | `true` in prod | Required when behind HTTPS. `false` for plain-HTTP dev. |
 | `ALLOW_INSECURE_COOKIES` | Optional | Override that lets `SESSION_COOKIE_SECURE=false` boot under `NODE_ENV=production` — for a deliberately trusted internal HTTP-only deploy. Without it the backend refuses to start in that combination. Cookies travel in clear text while on; only safe on a trusted LAN. Default `false`. |
-| `BOOTSTRAP_ADMIN_EMAIL` | Optional | Email of the auto-created admin on first boot. Default `admin@sastbot.local`. |
+| `BOOTSTRAP_ADMIN_EMAIL` | Optional | Email used only by the dev-only `BOOTSTRAP_ADMIN_PASSWORD` auto-admin hatch. Default `admin@sastbot.local`. Normal first boot creates no admin — you do that on the setup screen. |
+| `BOOTSTRAP_ADMIN_PASSWORD` | Dev only | When set, auto-creates the admin with this fixed password and skips the setup screen. **Hard config error under `NODE_ENV=production`.** |
 | `PORT` | Optional | Backend listen port. Default `8000`. |
 | `LOG_LEVEL` | Optional | Pino log level. Default `info`. |
 | `BACKUP_DIR` | Prod only | Where the entrypoint writes pre-deploy backups. Default `/backups`. |
@@ -101,14 +102,14 @@ cp .env.example .env
 docker compose -f docker/compose/docker-compose.yml --env-file .env up --build
 ```
 
-Watch for the bootstrap admin line in the backend logs:
+On first boot the backend seeds the default org but creates **no admin user** —
+nothing secret is written to the logs. Browse to the frontend and you'll land on
+the **first-run setup** screen to create your administrator account (or restore
+an existing backup to migrate). See [Quick start](quick-start) §1.
 
-```sh
-docker compose -f docker/compose/docker-compose.yml logs backend | grep BOOTSTRAP
-```
-
-That password is printed once. Capture it. From here, follow
-[Quick start](quick-start) §2 onward.
+> Developers iterating with `docker compose down -v` can set the dev-only
+> `BOOTSTRAP_ADMIN_PASSWORD` to auto-create the admin and skip the setup screen.
+> It is a hard config error under `NODE_ENV=production`.
 
 ## Production deployment
 
