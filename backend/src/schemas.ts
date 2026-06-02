@@ -28,19 +28,78 @@ export const CredentialKindSchema = z.string().min(1).max(64);
 // Error
 // ---------------------------------------------------------------------------
 
-export const ErrorSchema = z.object({ detail: z.string() });
+// Optional `code` carries a machine-readable reason (e.g. "password_change_required")
+// so the SPA can react without string-matching `detail`. Optional → every existing
+// `{ detail }` error still validates.
+export const ErrorSchema = z.object({ detail: z.string(), code: z.string().optional() });
 
 // ---------------------------------------------------------------------------
 // User / Auth
 // ---------------------------------------------------------------------------
+
+/** Minimum length for any user-set / admin-set password. Length beats complexity. */
+export const SETUP_PASSWORD_MIN_LENGTH = 12;
 
 export const UserOutSchema = z.object({
   id: UuidSchema,
   email: z.string(),
   role: z.enum(["admin", "user"]),
   org_id: UuidSchema.nullable(),
+  // True while the account is on a one-time admin-set password and must change it.
+  must_change_password: z.boolean(),
 });
 export type UserOut = z.infer<typeof UserOutSchema>;
+
+export const RoleSchema = z.enum(["admin", "user"]);
+
+/** Full admin-facing view of a user row (no password material). */
+export const UserAdminOutSchema = z.object({
+  id: UuidSchema,
+  email: z.string(),
+  name: z.string().nullable(),
+  role: RoleSchema,
+  is_active: z.boolean(),
+  must_change_password: z.boolean(),
+  last_login_at: z.string().nullable(),
+  created_at: z.string(),
+});
+export type UserAdminOut = z.infer<typeof UserAdminOutSchema>;
+
+export const CreateUserBodySchema = z.object({
+  email: z.string().email("Enter a valid email address"),
+  name: z.string().trim().min(1).max(200).optional(),
+  role: RoleSchema,
+  password: z
+    .string()
+    .min(SETUP_PASSWORD_MIN_LENGTH, `Password must be at least ${SETUP_PASSWORD_MIN_LENGTH} characters`),
+});
+export type CreateUserBody = z.infer<typeof CreateUserBodySchema>;
+
+export const UpdateUserBodySchema = z
+  .object({
+    name: z.string().trim().max(200).nullable().optional(),
+    role: RoleSchema.optional(),
+    is_active: z.boolean().optional(),
+  })
+  .refine((b) => b.name !== undefined || b.role !== undefined || b.is_active !== undefined, {
+    message: "Provide at least one field to update",
+  });
+export type UpdateUserBody = z.infer<typeof UpdateUserBodySchema>;
+
+export const ResetPasswordBodySchema = z.object({
+  password: z
+    .string()
+    .min(SETUP_PASSWORD_MIN_LENGTH, `Password must be at least ${SETUP_PASSWORD_MIN_LENGTH} characters`),
+});
+export type ResetPasswordBody = z.infer<typeof ResetPasswordBodySchema>;
+
+export const ChangePasswordBodySchema = z.object({
+  current_password: z.string().min(1),
+  new_password: z
+    .string()
+    .min(SETUP_PASSWORD_MIN_LENGTH, `Password must be at least ${SETUP_PASSWORD_MIN_LENGTH} characters`),
+});
+export type ChangePasswordBody = z.infer<typeof ChangePasswordBodySchema>;
 
 export const LoginBodySchema = z.object({
   email: z.string().min(1),
@@ -53,9 +112,6 @@ export const LogoutOutSchema = z.object({ ok: z.boolean() });
 // First-run setup. `needs_setup` is true exactly when the instance has no admin
 // user yet — the UI shows the onboarding screen instead of the login form.
 export const SetupStatusOutSchema = z.object({ needs_setup: z.boolean() });
-
-/** Minimum length for the first admin password. Length beats complexity rules. */
-export const SETUP_PASSWORD_MIN_LENGTH = 12;
 
 export const SetupBodySchema = z.object({
   email: z.string().email("Enter a valid email address"),

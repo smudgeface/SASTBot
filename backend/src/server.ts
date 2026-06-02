@@ -22,6 +22,7 @@ import adminRestoreRoutes from "./routes/adminRestore.js";
 import adminCredentialsRoutes from "./routes/adminCredentials.js";
 import adminReposRoutes from "./routes/adminRepos.js";
 import adminSettingsRoutes from "./routes/adminSettings.js";
+import adminUsersRoutes from "./routes/adminUsers.js";
 import authRoutes from "./routes/auth.js";
 import healthRoutes from "./routes/health.js";
 import scansRoutes from "./routes/scans.js";
@@ -122,6 +123,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       await api.register(adminReposRoutes);
       await api.register(adminSettingsRoutes);
       await api.register(adminCredentialsRoutes);
+      await api.register(adminUsersRoutes);
       await api.register(adminBackupRoutes);
       await api.register(adminRestoreRoutes);
       await api.register(adminKeyRotationRoutes);

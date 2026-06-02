@@ -17,6 +17,7 @@ import sastIssuesBody from "./content/sast-issues.md?raw";
 import componentsSbomBody from "./content/components-sbom.md?raw";
 import jiraBody from "./content/jira.md?raw";
 import credentialsBody from "./content/credentials.md?raw";
+import adminUsersBody from "./content/admin-users.md?raw";
 import adminSettingsBody from "./content/admin-settings.md?raw";
 import adminConfigurationBody from "./content/admin-configuration.md?raw";
 import adminBackupRestoreBody from "./content/admin-backup-restore.md?raw";
@@ -48,6 +49,7 @@ export const MANUAL_SECTIONS: ManualSection[] = [
   { slug: "components-sbom", title: "Components & SBOM", kind: "markdown", group: "Day-to-day use", body: componentsSbomBody },
   { slug: "jira", title: "Jira integration", kind: "markdown", group: "Day-to-day use", body: jiraBody },
   { slug: "credentials", title: "Credentials", kind: "markdown", group: "Administration", body: credentialsBody },
+  { slug: "admin-users", title: "Users", kind: "markdown", group: "Administration", body: adminUsersBody },
   { slug: "admin-settings", title: "Settings page", kind: "markdown", group: "Administration", body: adminSettingsBody },
   { slug: "admin-configuration", title: "Configuration", kind: "markdown", group: "Administration", body: adminConfigurationBody },
   { slug: "admin-backup-restore", title: "Backup & restore", kind: "markdown", group: "Administration", body: adminBackupRestoreBody },

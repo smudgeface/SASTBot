@@ -4,6 +4,59 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-06-02 — M17: user management Phase 1 (local accounts + password change) (v0.21.0)
+
+First half of the two-phase user-management roadmap (Phase 2 = OIDC/Google
+Workspace, separate). Closes the two gaps the first prod deploy exposed: no
+in-app password change, and `admin@sastbot.local`/`admin` with only a CLI reset.
+Plan: `docs/M17_USER_MGMT_PLAN.md`.
+
+**What shipped.**
+
+- **Migration** `add_user_mgmt_fields`: `users.must_change_password` (default
+  false) + `users.name` (nullable). Safe additive change — no backfill; restored
+  older dumps and existing users default to `false`.
+- **Self-service `POST /auth/change-password`** — verify current (bcrypt), reject
+  weak/same, set new hash, clear `mustChangePassword`, revoke the user's *other*
+  sessions (keep the caller's).
+- **Forced-change gate** — a user on a one-time admin-set password is blocked
+  (403 `password_change_required`) from every `/api/*` route except
+  change-password/logout/me until they change it. Enforced in `plugins/auth.ts`;
+  `must_change_password` also surfaced on `/auth/me` so the SPA redirects
+  proactively. `ErrorSchema` gained an optional `code` for machine-readable
+  reasons.
+- **Admin CRUD** `/api/admin/users` (admin-only, `routes/adminUsers.ts` +
+  `services/userService.ts`): list, create (one-time password →
+  `mustChangePassword=true`), update name/role/active, reset password (revokes
+  sessions), delete.
+- **Two security invariants (advisory-locked, like M16 setup):** never leave zero
+  active admins (demote/disable/delete of the last admin → 409), and no
+  self-lockout (can't change your own role/active or delete yourself).
+- **Frontend:** standalone `/account/change-password` (forced + voluntary;
+  `RequireAuth` redirects forced users into it), an admin **Users** page
+  (`/admin/users`) with create/edit/reset/delete dialogs + the last-admin/self
+  guards reflected in the UI, a sidebar **Users** nav entry, and a **Change
+  password** sidebar link.
+- **Tests:** `userMgmt.test.ts` (11) — create sets the flag + dup-email; last-admin
+  demote/disable/delete rejected; self role/active/delete rejected; change-password
+  verifies current/rejects same/clears flag/revokes others. Backend 567 + FE 6
+  green; types regenerated; `npm ci --dry-run` clean. **Verified live** against a
+  fresh user: create → 403-gated → change-password → access restored → wrong
+  current rejected → cleanup.
+- **Version** 0.20.0 → 0.21.0. New manual page `admin-users.md` (+ manifest entry);
+  quick-start + CLAUDE.md updated. Migration folder committed (schema-version bump).
+
+**What we learned.**
+
+- **The last-admin and self-lockout guards are the whole point of doing this in
+  the service layer, not the UI.** The UI disables self-actions, but the
+  authoritative checks (advisory-locked count) live in `userService` so a direct
+  API call can't brick the only admin — the same "first-run window" lesson from
+  M16 applied to the *last*-admin window.
+- **`getUserFromToken` already returns null for inactive users**, so disabling an
+  account logs it out on the next request for free; the explicit
+  `revokeUserSessions` is for the immediate cut on reset/disable.
+
 ## 2026-06-01 — M16: first-run onboarding (v0.20.0)
 
 Replaced the random "bootstrap admin password printed to the logs" first-boot

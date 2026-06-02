@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Sun,
   GitBranch,
+  Users,
 } from "lucide-react";
 
 import { useLogout, useMe } from "@/api/queries/auth";
@@ -38,6 +39,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: "/admin/repos", label: "Repositories", icon: GitBranch },
   { to: "/admin/settings", label: "Settings", icon: Settings },
   { to: "/admin/credentials", label: "Credentials", icon: KeyRound },
+  { to: "/admin/users", label: "Users", icon: Users },
 ];
 
 export function AppShell() {
@@ -101,6 +103,13 @@ export function AppShell() {
           <div className="mb-2 truncate text-muted-foreground" title={user?.email}>
             {user?.email ?? "—"}
           </div>
+          <Link
+            to="/account/change-password"
+            className="mb-2 flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs hover:bg-accent"
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+            <span>Change password</span>
+          </Link>
           <Link
             to="/manual"
             className="mb-2 flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs hover:bg-accent"
