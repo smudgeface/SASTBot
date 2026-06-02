@@ -6,6 +6,8 @@ import {
   ErrorSchema,
   LoginBodySchema,
   LogoutOutSchema,
+  SetupBodySchema,
+  SetupStatusOutSchema,
   UserOutSchema,
 } from "../schemas.js";
 import { getAuthBackend } from "../security/authBackend.js";
@@ -15,7 +17,9 @@ import {
   createSession,
   revokeSession,
 } from "../security/sessions.js";
+import { countAdmins } from "../services/bootstrap.js";
 import { userToOut } from "../services/mappers.js";
+import { createFirstAdmin, SetupAlreadyCompleteError } from "../services/setupService.js";
 
 /** Build the rate-limit config for auth endpoints from app config. */
 function authRateLimit() {
@@ -132,6 +136,66 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(401).send({ detail: "Not authenticated" });
       }
       return userToOut(req.user);
+    },
+  );
+
+  // First-run setup ---------------------------------------------------------
+
+  typed.get(
+    "/auth/setup-status",
+    {
+      schema: {
+        tags: ["auth"],
+        summary: "Whether the instance still needs first-run admin setup",
+        response: { 200: SetupStatusOutSchema },
+      },
+    },
+    async () => {
+      return { needs_setup: (await countAdmins()) === 0 };
+    },
+  );
+
+  typed.post(
+    "/auth/setup",
+    {
+      config: { rateLimit: authRateLimit() },
+      schema: {
+        tags: ["auth"],
+        summary: "Create the first admin account (only while no admin exists)",
+        body: SetupBodySchema,
+        response: {
+          200: UserOutSchema,
+          409: ErrorSchema,
+          429: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      // Fast pre-check; the authoritative guard is the advisory-locked re-check
+      // inside createFirstAdmin (avoids a race between two concurrent calls).
+      if ((await countAdmins()) > 0) {
+        return reply.code(409).send({ detail: "Setup has already been completed." });
+      }
+
+      const { email, password } = req.body;
+      let user;
+      try {
+        user = await createFirstAdmin(email, password);
+      } catch (err) {
+        if (err instanceof SetupAlreadyCompleteError) {
+          return reply.code(409).send({ detail: err.message });
+        }
+        throw err;
+      }
+
+      // Auto-login: issue a session so the operator lands straight in the app.
+      const { tokenStr } = await createSession(
+        user.id,
+        req.headers["user-agent"] ?? undefined,
+        req.ip ?? undefined,
+      );
+      setSessionCookie(reply, tokenStr);
+      return userToOut(user);
     },
   );
 };

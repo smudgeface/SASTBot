@@ -325,7 +325,10 @@ const adminRestoreRoutes: FastifyPluginAsync = async (app) => {
   typed.post(
     "/admin/db/restore",
     {
-      preHandler: [app.requireAdmin],
+      // requireAdmin in normal operation; also allows an unauthenticated call
+      // during the first-run setup window (zero admins) so a fresh instance can
+      // be seeded by restoring an existing backup. See plugins/auth.ts.
+      preHandler: [app.requireAdminOrSetupWindow],
       schema: {
         tags: ["admin", "backup"],
         summary: "Upload a pg_dump file or SASTBot tarball and restore it into the application database",

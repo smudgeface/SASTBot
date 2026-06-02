@@ -187,7 +187,7 @@ auto-reloads when `/healthz` returns 200 with the new schema.
 | Bad scan run produced garbage | Delete the scan from the audit page; or runtime-only restore from yesterday's backup |
 | DB corruption / lost volume | Full restore from the most recent good backup |
 | Upgraded to a broken release | Downgrade the image first, then full restore |
-| Migrating to a new host | Either re-key on restore (paste the source instance's key into **Source MASTER_KEY** in the restore dialog — the target keeps its own key), or set `MASTER_KEY` on the target to the source value **first** then full restore. See [the MASTER_KEY guard](#the-master_key-guard-cross-key-migrations). |
+| Migrating to a new host | On a brand-new instance, the first-run **setup screen** has a **Restore a backup** tab — restore there directly (no throwaway admin needed); the backup's user accounts come with it. Otherwise restore from **Admin → Backup & restore** as an existing admin. For a different key, either re-key on restore (paste the source key into **Source MASTER_KEY**) or set `MASTER_KEY` to the source value first. See [the MASTER_KEY guard](#the-master_key-guard-cross-key-migrations). |
 | Suspected key compromise | Rotate the key in place — **Admin → Settings → Rotate MASTER_KEY** — then update `MASTER_KEY` in the environment and restart. See [Rotating the MASTER_KEY](#rotating-the-master_key). |
 | Lost `MASTER_KEY` | Backup-and-restore won't save you. Without the key the credential ciphertexts are unrecoverable. See [Deployment](admin-deployment) for `MASTER_KEY` provisioning. |
 

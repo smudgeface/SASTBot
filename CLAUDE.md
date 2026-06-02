@@ -15,7 +15,7 @@ Then:
 - Postgres: `localhost:5432` (user `sastbot`, password `sastbot`, db `sastbot`)
 - Redis: `localhost:6379`
 
-First boot prints a bootstrap admin password to the backend logs — `docker compose logs backend | grep BOOTSTRAP`.
+First boot creates no admin — open the frontend and complete the first-run setup screen (`/setup`) to create your administrator account (or restore a backup to migrate). The dev-only `BOOTSTRAP_ADMIN_PASSWORD` env var still auto-creates the admin and skips setup for local iteration (rejected under `NODE_ENV=production`).
 
 ## ⚠️ Versioning policy — READ BEFORE TOUCHING SCHEMA OR CUTTING A RELEASE
 

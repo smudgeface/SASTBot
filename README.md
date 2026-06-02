@@ -48,7 +48,7 @@ docker compose -f docker/compose/docker-compose.yml --env-file .env up --build
 
 > **Note:** `--env-file .env` is required because the compose file lives in `docker/compose/` and Compose resolves `.env` relative to that directory, not the repo root.
 
-On first boot the backend seeds the default org and prints a bootstrap admin password to the container logs. Log in at <http://localhost:5173> with `admin@sastbot.local` and the printed password, then change it via the admin UI.
+On first boot the backend seeds the default org but creates no user. Open <http://localhost:5173> and you'll land on a first-run setup screen — create your administrator account (or restore an existing backup to migrate). The account is stored bcrypt-hashed and is included in backups. (Developers can set the dev-only `BOOTSTRAP_ADMIN_PASSWORD` to auto-create the admin and skip the screen; it's rejected under `NODE_ENV=production`.)
 
 | Service | URL |
 |---------|-----|

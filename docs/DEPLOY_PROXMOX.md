@@ -169,7 +169,11 @@ Capture that password — it is printed once. The admin email defaults to
 ## 7. First-login configuration
 
 1. Browse to `APP_ORIGIN` (e.g. `http://sastbot.<your-domain>`).
-2. Log in as the bootstrap admin; change the password.
+2. **First-run setup:** with an empty database the app shows a setup screen —
+   create your administrator account (email + a 12+ char password). Migrating
+   from another install? Use the screen's **Restore a backup** tab instead — it
+   restores your existing accounts and data (no throwaway account needed). The
+   account is stored bcrypt-hashed and travels in backups like any other.
 3. **Configure the LLM** under **Settings → LLM**: base URL, model, and a
    credential. Scans will not run until this is set — the LLM auth is stored
    (encrypted) in the DB and injected into the scan subprocess at run time, so
