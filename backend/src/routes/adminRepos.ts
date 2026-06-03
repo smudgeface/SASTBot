@@ -23,7 +23,7 @@ import {
   listScopesForRepo,
   updateRepo,
 } from "../services/repoService.js";
-import { purge as purgeRepoCache } from "../services/repoCache.js";
+import { purge as purgeRepoCache, cloneExists } from "../services/repoCache.js";
 import { checkGitConnection } from "../services/gitClone.js";
 import { triggerScan } from "../services/scanService.js";
 
@@ -47,7 +47,10 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
       const skip = (page - 1) * page_size;
       const all = await listRepos(orgId);
       const total = all.length;
-      const items = all.slice(skip, skip + page_size).map(repoToOut);
+      const page_items = all.slice(skip, skip + page_size);
+      const items = await Promise.all(
+        page_items.map(async (r) => repoToOut(r, await cloneExists(r.id))),
+      );
       return { items, total, page, page_size };
     },
   );
@@ -75,7 +78,7 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
           req.user?.orgId ?? null,
           req.user?.id ?? null,
         );
-        return reply.code(201).send(repoToOut(repo));
+        return reply.code(201).send(repoToOut(repo, await cloneExists(repo.id)));
       } catch (err) {
         if (err instanceof RepoConflictError) {
           return reply.code(409).send({ detail: err.message });
@@ -104,7 +107,7 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       try {
         const repo = await getRepo(req.params.id, req.user?.orgId ?? null);
-        return repoToOut(repo);
+        return repoToOut(repo, await cloneExists(repo.id));
       } catch (err) {
         if (err instanceof RepoNotFoundError) {
           return reply.code(404).send({ detail: "Repo not found" });
@@ -140,7 +143,7 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
           req.user?.orgId ?? null,
           req.user?.id ?? null,
         );
-        return repoToOut(repo);
+        return repoToOut(repo, await cloneExists(repo.id));
       } catch (err) {
         if (err instanceof RepoNotFoundError) {
           return reply.code(404).send({ detail: "Repo not found" });
@@ -177,7 +180,7 @@ const adminReposRoutes: FastifyPluginAsync = async (app) => {
         await getRepo(req.params.id, req.user?.orgId ?? null);
         await purgeRepoCache(req.params.id);
         const fresh = await getRepo(req.params.id, req.user?.orgId ?? null);
-        return repoToOut(fresh);
+        return repoToOut(fresh, await cloneExists(fresh.id));
       } catch (err) {
         if (err instanceof RepoNotFoundError) {
           return reply.code(404).send({ detail: "Repo not found" });

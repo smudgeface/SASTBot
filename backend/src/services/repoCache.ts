@@ -76,6 +76,18 @@ async function isGitWorkingTree(path: string): Promise<boolean> {
   return isDir(join(path, ".git"));
 }
 
+/**
+ * Live disk truth: does this repo currently have a real cached clone on disk
+ * (a `.git` working tree under `CLONE_CACHE_DIR/<repoId>`)? Does NOT consult the
+ * DB. Use this for the "cached" indicator instead of `repos.last_cloned_at`,
+ * which is a persisted timestamp that can outlive the on-disk clone — e.g. after
+ * restoring a DB backup onto a fresh host (the clone volume isn't in the dump),
+ * where every retained repo would otherwise falsely report "cached".
+ */
+export async function cloneExists(repoId: string): Promise<boolean> {
+  return isGitWorkingTree(repoCachePath(repoId));
+}
+
 export interface CloneOrRefreshInput {
   repoId: string;
   url: string;

@@ -296,7 +296,7 @@ export default function ReposPage() {
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onSelect={() => setPendingPurge(repo)}
-                          disabled={!repo.last_cloned_at}
+                          disabled={!repo.clone_present}
                         >
                           <Eraser className="h-4 w-4" /> Purge cache
                         </DropdownMenuItem>
@@ -382,7 +382,9 @@ function CacheCell({ repo }: { repo: Repo }) {
   if (!repo.retain_clone) {
     return <span className="text-xs text-muted-foreground italic">ephemeral</span>;
   }
-  if (!repo.last_cloned_at) {
+  // `clone_present` is live disk truth — not `last_cloned_at` (a persisted
+  // timestamp that survives a DB restore even though the clone volume doesn't).
+  if (!repo.clone_present) {
     return <span className="text-xs text-muted-foreground">retain (empty)</span>;
   }
   return (
@@ -390,7 +392,9 @@ function CacheCell({ repo }: { repo: Repo }) {
       <Badge variant="secondary" className="uppercase">
         cached
       </Badge>
-      <div className="text-muted-foreground mt-1">{formatDate(repo.last_cloned_at)}</div>
+      {repo.last_cloned_at && (
+        <div className="text-muted-foreground mt-1">{formatDate(repo.last_cloned_at)}</div>
+      )}
     </div>
   );
 }
