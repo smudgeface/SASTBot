@@ -15,7 +15,7 @@ export function useUsers() {
 export interface CreateUserInput {
   email: string;
   name?: string;
-  role: "admin" | "user";
+  role: "admin" | "member" | "user";
   password: string;
 }
 
@@ -31,7 +31,7 @@ export function useCreateUser() {
 export interface UpdateUserInput {
   id: string;
   name?: string | null;
-  role?: "admin" | "user";
+  role?: "admin" | "member" | "user";
   is_active?: boolean;
 }
 

@@ -4,6 +4,70 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-06-02 — M18: `member` role (RBAC middle tier) (v0.22.0)
+
+Adds a third role between `user` and `admin` for developers tasked with improving
+product security. Privilege ladder: **`user` < `member` < `admin`**. Plan:
+`docs/M18_MEMBER_ROLE_PLAN.md`. Built directly on M17 — no schema change (`role`
+is free TEXT, no CHECK constraint, no migration).
+
+**What shipped.**
+
+- **`requireMember` gate** in `plugins/auth.ts`, beside `requireAdmin`, off a
+  single `ROLE_RANK` table (`user:0 < member:1 < admin:2`); unrecognized DB role
+  values rank as `user` (fail closed). `requireAdmin` rewritten to use the same
+  ladder.
+- **Re-gated the 11 finding/Jira/component mutations in `routes/scopes.ts`**
+  (`requireAdmin` → `requireMember`): SAST triage, SCA dismiss, Jira
+  link/unlink/refresh, and component edit/delete/ignore/unignore. Each was audited
+  to confirm it's finding-state, not config. Scan control (`scans.ts`
+  cancel/delete, `adminRepos` scan-trigger) and all `admin*` config routes stay
+  `requireAdmin`.
+- **Mapper fix (the load-bearing bug).** `services/mappers.ts` `userToOut` /
+  `userToAdminOut` collapsed any non-admin to `"user"` — which would mislabel a
+  member and break `/auth/me` response serialization once the enum gained
+  `member`. Both now pass the real role through a `normalizeRole` boundary coercer.
+- **Role enum** gained `member` in `schemas.ts` (`RoleSchema`, `UserOutSchema`),
+  ordered admin→member→user.
+- **Last-admin invariant unchanged but verified:** `userService` counts
+  `role==="admin"` only, so a member never satisfies the floor — demoting the last
+  admin to member is rejected.
+- **Frontend:** new `lib/permissions.ts` (`canModifyFindings` = admin|member,
+  `canAdminister` = admin). `ScopeDetailPage` finding/Jira/component action buttons
+  now gate on `canModifyFindings` (shown to member+admin) — this also closed an
+  M17 gap where the Components-tab edit/delete/ignore controls and the "Scan now"
+  button rendered for everyone and relied on the backend 403. "Scan now" now gates
+  on `canAdminister`. Users page gained a `member` option in both role selects
+  (with accurate capability descriptions) and a distinct member badge; `AdminUser`
+  role type widened. Types regenerated.
+- **Dashboard non-admin fix.** The first summary card was "Repositories", sourced
+  from the admin-only `/admin/repos` endpoint — so it rendered "Unable to load" for
+  any non-admin. Repointed it to **Scopes** (count from the already-fetched
+  `useScopes`, which all roles can read; repo+path = scope, so it's strictly more
+  information anyway). Removes the broken card for member/user. A fuller dashboard
+  redesign is deferred.
+- **Tests:** `authGate.test.ts` (requireMember/requireAdmin matrix: admin/member/
+  user/anon + unrecognized-role fail-closed), `roleMapper.test.ts` (role round-trip
+  + coercion regression), and two `userMgmt.test.ts` cases (demote-last-admin-to-
+  member rejected; promote-user-to-member allowed).
+- **Version** 0.21.0 → 0.22.0 (all three surfaces + lockfile). Manual
+  `admin-users.md` role table expanded to three rows (and corrected the stale
+  "User can run scans" line — scans are admin-only). CLAUDE.md auth bullet updated.
+
+**What we learned.**
+
+- The mapper collapse was a latent trap planted by the two-role world: a
+  `role === "admin" ? "admin" : "user"` ternary is invisible until a third role
+  exists, then it silently downgrades. Boundary coercers (`normalizeRole`, like the
+  existing `toStatus`/`toTriggeredBy`) that validate against the live enum are the
+  right shape — they fail closed and surface drift instead of hiding it.
+- The UI was relying on backend 403s for component + scan actions (buttons shown to
+  everyone). Capability helpers turn that into intentional, role-aware UX and remove
+  the "click → toast error" path. Worth auditing the rest of the app for the same
+  pattern.
+
+---
+
 ## 2026-06-02 — M17: user management Phase 1 (local accounts + password change) (v0.21.0)
 
 First half of the two-phase user-management roadmap (Phase 2 = OIDC/Google

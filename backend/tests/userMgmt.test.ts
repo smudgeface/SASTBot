@@ -116,6 +116,26 @@ describe("updateUser — guards", () => {
     expect(h.tx.user.update).not.toHaveBeenCalled();
   });
 
+  it("rejects demoting the LAST active admin to member (member is not an admin)", async () => {
+    // M18: a member never counts toward the active-admin floor, so demoting the
+    // sole admin to member still removes the last admin and must be rejected.
+    h.tx.user.findFirst.mockResolvedValue(adminTarget());
+    h.tx.user.count.mockResolvedValue(0); // no other active admins
+    const { updateUser, LastAdminError } = await import("../src/services/userService.js");
+    await expect(updateUser("admin1", "u-target", null, { role: "member" })).rejects.toBeInstanceOf(LastAdminError);
+    expect(h.tx.user.update).not.toHaveBeenCalled();
+  });
+
+  it("allows promoting a user to member (no admin-count effect)", async () => {
+    h.tx.user.findFirst.mockResolvedValue(adminTarget({ role: "user", isActive: true }));
+    h.tx.user.count.mockResolvedValue(1);
+    h.tx.user.update.mockResolvedValue(adminTarget({ role: "member" }));
+    const { updateUser } = await import("../src/services/userService.js");
+    const res = await updateUser("admin1", "u-target", null, { role: "member" });
+    expect(res.role).toBe("member");
+    expect(h.tx.user.update).toHaveBeenCalledOnce();
+  });
+
   it("rejects disabling the LAST active admin", async () => {
     h.tx.user.findFirst.mockResolvedValue(adminTarget());
     h.tx.user.count.mockResolvedValue(0);

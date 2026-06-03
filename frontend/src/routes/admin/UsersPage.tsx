@@ -113,7 +113,12 @@ export default function UsersPage() {
                     </TableCell>
                     <TableCell className="text-muted-foreground">{u.name ?? "—"}</TableCell>
                     <TableCell>
-                      <Badge variant={u.role === "admin" ? "default" : "secondary"}>{u.role}</Badge>
+                      <Badge
+                        variant={u.role === "admin" ? "default" : u.role === "member" ? "outline" : "secondary"}
+                        className={u.role === "member" ? "border-primary/50 text-primary" : undefined}
+                      >
+                        {u.role}
+                      </Badge>
                     </TableCell>
                     <TableCell className="space-x-1">
                       {u.is_active ? (
@@ -162,7 +167,7 @@ function CreateUserDialog({ open, onClose, toast }: { open: boolean; onClose: ()
   const create = useCreateUser();
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [role, setRole] = useState<"admin" | "user">("user");
+  const [role, setRole] = useState<"admin" | "member" | "user">("user");
   const [password, setPassword] = useState("");
 
   const valid = email.includes("@") && password.length >= PASSWORD_MIN && !create.isPending;
@@ -198,11 +203,12 @@ function CreateUserDialog({ open, onClose, toast }: { open: boolean; onClose: ()
           </div>
           <div className="space-y-1.5">
             <Label>Role</Label>
-            <Select value={role} onValueChange={(v) => setRole(v as "admin" | "user")}>
+            <Select value={role} onValueChange={(v) => setRole(v as "admin" | "member" | "user")}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="user">User — view &amp; run scans</SelectItem>
-                <SelectItem value="admin">Admin — full access</SelectItem>
+                <SelectItem value="user">User — read-only + notes</SelectItem>
+                <SelectItem value="member">Member — triage findings, Jira &amp; components</SelectItem>
+                <SelectItem value="admin">Admin — full access (config &amp; scans)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -237,7 +243,7 @@ function EditUserDialog({
 }) {
   const update = useUpdateUser();
   const [name, setName] = useState(user.name ?? "");
-  const [role, setRole] = useState<"admin" | "user">(user.role === "admin" ? "admin" : "user");
+  const [role, setRole] = useState<"admin" | "member" | "user">(user.role);
   const [isActive, setIsActive] = useState(user.is_active);
 
   const submit = async () => {
@@ -269,10 +275,11 @@ function EditUserDialog({
           </div>
           <div className="space-y-1.5">
             <Label>Role</Label>
-            <Select value={role} onValueChange={(v) => setRole(v as "admin" | "user")} disabled={isSelf}>
+            <Select value={role} onValueChange={(v) => setRole(v as "admin" | "member" | "user")} disabled={isSelf}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="user">User</SelectItem>
+                <SelectItem value="member">Member</SelectItem>
                 <SelectItem value="admin">Admin</SelectItem>
               </SelectContent>
             </Select>

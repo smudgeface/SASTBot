@@ -1,6 +1,5 @@
-import { GitBranch, ShieldCheck, Zap } from "lucide-react";
+import { Layers, ShieldCheck, Zap } from "lucide-react";
 
-import { useRepos } from "@/api/queries/repos";
 import { useScans } from "@/api/queries/scans";
 import { useScopes } from "@/api/queries/scopes";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
@@ -11,11 +10,10 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export default function DashboardPage() {
   useDocumentTitle("Dashboard — SASTBot");
-  const repos = useRepos();
   const scans = useScans();
   const scopes = useScopes();
 
-  const repoCount = repos.data?.total ?? 0;
+  const scopeCount = scopes.data?.length ?? 0;
 
   const scansThisWeek = (() => {
     if (!scans.data) return null;
@@ -57,10 +55,10 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <SummaryCard
-          icon={GitBranch}
-          title="Repositories"
-          value={repos.isLoading ? "—" : String(repoCount)}
-          hint={repos.isError ? "Unable to load" : "Registered for scanning"}
+          icon={Layers}
+          title="Scopes"
+          value={scopes.isLoading ? "—" : String(scopeCount)}
+          hint={scopes.isError ? "Unable to load" : "Repo + path combinations"}
         />
         <SummaryCard
           icon={Zap}

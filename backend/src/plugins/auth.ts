@@ -12,6 +12,7 @@ declare module "fastify" {
   }
   interface FastifyInstance {
     authenticate(req: FastifyRequest, reply: FastifyReply): Promise<void>;
+    requireMember(req: FastifyRequest, reply: FastifyReply): Promise<void>;
     requireAdmin(req: FastifyRequest, reply: FastifyReply): Promise<void>;
     requireAdminOrSetupWindow(req: FastifyRequest, reply: FastifyReply): Promise<void>;
   }
@@ -22,6 +23,16 @@ declare module "fastify" {
  * `req.user` with the resolved User (or null). Route modules opt into
  * authentication via the exposed `authenticate` / `requireAdmin` preHandlers.
  */
+/**
+ * Privilege ladder: user < member < admin. Any unrecognized DB role value
+ * (the column is free TEXT) ranks as the least-privileged `user` — fail closed.
+ */
+const ROLE_RANK: Record<string, number> = { user: 0, member: 1, admin: 2 };
+function rankOf(role: string | null | undefined): number {
+  if (role == null) return -1;
+  return ROLE_RANK[role] ?? 0;
+}
+
 const authPlugin: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.decorateRequest("user", null);
 
@@ -58,6 +69,23 @@ const authPlugin: FastifyPluginAsync = async (app: FastifyInstance) => {
     },
   );
 
+  // Requires at least `member` rank (member or admin). Gates the finding /
+  // Jira / component-state mutations — the triage queue work a security-tasked
+  // developer does. Config (repos, credentials, settings, users, backup, key
+  // rotation) and scan control stay on requireAdmin.
+  app.decorate(
+    "requireMember",
+    async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      if (!req.user) {
+        await reply.code(401).send({ detail: "Not authenticated" });
+        return;
+      }
+      if (rankOf(req.user.role) < ROLE_RANK.member) {
+        await reply.code(403).send({ detail: "Member privileges required" });
+      }
+    },
+  );
+
   app.decorate(
     "requireAdmin",
     async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
@@ -65,7 +93,7 @@ const authPlugin: FastifyPluginAsync = async (app: FastifyInstance) => {
         await reply.code(401).send({ detail: "Not authenticated" });
         return;
       }
-      if (req.user.role !== "admin") {
+      if (rankOf(req.user.role) < ROLE_RANK.admin) {
         await reply.code(403).send({ detail: "Admin privileges required" });
       }
     },

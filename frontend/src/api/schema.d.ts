@@ -216,7 +216,7 @@ export interface paths {
                             id: string;
                             email: string;
                             /** @enum {string} */
-                            role: "admin" | "user";
+                            role: "admin" | "member" | "user";
                             /** Format: uuid */
                             org_id: string | null;
                             must_change_password: boolean;
@@ -309,7 +309,7 @@ export interface paths {
                             id: string;
                             email: string;
                             /** @enum {string} */
-                            role: "admin" | "user";
+                            role: "admin" | "member" | "user";
                             /** Format: uuid */
                             org_id: string | null;
                             must_change_password: boolean;
@@ -375,7 +375,7 @@ export interface paths {
                             id: string;
                             email: string;
                             /** @enum {string} */
-                            role: "admin" | "user";
+                            role: "admin" | "member" | "user";
                             /** Format: uuid */
                             org_id: string | null;
                             must_change_password: boolean;
@@ -502,7 +502,7 @@ export interface paths {
                             id: string;
                             email: string;
                             /** @enum {string} */
-                            role: "admin" | "user";
+                            role: "admin" | "member" | "user";
                             /** Format: uuid */
                             org_id: string | null;
                             must_change_password: boolean;
@@ -2673,7 +2673,7 @@ export interface paths {
                             email: string;
                             name: string | null;
                             /** @enum {string} */
-                            role: "admin" | "user";
+                            role: "admin" | "member" | "user";
                             is_active: boolean;
                             must_change_password: boolean;
                             last_login_at: string | null;
@@ -2723,7 +2723,7 @@ export interface paths {
                         email: string;
                         name?: string;
                         /** @enum {string} */
-                        role: "admin" | "user";
+                        role: "admin" | "member" | "user";
                         password: string;
                     };
                 };
@@ -2741,7 +2741,7 @@ export interface paths {
                             email: string;
                             name: string | null;
                             /** @enum {string} */
-                            role: "admin" | "user";
+                            role: "admin" | "member" | "user";
                             is_active: boolean;
                             must_change_password: boolean;
                             last_login_at: string | null;
@@ -2893,7 +2893,7 @@ export interface paths {
                     "application/json": {
                         name?: string | null;
                         /** @enum {string} */
-                        role?: "admin" | "user";
+                        role?: "admin" | "member" | "user";
                         is_active?: boolean;
                     };
                 };
@@ -2911,7 +2911,7 @@ export interface paths {
                             email: string;
                             name: string | null;
                             /** @enum {string} */
-                            role: "admin" | "user";
+                            role: "admin" | "member" | "user";
                             is_active: boolean;
                             must_change_password: boolean;
                             last_login_at: string | null;
@@ -3010,7 +3010,7 @@ export interface paths {
                             email: string;
                             name: string | null;
                             /** @enum {string} */
-                            role: "admin" | "user";
+                            role: "admin" | "member" | "user";
                             is_active: boolean;
                             must_change_password: boolean;
                             last_login_at: string | null;
@@ -5182,7 +5182,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Triage a SAST issue (admin-only) */
+        /** Triage a SAST issue (member or admin) */
         post: {
             parameters: {
                 query?: never;
@@ -5301,7 +5301,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Dismiss a SCA issue (admin-only) */
+        /** Dismiss a SCA issue (member or admin) */
         post: {
             parameters: {
                 query?: never;

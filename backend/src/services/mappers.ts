@@ -33,6 +33,7 @@ import type {
   ScanScopeOut,
   ScanWarning,
   Severity,
+  Role,
   UserAdminOut,
   UserOut,
 } from "../schemas.js";
@@ -104,11 +105,24 @@ function toTriggeredBy(value: string): ScanTriggeredBy {
     : "user";
 }
 
+/**
+ * Coerce a raw DB `role` string into the validated role enum. `role` is free
+ * TEXT in the schema, so a legacy or malformed value could otherwise break
+ * response serialization. Anything unrecognized falls back to the least-
+ * privileged "user" — fail closed, never up. Mirrors the toStatus/toTriggeredBy
+ * boundary-coercion pattern above.
+ */
+function normalizeRole(value: string): Role {
+  return value === "admin" || value === "member" || value === "user"
+    ? (value as Role)
+    : "user";
+}
+
 export function userToOut(user: User): UserOut {
   return {
     id: user.id,
     email: user.email,
-    role: user.role === "admin" ? "admin" : "user",
+    role: normalizeRole(user.role),
     org_id: user.orgId,
     must_change_password: user.mustChangePassword,
   };
@@ -120,7 +134,7 @@ export function userToAdminOut(user: User): UserAdminOut {
     id: user.id,
     email: user.email,
     name: user.name,
-    role: user.role === "admin" ? "admin" : "user",
+    role: normalizeRole(user.role),
     is_active: user.isActive,
     must_change_password: user.mustChangePassword,
     last_login_at: user.lastLoginAt ? user.lastLoginAt.toISOString() : null,
