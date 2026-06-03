@@ -248,17 +248,26 @@ function toSeverity(value: string): Severity {
 }
 
 export function scanRunToOut(
-  s: ScanRun & { scope?: Pick<ScanScope, "path"> | null },
+  s: ScanRun & {
+    scope?: Pick<ScanScope, "path"> | null;
+    repo?: Pick<Repo, "name"> | null;
+    // Resolved separately on the detail handler (no ScanRun→User relation); the
+    // list handler leaves it undefined → null, by design (not shown in the table).
+    triggeredByUser?: Pick<User, "email" | "name"> | null;
+  },
 ): ScanRunOut {
   return {
     id: s.id,
     org_id: s.orgId,
     repo_id: s.repoId,
+    repo_name: s.repo?.name ?? null,
     scope_id: s.scopeId,
     scope_path: s.scope?.path ?? "/",
     status: toStatus(s.status),
     triggered_by: toTriggeredBy(s.triggeredBy),
     triggered_by_user_id: s.triggeredByUserId,
+    triggered_by_user_email: s.triggeredByUser?.email ?? null,
+    triggered_by_user_name: s.triggeredByUser?.name ?? null,
     started_at: s.startedAt ? s.startedAt.toISOString() : null,
     finished_at: s.finishedAt ? s.finishedAt.toISOString() : null,
     error: s.error,

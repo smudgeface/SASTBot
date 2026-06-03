@@ -1,9 +1,8 @@
 import { FileSearch } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useMe } from "@/api/queries/auth";
-import { useRepos } from "@/api/queries/repos";
 import { useScans, useCancelScan } from "@/api/queries/scans";
 import { useToast } from "@/components/ui/use-toast";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
@@ -69,17 +68,10 @@ export default function ScansPage() {
   const navigate = useNavigate();
   const [page, setPage] = useState(1);
   const scans = useScans({ page, page_size: PAGE_SIZE });
-  const repos = useRepos();
   const { data: user } = useMe();
   const isAdmin = user?.role === "admin";
   const cancelScan = useCancelScan();
   const { toast } = useToast();
-
-  const repoNameById = useMemo(() => {
-    const m = new Map<string, string>();
-    repos.data?.items.forEach((r) => m.set(r.id, r.name));
-    return m;
-  }, [repos.data]);
 
   const items = scans.data?.items ?? [];
   const total = scans.data?.total ?? 0;
@@ -148,7 +140,7 @@ export default function ScansPage() {
                   onClick={() => navigate(`/scans/${scan.id}`)}
                 >
                   <TableCell className="font-medium">
-                    {repoNameById.get(scan.repo_id) ?? scan.repo_id}
+                    {scan.repo_name ?? scan.repo_id}
                     {scan.scope_path && scan.scope_path !== "/" ? (
                       <span className="ml-1 text-xs text-muted-foreground font-mono">
                         {scan.scope_path}

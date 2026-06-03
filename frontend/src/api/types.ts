@@ -277,12 +277,18 @@ export interface Scan {
   id: string;
   org_id: string | null;
   repo_id: string;
+  /** Repo display name, joined server-side. Null if the join was absent. */
+  repo_name: string | null;
   scope_id: string;
   /** Relative path within the repo this scan targeted (e.g. "/" or "services/api"). */
   scope_path: string;
   status: ScanStatus;
   triggered_by: ScanTrigger;
   triggered_by_user_id: string | null;
+  /** Who triggered the scan — populated on the scan-detail endpoint only
+   *  (null in the /scans list, and for api/schedule scans or deleted users). */
+  triggered_by_user_email: string | null;
+  triggered_by_user_name: string | null;
   started_at: string | null;
   finished_at: string | null;
   error: string | null;

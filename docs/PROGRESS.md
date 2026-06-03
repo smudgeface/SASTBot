@@ -4,6 +4,32 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-06-03 — Scan attribution + repo-name fix (v0.22.0, rides with M18)
+
+Two small scan-page improvements landed before cutting the 0.22.0 build.
+
+**What shipped.**
+
+- **Scan attribution (detail page).** The triggering user was already recorded
+  (`triggered_by_user_id`); now the scan-**detail** response also resolves the
+  user's email/name (one-row lookup on the detail handler — no `ScanRun→User`
+  relation, no migration) and the detail page shows a "Triggered by <email>" line.
+  Falls back to "Triggered via API / on schedule" or "a user (account removed)".
+  Deliberately **not** added to the `/scans` table or the scope page.
+- **`/scans` repo-name bug.** The table showed repo **UUIDs** because it resolved
+  names via a separate admin-only `useRepos()` call (empty → fell back to
+  `repo_id`); broken for every non-admin and for admins past the first repos page.
+  Fixed at the source: `repo_name` is now joined into the scan list + detail
+  response (`scanRunToOut` + `include: { repo }`), rendered directly, and the
+  `useRepos()` dependency dropped from both `ScansPage` and the detail page's name
+  (kept only for `source_url_template`). Mirrors the dashboard fix — removes
+  another admin-only call from a non-admin-visible page.
+- No version bump (rides in the already-set 0.22.0). Backend 582 + FE 6 green;
+  tsc clean; schema.d.ts regenerated; browser-verified table names + detail
+  attribution.
+
+---
+
 ## 2026-06-02 — M18: `member` role (RBAC middle tier) (v0.22.0)
 
 Adds a third role between `user` and `admin` for developers tasked with improving
