@@ -128,6 +128,11 @@ COPY --from=build /app/backend/package.json /app/backend/pnpm-lock.yaml* ./
 COPY --from=build /app/backend/node_modules ./node_modules
 COPY --from=build /app/backend/dist ./dist
 COPY --from=build /app/backend/prisma ./prisma
+# Runtime-loaded LLM prompt templates (promptLoader reads backend/prompts/*.md
+# at /app/backend/prompts). NOT under dist/, so it must be copied explicitly —
+# omitting it makes every LLM phase fail with ENOENT in prod (the dev image
+# only has them via the compose bind-mount).
+COPY --from=build /app/backend/prompts ./prompts
 
 # Pre-deploy backup + migrate + exec wrapper. See script header for the full
 # lifecycle and env vars. The compose `command:` provides the final exec
