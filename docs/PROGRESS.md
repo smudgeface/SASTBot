@@ -21,6 +21,16 @@ Post-0.22.0 fixes accumulating toward the next release. Version bumped to
   informational timestamp (it's not used in any logic — the worker keys off the
   `retain_clone` flag). No migration. Tests: `cloneExists` present/absent/empty-dir
   in `repoCache.test.ts`.
+- **Prod image was missing the LLM prompt templates.** The backend Dockerfile's
+  prod stage copied only `dist`, `node_modules`, `prisma`, `package.json` from
+  the build stage — never `prompts/`. So `/app/backend/prompts/*.md` didn't exist
+  in the prod image and every LLM phase failed with ENOENT (`sast_system`,
+  `sbom_system`, detection, recheck), which also skipped the SCA auto-fix sweep.
+  Dev was unaffected (compose bind-mounts the whole `backend/` dir). Fixed with
+  `COPY --from=build /app/backend/prompts ./prompts` in the prod stage. Surfaced
+  by the first real production scan on the IT host. (cdxgen-failed-to-produce-SBOM
+  on the same scan is a separate issue under investigation — the worker truncates
+  the cdxgen error to 200 chars, hiding the real cause; reproducing locally.)
 
 ---
 
