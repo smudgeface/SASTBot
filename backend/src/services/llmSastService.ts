@@ -81,6 +81,19 @@ const ConfidenceSchema = z
   });
 
 /**
+ * Postgres `@db.Uuid` columns reject non-UUID strings with a P2023 error at
+ * query time. The model occasionally fabricates a non-UUID `sca_issue_id`
+ * (e.g. a purl or package name — a 2026-06 FactorySmart scan emitted one
+ * starting with "p"), and querying ScaIssue by it threw P2023 and killed the
+ * whole scan at the final persist step. Gate on this before any findFirst /
+ * update keyed on an LLM-supplied id so one bad record is skipped, not fatal.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isLikelyUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
+
+/**
  * Derive a short summary from a longer reasoning paragraph when the LLM
  * omits both `summary` and `title`.  First sentence (up to a period,
  * exclamation, or question mark, or 160 chars — whichever comes first).
@@ -228,6 +241,9 @@ export const ReachabilityRecord = z.object({
   kind: z
     .union([z.literal("reachability"), z.literal("sca_reachability")])
     .transform(() => "reachability" as const),
+  // Free string at parse time — the model supplies it and can drift (it's
+  // validated as a real ScaIssue UUID at the persist sites, alongside the
+  // existing "unknown ScaIssue → skip" guard; see isLikelyUuid usage).
   sca_issue_id: z.string(),
   reachable: z.boolean(),
   confidence: ConfidenceSchema,
@@ -1760,6 +1776,17 @@ export async function persistDetection(
       });
       result.sastAbsenceUpserted++;
     } else if (r.kind === "reachability") {
+      // The model can fabricate a non-UUID id; querying the @db.Uuid column with
+      // it throws P2023 and crashes the scan. Gate before the DB, skip like the
+      // not-found case below.
+      if (!isLikelyUuid(r.sca_issue_id)) {
+        result.reachabilitySkipped++;
+        logger.warn(
+          { sca_issue_id: r.sca_issue_id, scopeId: input.scopeId },
+          "[llmSastService] reachability record has a non-UUID ScaIssue id — skipped",
+        );
+        continue;
+      }
       // Only update if the ScaIssue belongs to this scope (defense against the
       // model fabricating an id from a different scope).
       const scaIssue = await db.scaIssue.findFirst({
@@ -1841,6 +1868,17 @@ export async function persistReachabilityRecords(
   };
 
   for (const r of input.records) {
+    // The model can fabricate a non-UUID id; querying the @db.Uuid column with
+    // it throws P2023 and crashes the scan. Gate before the DB, skip like the
+    // not-found case below.
+    if (!isLikelyUuid(r.sca_issue_id)) {
+      result.reachabilitySkipped++;
+      logger.warn(
+        { sca_issue_id: r.sca_issue_id, scopeId: input.scopeId },
+        "[llmSastService] reachability record has a non-UUID ScaIssue id — skipped",
+      );
+      continue;
+    }
     // Only update if the ScaIssue belongs to this scope (defense against the
     // model fabricating an id from a different scope).
     const scaIssue = await db.scaIssue.findFirst({

@@ -31,6 +31,18 @@ Post-0.22.0 fixes accumulating toward the next release. Version bumped to
   by the first real production scan on the IT host. (cdxgen-failed-to-produce-SBOM
   on the same scan is a separate issue under investigation — the worker truncates
   the cdxgen error to 200 chars, hiding the real cause; reproducing locally.)
+- **Non-UUID `sca_issue_id` crashed scans at reachability persist.** A scan that
+  completed cdxgen + the full LLM detection pass then died at the final step with
+  Prisma `P2023` ("Error creating UUID … found 'p'") — the model fabricated a
+  reachability record whose `sca_issue_id` wasn't a UUID, and both persist sites
+  (`persistDetectionRecords`, `persistReachabilityRecords`) queried the `@db.Uuid`
+  ScaIssue column with the raw string, throwing and failing the whole job (after
+  ~$19 of detection LLM spend). Fixed with an `isLikelyUuid` gate before the DB,
+  skipping such records alongside the existing "unknown ScaIssue → skip" path
+  (kept the `sca_issue_id` Zod schema lenient — the existing fixture tests rely on
+  that, and the persist site already owns the not-found skip). Caught on the local
+  repro of the FactorySmart scan. Tests: persist skips a non-UUID id without any
+  DB call; a valid UUID still reaches the lookup.
 
 ---
 
