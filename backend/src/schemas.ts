@@ -477,12 +477,19 @@ export const ScanRunOutSchema = z.object({
   id: UuidSchema,
   org_id: UuidSchema.nullable(),
   repo_id: UuidSchema,
+  /** Repo display name, joined for convenience. Null when the join is absent. */
+  repo_name: z.string().nullable(),
   scope_id: UuidSchema,
   /** Relative path within the repo this scan targeted (e.g. "/" or "services/api"). */
   scope_path: z.string(),
   status: ScanStatusSchema,
   triggered_by: ScanTriggeredBySchema,
   triggered_by_user_id: UuidSchema.nullable(),
+  /** Email/name of the user who triggered the scan. Populated on the scan-detail
+   *  endpoint only (null in the list, and null for api/schedule-triggered scans
+   *  or when the user has since been deleted). */
+  triggered_by_user_email: z.string().nullable(),
+  triggered_by_user_name: z.string().nullable(),
   started_at: IsoDateTimeSchema.nullable(),
   finished_at: IsoDateTimeSchema.nullable(),
   error: z.string().nullable(),

@@ -1529,6 +1529,7 @@ export interface paths {
                             org_id: string | null;
                             /** Format: uuid */
                             repo_id: string;
+                            repo_name: string | null;
                             /** Format: uuid */
                             scope_id: string;
                             scope_path: string;
@@ -1538,6 +1539,8 @@ export interface paths {
                             triggered_by: "user" | "api" | "schedule";
                             /** Format: uuid */
                             triggered_by_user_id: string | null;
+                            triggered_by_user_email: string | null;
+                            triggered_by_user_name: string | null;
                             started_at: string | null;
                             finished_at: string | null;
                             error: string | null;
@@ -3364,6 +3367,7 @@ export interface paths {
                                 org_id: string | null;
                                 /** Format: uuid */
                                 repo_id: string;
+                                repo_name: string | null;
                                 /** Format: uuid */
                                 scope_id: string;
                                 scope_path: string;
@@ -3373,6 +3377,8 @@ export interface paths {
                                 triggered_by: "user" | "api" | "schedule";
                                 /** Format: uuid */
                                 triggered_by_user_id: string | null;
+                                triggered_by_user_email: string | null;
+                                triggered_by_user_name: string | null;
                                 started_at: string | null;
                                 finished_at: string | null;
                                 error: string | null;
@@ -3468,6 +3474,7 @@ export interface paths {
                             org_id: string | null;
                             /** Format: uuid */
                             repo_id: string;
+                            repo_name: string | null;
                             /** Format: uuid */
                             scope_id: string;
                             scope_path: string;
@@ -3477,6 +3484,8 @@ export interface paths {
                             triggered_by: "user" | "api" | "schedule";
                             /** Format: uuid */
                             triggered_by_user_id: string | null;
+                            triggered_by_user_email: string | null;
+                            triggered_by_user_name: string | null;
                             started_at: string | null;
                             finished_at: string | null;
                             error: string | null;
@@ -3655,6 +3664,7 @@ export interface paths {
                             org_id: string | null;
                             /** Format: uuid */
                             repo_id: string;
+                            repo_name: string | null;
                             /** Format: uuid */
                             scope_id: string;
                             scope_path: string;
@@ -3664,6 +3674,8 @@ export interface paths {
                             triggered_by: "user" | "api" | "schedule";
                             /** Format: uuid */
                             triggered_by_user_id: string | null;
+                            triggered_by_user_email: string | null;
+                            triggered_by_user_name: string | null;
                             started_at: string | null;
                             finished_at: string | null;
                             error: string | null;

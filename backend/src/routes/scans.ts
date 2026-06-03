@@ -59,7 +59,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       const [runs, total] = await Promise.all([
         prisma.scanRun.findMany({
           where,
-          include: { scope: { select: { path: true } } },
+          include: { scope: { select: { path: true } }, repo: { select: { name: true } } },
           orderBy: { createdAt: "desc" },
           skip,
           take: page_size,
@@ -89,12 +89,21 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
       const orgId = req.user?.orgId ?? null;
       const run = await prisma.scanRun.findFirst({
         where: { id: req.params.id, orgId: orgId ?? null },
-        include: { scope: { select: { path: true } } },
+        include: { scope: { select: { path: true } }, repo: { select: { name: true } } },
       });
       if (!run) {
         return reply.code(404).send({ detail: "Scan run not found" });
       }
-      return scanRunToOut(run);
+      // Resolve the triggering user for attribution (detail view only). No
+      // ScanRun→User relation exists, so this is a separate one-row lookup;
+      // null for api/schedule scans or a since-deleted user.
+      const triggeredByUser = run.triggeredByUserId
+        ? await prisma.user.findUnique({
+            where: { id: run.triggeredByUserId },
+            select: { email: true, name: true },
+          })
+        : null;
+      return scanRunToOut({ ...run, triggeredByUser });
     },
   );
 
@@ -120,7 +129,7 @@ const scansRoutes: FastifyPluginAsync = async (app) => {
         const updated = await cancelScanRun(req.params.id, orgId);
         const withScope = await prisma.scanRun.findUnique({
           where: { id: updated.id },
-          include: { scope: { select: { path: true } } },
+          include: { scope: { select: { path: true } }, repo: { select: { name: true } } },
         });
         return scanRunToOut(withScope!);
       } catch (err) {

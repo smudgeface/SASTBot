@@ -817,8 +817,11 @@ export default function ScanDetailPage() {
   const [sastDisplayed, setSastDisplayed] = useState<number | null>(null);
   const [componentsDisplayed, setComponentsDisplayed] = useState<number | null>(null);
 
+  // Repo name comes from the scan payload (works for every role); useRepos is
+  // kept only for source_url_template (admin-only; FileLinks degrade to plain
+  // spans for non-admins, same as before).
   const repo = repos.data?.items.find((r) => r.id === scan.data?.repo_id);
-  const repoName = repo?.name;
+  const repoName = scan.data?.repo_name ?? undefined;
   const sourceUrlTemplate = repo?.source_url_template ?? null;
   useDocumentTitle(repoName ? `${repoName} scan — SASTBot` : "Scan — SASTBot");
 
@@ -903,6 +906,15 @@ export default function ScanDetailPage() {
                   {!s.finished_at && " elapsed"}
                 </p>
               )}
+              <p className="text-sm text-muted-foreground">
+                {s.triggered_by_user_email
+                  ? `Triggered by ${s.triggered_by_user_name ? `${s.triggered_by_user_name} (${s.triggered_by_user_email})` : s.triggered_by_user_email}`
+                  : s.triggered_by === "api"
+                    ? "Triggered via API"
+                    : s.triggered_by === "schedule"
+                      ? "Triggered on schedule"
+                      : "Triggered by a user (account removed)"}
+              </p>
               <p className="text-xs text-muted-foreground/80 italic pt-1">
                 {formatDate(s.started_at ?? s.created_at)}
                 {" · Audit view — triage on the "}
