@@ -217,6 +217,13 @@ const EnvSchema = z.object({
   // Default 2 GiB (2 147 483 648 bytes). Enforced at the multipart level so
   // oversized uploads are rejected before they land on disk.
   DB_RESTORE_MAX_BYTES: z.coerce.number().int().positive().default(2_147_483_648),
+  // V8 old-space heap cap (in MB) for the cdxgen child process, passed via
+  // NODE_OPTIONS=--max-old-space-size. cdxgen runs as a separate Node process
+  // and only gets Node's default ~2 GB heap, which OOMs (SIGABRT, "JavaScript
+  // heap out of memory") on large repos. Default 4096 (2× the Node default);
+  // raise toward host RAM (prod has ~14 GB free, no container mem limit) if a
+  // very large repo still OOMs. Safe to bump via env without a code change.
+  CDXGEN_MAX_OLD_SPACE_MB: z.coerce.number().int().positive().default(4096),
 });
 
 // ---------------------------------------------------------------------------
@@ -243,6 +250,7 @@ export type AppConfig = {
   claudeRecheckTimeoutMs: number;
   claudeStdoutStalenessMs: number;
   dbRestoreMaxBytes: number;
+  cdxgenMaxOldSpaceMb: number;
 };
 
 let cached: AppConfig | null = null;
@@ -369,6 +377,7 @@ export function loadConfig(): AppConfig {
     claudeRecheckTimeoutMs: parsed.data.CLAUDE_RECHECK_TIMEOUT_MS,
     claudeStdoutStalenessMs: parsed.data.CLAUDE_STDOUT_STALENESS_MS,
     dbRestoreMaxBytes: parsed.data.DB_RESTORE_MAX_BYTES,
+    cdxgenMaxOldSpaceMb: parsed.data.CDXGEN_MAX_OLD_SPACE_MB,
   };
   return cached;
 }

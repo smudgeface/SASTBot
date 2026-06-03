@@ -28,9 +28,9 @@ Post-0.22.0 fixes accumulating toward the next release. Version bumped to
   `sbom_system`, detection, recheck), which also skipped the SCA auto-fix sweep.
   Dev was unaffected (compose bind-mounts the whole `backend/` dir). Fixed with
   `COPY --from=build /app/backend/prompts ./prompts` in the prod stage. Surfaced
-  by the first real production scan on the IT host. (cdxgen-failed-to-produce-SBOM
-  on the same scan is a separate issue under investigation — the worker truncates
-  the cdxgen error to 200 chars, hiding the real cause; reproducing locally.)
+  by the first real production scan on the IT host. (The
+  cdxgen-failed-to-produce-SBOM on the same scan was a separate issue — the
+  Node-heap OOM, fixed below.)
 - **Non-UUID `sca_issue_id` crashed scans at reachability persist.** A scan that
   completed cdxgen + the full LLM detection pass then died at the final step with
   Prisma `P2023` ("Error creating UUID … found 'p'") — the model fabricated a
@@ -43,6 +43,25 @@ Post-0.22.0 fixes accumulating toward the next release. Version bumped to
   that, and the persist site already owns the not-found skip). Caught on the local
   repro of the FactorySmart scan. Tests: persist skips a non-UUID id without any
   DB call; a valid UUID still reaches the lookup.
+- **cdxgen Node-heap OOM on large repos → empty SBOM.** The cdxgen child runs as
+  its own Node process and only got Node's default ~2 GB V8 old-space heap; on the
+  large FactorySmart repo it died with `signal: SIGABRT` / "FATAL ERROR: …
+  JavaScript heap out of memory" and wrote no output file, so the scan completed
+  with 0 SCA components. Prod has no container mem limit and ~14 GB free, so the
+  fix is simply more heap: `runCdxgen` now sets
+  `NODE_OPTIONS=--max-old-space-size=<CDXGEN_MAX_OLD_SPACE_MB>` (default **4096**,
+  2× the Node default; appended to any inherited `NODE_OPTIONS` so operator flags
+  aren't clobbered) — a new Zod-validated config env so the cap is tunable without
+  a code change. Kept `FETCH_LICENSE=true`: license data flows straight from
+  cdxgen into the Components-tab license column + the CRA SBOM artifact (the heap
+  bump, not dropping enrichment, is the real fix). Also **widened the cdxgen
+  error capture**: the failure reason was `err.message.slice(0, 200)`, which
+  truncated the OOM stack and sent us chasing a license/timeout red herring; it
+  now captures exit code + signal + stdout/stderr tails (`buildCdxgenFailureReason`,
+  bounded to 4 KB) so future failures self-diagnose. Validated end-to-end against
+  a real 260 MB clone: at 256 MB → reproduced exit 134 / OOM / 0 components; at
+  4096 MB → exit 0, 2759 components (2748 with license data). No migration; no
+  frontend change.
 
 ---
 
