@@ -20,7 +20,7 @@ export interface AdminUser {
   id: string;
   email: string;
   name: string | null;
-  role: "admin" | "user";
+  role: "admin" | "member" | "user";
   is_active: boolean;
   must_change_password: boolean;
   last_login_at: string | null;

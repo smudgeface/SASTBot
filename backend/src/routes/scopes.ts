@@ -868,7 +868,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.delete(
     "/scopes/:id/components/:componentId",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["scopes"],
         summary: "Delete a scope component (manual cleanup of dup rows)",
@@ -929,7 +929,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.patch(
     "/scopes/:id/components/:componentId",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["scopes"],
         summary: "Edit a scope component's identity fields (component_root, evidence_paths)",
@@ -1014,7 +1014,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.post(
     "/scopes/:id/components/:componentId/ignore",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["scopes"],
         summary: "Ignore a scope component and cascade suppression to its SCA issues",
@@ -1064,7 +1064,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.post(
     "/scopes/:id/components/:componentId/unignore",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["scopes"],
         summary: "Restore an ignored scope component and reverse the cascaded SCA suppressions",
@@ -1250,10 +1250,10 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.post(
     "/sast-issues/:id/triage",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["issues"],
-        summary: "Triage a SAST issue (admin-only)",
+        summary: "Triage a SAST issue (member or admin)",
         params: IdParamsSchema,
         body: SastIssueTriageBodySchema,
         response: {
@@ -1295,10 +1295,10 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.post(
     "/sca-issues/:id/dismiss",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["issues"],
-        summary: "Dismiss a SCA issue (admin-only)",
+        summary: "Dismiss a SCA issue (member or admin)",
         params: IdParamsSchema,
         body: ScaIssueDismissBodySchema,
         response: {
@@ -1411,7 +1411,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.post(
     "/sast-issues/:id/jira-ticket",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["issues"],
         summary: "Link a Jira ticket to a SAST issue (fetches metadata immediately)",
@@ -1438,7 +1438,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.delete(
     "/sast-issues/:id/jira-ticket",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["issues"],
         summary: "Unlink Jira ticket from a SAST issue",
@@ -1462,7 +1462,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.post(
     "/sca-issues/:id/jira-ticket",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["issues"],
         summary: "Link a Jira ticket to a SCA issue (fetches metadata immediately)",
@@ -1488,7 +1488,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.delete(
     "/sca-issues/:id/jira-ticket",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["issues"],
         summary: "Unlink Jira ticket from a SCA issue",
@@ -1547,7 +1547,7 @@ const scopesRoutes: FastifyPluginAsync = async (app) => {
   typed.post(
     "/admin/jira-tickets/:key/refresh",
     {
-      preHandler: [app.requireAdmin],
+      preHandler: [app.requireMember],
       schema: {
         tags: ["jira"],
         summary: "Force-refresh a Jira ticket from the remote API",

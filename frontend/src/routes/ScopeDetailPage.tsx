@@ -51,6 +51,7 @@ import type { JiraTicket } from "@/api/types";
 import { useTriggerScan, useCancelScan } from "@/api/queries/scans";
 import { useSettings } from "@/api/queries/settings";
 import { useMe } from "@/api/queries/auth";
+import { canAdminister, canModifyFindings } from "@/lib/permissions";
 import type { SastIssue, ScaIssue, ScanRunSummary } from "@/api/types";
 import { SCAN_PHASE_LABELS, SCAN_PHASE_UNITS, SCAN_PHASE_CAPS } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
@@ -381,9 +382,9 @@ function Pager({
 // ---------------------------------------------------------------------------
 
 function SastIssueRow({
-  issue, isAdmin, jiraTicket, scopeId, autoExpand, sourceUrlTemplate, onUserInteraction,
+  issue, canModify, jiraTicket, scopeId, autoExpand, sourceUrlTemplate, onUserInteraction,
 }: {
-  issue: SastIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null;
+  issue: SastIssue; canModify: boolean; jiraTicket?: JiraTicket | null;
   scopeId: string; autoExpand?: boolean; sourceUrlTemplate: string | null;
   onUserInteraction?: () => void;
 }) {
@@ -589,11 +590,11 @@ function SastIssueRow({
                   onUnlink={() => unlinkJira.mutate(issue.id)}
                   isPending={refreshJira.isPending || unlinkJira.isPending}
                 />
-              ) : isAdmin ? (
+              ) : canModify ? (
                 <JiraLinkInline onLink={handleLink} isPending={linkJira.isPending} error={linkError} />
               ) : null}
             </div>
-            {isAdmin && (
+            {canModify && (
               <div className="flex flex-wrap gap-2 pt-1">
                 {(issue.triage_status === "pending" || issue.triage_status === "error") ? (
                   // Open/pending → show decision buttons
@@ -664,7 +665,7 @@ function SastIssueRow({
 
 function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplayedTotalChange, onUserInteraction }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null; onDisplayedTotalChange?: (total: number) => void; onUserInteraction?: () => void }) {
   const { data: user } = useMe();
-  const isAdmin = user?.role === "admin";
+  const canModify = canModifyFindings(user?.role);
   const [filters, setFiltersRaw] = useState<SastIssueFilters>({ page: 1, page_size: 50 });
   // Wrap setFilters so any filter change also clears the URL row target —
   // a stale deep link shouldn't persist once the user moves on.
@@ -796,7 +797,7 @@ function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplay
               </TableHeader>
               <TableBody>
                 {data.items.map((issue) => (
-                  <SastIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} sourceUrlTemplate={sourceUrlTemplate} onUserInteraction={onUserInteraction} />
+                  <SastIssueRow key={issue.id} issue={issue} canModify={canModify} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} sourceUrlTemplate={sourceUrlTemplate} onUserInteraction={onUserInteraction} />
                 ))}
               </TableBody>
             </Table>
@@ -818,9 +819,9 @@ function SastIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, onDisplay
 // ---------------------------------------------------------------------------
 
 function ScaIssueRow({
-  issue, isAdmin, jiraTicket, scopeId, autoExpand, sourceUrlTemplate, onUserInteraction,
+  issue, canModify, jiraTicket, scopeId, autoExpand, sourceUrlTemplate, onUserInteraction,
 }: {
-  issue: ScaIssue; isAdmin: boolean; jiraTicket?: JiraTicket | null;
+  issue: ScaIssue; canModify: boolean; jiraTicket?: JiraTicket | null;
   scopeId: string; autoExpand?: boolean; sourceUrlTemplate: string | null;
   onUserInteraction?: () => void;
 }) {
@@ -1079,7 +1080,7 @@ function ScaIssueRow({
                 fields={issue}
                 sourceUrlTemplate={sourceUrlTemplate}
                 FileLink={FileLink}
-                admin={isAdmin ? {
+                admin={canModify ? {
                   isOpen:
                     issue.dismissed_status !== "false_positive" &&
                     issue.dismissed_status !== "suppressed" &&
@@ -1112,11 +1113,11 @@ function ScaIssueRow({
                   onUnlink={() => unlinkJira.mutate(issue.id)}
                   isPending={refreshJira.isPending || unlinkJira.isPending}
                 />
-              ) : isAdmin ? (
+              ) : canModify ? (
                 <JiraLinkInline onLink={handleLink} isPending={linkJira.isPending} error={linkError} />
               ) : null}
             </div>
-            {isAdmin && (
+            {canModify && (
               <div className="flex flex-wrap gap-2 pt-1">
                 {issue.dismissed_status === "pending" ? (
                   // Pending → confirm as real issue, or dismiss
@@ -1187,7 +1188,7 @@ function ScaIssueRow({
 
 function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, includeDevDeps, onDisplayedTotalChange, onUserInteraction }: { scopeId: string; highlightIssueId?: string; sourceUrlTemplate: string | null; includeDevDeps?: boolean; onDisplayedTotalChange?: (total: number) => void; onUserInteraction?: () => void }) {
   const { data: user } = useMe();
-  const isAdmin = user?.role === "admin";
+  const canModify = canModifyFindings(user?.role);
   const [filters, setFiltersRaw] = useState<ScaIssueFilters>({ page: 1, page_size: 50 });
   // Default to hiding dev-only unless the repo opts dev deps into scope, so the
   // tab matches what the SBOM includes. The operator can still toggle.
@@ -1366,7 +1367,7 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, includeDev
               </TableHeader>
               <TableBody>
                 {data.items.map((issue) => (
-                  <ScaIssueRow key={issue.id} issue={issue} isAdmin={isAdmin} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} sourceUrlTemplate={sourceUrlTemplate} onUserInteraction={onUserInteraction} />
+                  <ScaIssueRow key={issue.id} issue={issue} canModify={canModify} jiraTicket={issue.jira_ticket_id ? ticketById.get(issue.jira_ticket_id) : null} scopeId={scopeId} autoExpand={issue.id === highlightIssueId} sourceUrlTemplate={sourceUrlTemplate} onUserInteraction={onUserInteraction} />
                 ))}
               </TableBody>
             </Table>
@@ -1389,10 +1390,12 @@ function ScaIssuesTab({ scopeId, highlightIssueId, sourceUrlTemplate, includeDev
 
 /** Single expandable row in the scope-page ComponentsTab. */
 function ScopeComponentRow({
-  component, scopeId, sourceUrlTemplate, autoExpand, scaIssueMap, onUserInteraction, viewingIgnored,
+  component, scopeId, canModify, sourceUrlTemplate, autoExpand, scaIssueMap, onUserInteraction, viewingIgnored,
 }: {
   component: import("@/api/types").SbomComponent;
   scopeId: string;
+  /** member or admin — gates the ignore / restore / edit / delete actions. */
+  canModify: boolean;
   sourceUrlTemplate: string | null;
   autoExpand: boolean;
   scaIssueMap: Map<string, import("@/api/types").ScaIssue>;
@@ -1568,7 +1571,7 @@ function ScopeComponentRow({
           )}
         </TableCell>
         <TableCell className="text-right">
-          {viewingIgnored ? (
+          {canModify && (viewingIgnored ? (
             <button
               type="button"
               onClick={handleRestore}
@@ -1590,7 +1593,7 @@ function ScopeComponentRow({
             >
               <Ban className="h-3.5 w-3.5" />
             </button>
-          )}
+          ))}
         </TableCell>
       </TableRow>
 
@@ -1640,7 +1643,7 @@ function ScopeComponentRow({
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <p className="font-semibold text-xs text-muted-foreground uppercase tracking-wide">Evidence</p>
-                  {!editingEvidence && (
+                  {!editingEvidence && canModify && (
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
@@ -1947,6 +1950,8 @@ function ComponentsTab({
   expandedId?: string;
   onUserInteraction?: () => void;
 }) {
+  const { data: user } = useMe();
+  const canModify = canModifyFindings(user?.role);
   const [page, setPage] = useState(1);
   const [hasFindings, setHasFindings] = useState(false);
   // Default to hiding dev-only unless the repo opts dev deps into scope, so the
@@ -2062,6 +2067,7 @@ function ComponentsTab({
                     key={c.id}
                     component={c}
                     scopeId={scopeId}
+                    canModify={canModify}
                     sourceUrlTemplate={sourceUrlTemplate ?? null}
                     autoExpand={expandedId === c.id}
                     scaIssueMap={scaIssueMap}
@@ -2214,6 +2220,8 @@ export default function ScopeDetailPage() {
 
   const { data: scope, isLoading, isError } = useScopeDetail(id);
   const { data: appSettings } = useSettings();
+  const { data: me } = useMe();
+  const canTriggerScans = canAdminister(me?.role);
   const { data: scans } = useScopeScans(id, 1);
   const triggerScan = useTriggerScan();
   const { toast } = useToast();
@@ -2318,21 +2326,23 @@ export default function ScopeDetailPage() {
               </Button>
             </>
           )}
-          <Button
-            size="sm"
-            onClick={handleTriggerScan}
-            disabled={isScanning || !llmConfigured}
-            title={!llmConfigured ? "LLM not configured — set up LLM settings before scanning" : undefined}
-          >
-            {isScanning ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Scanning…
-              </>
-            ) : (
-              "Scan now"
-            )}
-          </Button>
+          {canTriggerScans && (
+            <Button
+              size="sm"
+              onClick={handleTriggerScan}
+              disabled={isScanning || !llmConfigured}
+              title={!llmConfigured ? "LLM not configured — set up LLM settings before scanning" : undefined}
+            >
+              {isScanning ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Scanning…
+                </>
+              ) : (
+                "Scan now"
+              )}
+            </Button>
+          )}
         </div>
       </div>
 

@@ -43,14 +43,15 @@ export const SETUP_PASSWORD_MIN_LENGTH = 12;
 export const UserOutSchema = z.object({
   id: UuidSchema,
   email: z.string(),
-  role: z.enum(["admin", "user"]),
+  role: z.enum(["admin", "member", "user"]),
   org_id: UuidSchema.nullable(),
   // True while the account is on a one-time admin-set password and must change it.
   must_change_password: z.boolean(),
 });
 export type UserOut = z.infer<typeof UserOutSchema>;
 
-export const RoleSchema = z.enum(["admin", "user"]);
+export const RoleSchema = z.enum(["admin", "member", "user"]);
+export type Role = z.infer<typeof RoleSchema>;
 
 /** Full admin-facing view of a user row (no password material). */
 export const UserAdminOutSchema = z.object({

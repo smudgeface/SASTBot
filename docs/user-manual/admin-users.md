@@ -6,10 +6,18 @@ backups.
 
 ## Roles
 
+SASTBot has three roles on a privilege ladder — **user < member < admin**. Each
+inherits everything the role below it can do.
+
 | Role | Can do |
 |---|---|
-| **Admin** | Everything — repos, credentials, settings, backups, and user management. |
-| **User** | View and run scans, browse findings. Cannot change configuration or manage users. |
+| **Admin** | Everything — plus configuration (repositories, credentials, settings, user management, backup/restore, key rotation) and scan control (start, cancel, delete scans). |
+| **Member** | Everything a user can, **plus** work the triage queue: set SAST triage status, dismiss SCA issues, link/unlink/refresh Jira tickets, and edit/hide/remove SBOM components. Cannot change configuration or start scans. |
+| **User** | Read-only across all findings, scopes, components, and SBOMs, plus add notes. Cannot triage, change configuration, or start scans. |
+
+> **Member** is for developers tasked with improving product security: they curate
+> findings and link tracking tickets, but configuration and scan control stay with
+> admins.
 
 ## Adding a user
 
