@@ -489,6 +489,35 @@ export interface CdxgenResult {
 }
 
 /**
+ * Build a rich failure-reason string from a failed cdxgen child process.
+ *
+ * Node's `execFile` rejection carries the child's exit `code`, terminating
+ * `signal`, and captured `stdout`/`stderr` on the error object (not in
+ * `message`). We surface all of them — capped to keep the stored warning
+ * bounded — because the heap OOM only shows up as a SIGABRT signal plus a
+ * "FATAL ERROR: ... JavaScript heap out of memory" line on stderr.
+ */
+export function buildCdxgenFailureReason(err: Error): string {
+  const e = err as Error & {
+    code?: number | string;
+    signal?: string;
+    stdout?: string | Buffer;
+    stderr?: string | Buffer;
+  };
+  const tail = (v: string | Buffer | undefined, n: number): string =>
+    v ? v.toString().trim().slice(-n) : "";
+  const parts = [err.message?.trim()].filter(Boolean) as string[];
+  if (e.code !== undefined) parts.push(`exit code: ${e.code}`);
+  if (e.signal) parts.push(`signal: ${e.signal}`);
+  const stderr = tail(e.stderr, 1500);
+  if (stderr) parts.push(`stderr: ${stderr}`);
+  const stdout = tail(e.stdout, 500);
+  if (stdout) parts.push(`stdout: ${stdout}`);
+  // Bound the total so a verbose child can't bloat the scan_runs warning row.
+  return parts.join(" | ").slice(0, 4000);
+}
+
+/**
  * Run cdxgen against `workingDir` and return the parsed CycloneDX JSON,
  * along with an explicit success flag so callers can distinguish a
  * legitimate zero-component scan (no manifest in the repo) from a hard
@@ -529,16 +558,33 @@ export async function runCdxgen(workingDir: string, excludes: string[] = []): Pr
       // bazel project type from auto-detection avoids the false positive
       // without losing real first-party SBOM data — cdxgen continues to
       // analyse npm / nuget / etc. as before.
+      // cdxgen runs as its own Node process and otherwise only gets Node's
+      // default ~2 GB V8 old-space heap, which OOMs (SIGABRT, "JavaScript heap
+      // out of memory") on large repos and silently yields a 0-component SBOM.
+      // Raise the cap via NODE_OPTIONS, appending to any inherited value so we
+      // don't clobber operator-set flags. Tunable via CDXGEN_MAX_OLD_SPACE_MB.
+      const maxOldSpaceMb = loadConfig().cdxgenMaxOldSpaceMb;
+      const inheritedNodeOptions = process.env["NODE_OPTIONS"]?.trim();
+      const nodeOptions = [inheritedNodeOptions, `--max-old-space-size=${maxOldSpaceMb}`]
+        .filter(Boolean)
+        .join(" ");
       await execFileAsync(
         cdxgenBin,
         ["-o", outputPath, "--exclude-type", "bazel", ...excludeArgs, "."],
         {
           cwd: workingDir,           // ← M6q: scope dir is the process root
           timeout: 5 * 60 * 1000, // 5-minute hard cap
+          // Capture the child's full stdout/stderr so a failure (e.g. the heap
+          // OOM above) is preserved in the warning instead of being truncated.
+          maxBuffer: 32 * 1024 * 1024,
           env: {
             ...process.env,
             CDXGEN_DEBUG_MODE: "false",
+            // License data feeds the Components-tab license column + the CRA
+            // SBOM artifact, so we keep the network enrichment pass on. The
+            // heap bump above is what fixes the OOM, not dropping this.
             FETCH_LICENSE: "true",
+            NODE_OPTIONS: nodeOptions,
           },
         },
       );
@@ -557,10 +603,16 @@ export async function runCdxgen(workingDir: string, excludes: string[] = []): Pr
       // worker knows not to trust the result for auto-fix purposes.
       // (No output but cdxgen exited 0 is theoretically possible — also
       // treat as failure, since cdxgen normally writes the file.)
+      //
+      // Capture the FULL diagnostic surface, not just err.message: the heap
+      // OOM reports "FATAL ERROR: ... JavaScript heap out of memory" on the
+      // child's stderr with signal SIGABRT, and the previous .slice(0, 200)
+      // truncated that away — sending us chasing the wrong root cause. Keep
+      // exit code + signal + stdout + stderr so future failures self-diagnose.
       const reason = execError instanceof Error
-        ? execError.message.slice(0, 200)
+        ? buildCdxgenFailureReason(execError)
         : "cdxgen produced no output file";
-      logger.warn({ workingDir, reason }, "[sbomService] cdxgen failed");
+      logger.warn({ workingDir, execError, reason }, "[sbomService] cdxgen failed");
       return { doc: empty, ok: false, failureReason: reason };
     }
 
