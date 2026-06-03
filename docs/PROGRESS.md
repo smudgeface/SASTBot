@@ -4,6 +4,26 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-06-03 — 0.23.0 (in development)
+
+Post-0.22.0 fixes accumulating toward the next release. Version bumped to
+`0.23.0` at the start of the cycle.
+
+- **Repo cache state is now live disk truth, not stale DB state.** The
+  Repositories "cached" badge (and whether "Purge cache" is enabled) read off
+  `repos.last_cloned_at` — a persisted column. After restoring a DB backup onto
+  a fresh host, every retained repo falsely showed "cached" because the backup
+  carries that column but **not** the `sastbot_repo_cache` clone volume. Fixed
+  by adding `cloneExists(repoId)` (stats `CLONE_CACHE_DIR/<repoId>` for a real
+  `.git` tree — the backend already mounts that volume, which is how Purge works)
+  and a per-request `clone_present` boolean on the repo response; the UI badge +
+  purge gate now key off `clone_present`. `last_cloned_at` is demoted to an
+  informational timestamp (it's not used in any logic — the worker keys off the
+  `retain_clone` flag). No migration. Tests: `cloneExists` present/absent/empty-dir
+  in `repoCache.test.ts`.
+
+---
+
 ## 2026-06-03 — Scan attribution + repo-name fix (v0.22.0, rides with M18)
 
 Two small scan-page improvements landed before cutting the 0.22.0 build.

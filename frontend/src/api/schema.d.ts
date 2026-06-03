@@ -603,6 +603,7 @@ export interface paths {
                                 llm_sbom_recheck_token_budget: number | null;
                                 llm_sast_token_budget: number | null;
                                 llm_recheck_token_budget: number | null;
+                                clone_present: boolean;
                                 last_cloned_at: string | null;
                                 created_at: string;
                             }[];
@@ -807,6 +808,7 @@ export interface paths {
                             llm_sbom_recheck_token_budget: number | null;
                             llm_sast_token_budget: number | null;
                             llm_recheck_token_budget: number | null;
+                            clone_present: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -916,6 +918,7 @@ export interface paths {
                             llm_sbom_recheck_token_budget: number | null;
                             llm_sast_token_budget: number | null;
                             llm_recheck_token_budget: number | null;
+                            clone_present: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -1093,6 +1096,7 @@ export interface paths {
                             llm_sbom_recheck_token_budget: number | null;
                             llm_sast_token_budget: number | null;
                             llm_recheck_token_budget: number | null;
+                            clone_present: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };
@@ -1278,6 +1282,7 @@ export interface paths {
                             llm_sbom_recheck_token_budget: number | null;
                             llm_sast_token_budget: number | null;
                             llm_recheck_token_budget: number | null;
+                            clone_present: boolean;
                             last_cloned_at: string | null;
                             created_at: string;
                         };

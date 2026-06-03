@@ -177,6 +177,10 @@ export interface Repo {
   llm_sast_token_budget: number | null;
   llm_recheck_token_budget: number | null;
   source_url_template: string | null;
+  /** Live disk truth: a cached clone exists on the server right now. Source of
+   *  truth for the "cached" badge — last_cloned_at is just an informational
+   *  timestamp and can be set even when this is false (e.g. after a DB restore). */
+  clone_present: boolean;
   last_cloned_at: string | null;
   created_at?: string;
   updated_at?: string;

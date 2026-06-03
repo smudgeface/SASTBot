@@ -17,7 +17,7 @@ import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { _resetConfigForTests } from "../src/config.js";
-import { RemoteUnreachableError, cloneOrRefresh } from "../src/services/repoCache.js";
+import { RemoteUnreachableError, cloneExists, cloneOrRefresh, repoCachePath } from "../src/services/repoCache.js";
 
 const GIT = "git";
 
@@ -114,5 +114,41 @@ describe("cloneOrRefresh — network error handling", () => {
     expect(existsSync(cacheDir)).toBe(true);
     expect(existsSync(join(cacheDir, "README.md"))).toBe(true);
     expect(existsSync(join(cacheDir, ".git"))).toBe(true);
+  });
+});
+
+describe("cloneExists — live disk truth (decouples cache badge from last_cloned_at)", () => {
+  let cacheRoot: string;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    cacheRoot = mkdtempSync(join(tmpdir(), "sastbot-cloneexists-"));
+    originalEnv = { ...process.env };
+    process.env.MASTER_KEY = randomBytes(32).toString("base64");
+    process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/db";
+    process.env.REDIS_URL = "redis://localhost:6379/0";
+    process.env.CLONE_CACHE_DIR = cacheRoot;
+    _resetConfigForTests();
+  });
+
+  afterAll(() => {
+    process.env = originalEnv ?? process.env;
+    _resetConfigForTests();
+  });
+
+  const repoId = "00000000-0000-0000-0000-0000000000aa";
+
+  it("is false when nothing is on disk (e.g. fresh host after a DB restore)", async () => {
+    expect(await cloneExists(repoId)).toBe(false);
+  });
+
+  it("is false for a dir that exists but has no .git working tree", async () => {
+    mkdirSync(repoCachePath(repoId), { recursive: true });
+    expect(await cloneExists(repoId)).toBe(false);
+  });
+
+  it("is true once a real .git working tree is present", async () => {
+    mkdirSync(join(repoCachePath(repoId), ".git"), { recursive: true });
+    expect(await cloneExists(repoId)).toBe(true);
   });
 });

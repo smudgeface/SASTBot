@@ -183,8 +183,12 @@ export function credentialToOut(
   };
 }
 
-export function repoToOut(repo: Repo): RepoOut {
+/** `clonePresent` is live disk truth (see repoCache.cloneExists); required so
+ *  call sites can't forget to compute it and silently fall back to stale DB
+ *  state. */
+export function repoToOut(repo: Repo, clonePresent: boolean): RepoOut {
   return {
+    clone_present: clonePresent,
     id: repo.id,
     org_id: repo.orgId,
     name: repo.name,

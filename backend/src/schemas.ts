@@ -390,8 +390,16 @@ export const RepoOutSchema = z.object({
   llm_sbom_recheck_token_budget: z.number().int().nullable(),
   llm_sast_token_budget: z.number().int().nullable(),
   llm_recheck_token_budget: z.number().int().nullable(),
-  /** Set whenever the worker finishes a clone/fetch for this repo. Null
-   *  means no local cache exists — "Purge cache" should be disabled. */
+  /** Live disk truth: a real cached clone exists on the clone volume right now.
+   *  Computed per-request by stat-ing CLONE_CACHE_DIR/<repoId> — NOT persisted.
+   *  This is the source of truth for the "cached" badge and whether "Purge
+   *  cache" is enabled, so a DB restore onto a fresh host (no clone volume)
+   *  correctly shows repos as not-cached. */
+  clone_present: z.boolean(),
+  /** Informational timestamp of the last successful clone/fetch. Persisted, so
+   *  it can be set even when `clone_present` is false (e.g. after a restore, or
+   *  if the clone was removed out-of-band). Do NOT use it as the cache
+   *  indicator — use `clone_present`. */
   last_cloned_at: IsoDateTimeSchema.nullable(),
   created_at: IsoDateTimeSchema,
 });
