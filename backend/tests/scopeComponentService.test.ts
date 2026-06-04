@@ -303,3 +303,42 @@ describe("upsertScaIssueFromDetection — worker sticky cascade (M14)", () => {
     vi.restoreAllMocks();
   });
 });
+
+describe("materializeRecoveredComponents — lockstep SCA recovery", () => {
+  it("carries a recovered component's open SCA issues forward so the sweep can't false-fix them", async () => {
+    const { prisma } = await import("../src/db.js");
+    const SCAN_RUN = "11111111-2222-4333-8444-555555555555";
+
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValueOnce([
+      { scopeId: "scope-1", name: "cuda-runtime" },
+      { scopeId: "scope-1", name: "OpenGL" },
+    ] as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>);
+    vi.spyOn(prisma.scopeComponent, "updateMany").mockResolvedValueOnce({ count: 2 });
+    const scaUpdate = vi
+      .spyOn(prisma.scaIssue, "updateMany")
+      .mockResolvedValueOnce({ count: 59 });
+
+    const { materializeRecoveredComponents } = await import("../src/services/scopeComponentService.js");
+    const res = await materializeRecoveredComponents(["sc-a", "sc-b"], SCAN_RUN);
+
+    expect(res).toEqual({ updated: 2, scaCarried: 59 });
+    // The SCA carry-forward must target the recovered components by name,
+    // only touch issues NOT already seen this run, and never overwrite a
+    // terminal (operator/resolved) decision.
+    const where = scaUpdate.mock.calls[0]![0].where as Record<string, unknown>;
+    expect(where.scopeId).toBe("scope-1");
+    expect(where.packageName).toEqual({ in: ["cuda-runtime", "OpenGL"] });
+    expect(where.lastSeenScanRunId).toEqual({ not: SCAN_RUN });
+    expect(where.dismissedStatus).toEqual({ notIn: ["fixed", "suppressed", "false_positive"] });
+    const data = scaUpdate.mock.calls[0]![0].data as Record<string, unknown>;
+    expect(data.lastSeenScanRunId).toBe(SCAN_RUN);
+
+    vi.restoreAllMocks();
+  });
+
+  it("is a no-op when nothing was recovered", async () => {
+    const { materializeRecoveredComponents } = await import("../src/services/scopeComponentService.js");
+    const res = await materializeRecoveredComponents([], "scan-x");
+    expect(res).toEqual({ updated: 0, scaCarried: 0 });
+  });
+});

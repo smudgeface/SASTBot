@@ -235,7 +235,12 @@ function analysisState(dismissedStatus: string): string {
     case "fixed": return "resolved";
     case "suppressed": return "not_affected";
     case "false_positive": return "false_positive";
-    // pending, confirmed, planned → in_triage
+    // An operator who confirmed the CVE (or scheduled a fix) has affirmed it
+    // affects this product and is exploitable until remediated → CycloneDX
+    // VEX `exploitable`. Only un-triaged `pending` stays `in_triage`.
+    case "confirmed":
+    case "planned": return "exploitable";
+    // pending (and any unknown future status) → in_triage
     default: return "in_triage";
   }
 }

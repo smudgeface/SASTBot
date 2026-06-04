@@ -289,8 +289,9 @@ describe("buildCuratedSbomJsonForScope — vulnerabilities[] (M11 Step 3)", () =
       { dismissedStatus: "suppressed", expectedState: "not_affected" },
       { dismissedStatus: "false_positive", expectedState: "false_positive" },
       { dismissedStatus: "pending", expectedState: "in_triage" },
-      { dismissedStatus: "confirmed", expectedState: "in_triage" },
-      { dismissedStatus: "planned", expectedState: "in_triage" },
+      // confirmed/planned = operator-affirmed affected & unremediated → VEX exploitable
+      { dismissedStatus: "confirmed", expectedState: "exploitable" },
+      { dismissedStatus: "planned", expectedState: "exploitable" },
     ];
 
     for (const { dismissedStatus, expectedState } of cases) {
