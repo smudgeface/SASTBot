@@ -1148,6 +1148,48 @@ backfillDevOnlyScaIssues().catch((err) => {
   logger.warn({ err }, "[worker] dev-only SCA backfill failed");
 });
 
+// 0.24.0: heal CVEs that an earlier auto-fix-sweep bug FALSELY marked "fixed".
+// Pre-0.24.0, when a component flaked out of one scan's direct detection but
+// was recovered by the scope-only recheck (kept present), its CVEs were not
+// carried forward, so the sweep resolved them even though the component is
+// still there. The lockstep fix in materializeRecoveredComponents prevents
+// recurrence, but a re-scan won't reopen already-fixed rows (the sweep never
+// touches terminal statuses, recovered components skip OSV/NVD) — so existing
+// bad data needs an explicit heal. Reopen any AUTO-fixed (dismissed_at IS NULL)
+// SCA issue whose component is still active AND present in its scope's latest
+// (successful) scan. Operator-fixed rows (dismissed_at set) are left alone.
+// Idempotent: reopened rows become 'pending' and no longer match 'fixed'.
+async function backfillReopenFalseFixedScaIssues(): Promise<void> {
+  const count = await prisma.$executeRaw`
+    WITH present AS (
+      SELECT sc.scope_id, sc.name
+      FROM scope_components sc
+      JOIN scan_scopes ss ON ss.id = sc.scope_id
+      WHERE sc.dismissed_status = 'active'
+        AND sc.last_seen_scan_run_id = ss.last_scan_run_id
+    )
+    UPDATE sca_issues s
+    SET dismissed_status = 'pending',
+        last_seen_scan_run_id = ss.last_scan_run_id,
+        last_seen_at = now(),
+        updated_at = now()
+    FROM scan_scopes ss
+    WHERE s.scope_id = ss.id
+      AND s.dismissed_status = 'fixed'
+      AND s.dismissed_at IS NULL
+      AND EXISTS (
+        SELECT 1 FROM present p
+        WHERE p.scope_id = s.scope_id AND p.name = s.package_name
+      )`;
+  if (count > 0) {
+    logger.info({ rowsReopened: count }, "[worker] backfillReopenFalseFixedScaIssues: reopened false-fixed CVEs of still-present components");
+  }
+}
+
+backfillReopenFalseFixedScaIssues().catch((err) => {
+  logger.warn({ err }, "[worker] false-fixed SCA reopen backfill failed");
+});
+
 // Repair SCA-issue manifest origins (file + line + snippet) from sbom_components.
 backfillManifestOrigin(prisma).catch((err) => {
   logger.warn({ err }, "[worker] manifest-origin backfill failed");
@@ -1611,13 +1653,13 @@ const worker = new Worker<ScanJobData>(
         // (what this scan actually found via cdxgen + LLM augmentation).
         if (recheckResult.recovered.length > 0) {
           try {
-            const { updated } = await materializeRecoveredComponents(
+            const { updated, scaCarried } = await materializeRecoveredComponents(
               recheckResult.recovered,
               scanRunId,
             );
             log.info(
-              { updated },
-              "[worker] recovered components: scope_components.lastSeenScanRunId bumped (scope-only)",
+              { updated, scaCarried },
+              "[worker] recovered components: scope_components + open SCA issues carried forward (scope-only)",
             );
           } catch (err) {
             log.error(

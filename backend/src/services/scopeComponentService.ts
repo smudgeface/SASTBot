@@ -28,6 +28,7 @@ import {
   type ComponentIdentity,
   type MatchResult,
 } from "./componentMatch.js";
+import { TERMINAL_SCA_STATUSES } from "./scaAutoFix.js";
 
 const logger = pino({ level: loadConfig().logLevel, name: "scopeComponentService" });
 
@@ -393,27 +394,67 @@ export async function persistScanComponentsToScopeState(
  * table (sbom_components) is immutable after ingestSbomFromArtifact runs.
  * Downstream OSV / NVD passes use the ingest-produced rows (direct observations
  * only); recovered components carry forward via scope_components for future scans.
+ *
+ * Lockstep SCA recovery: a recovered component is still present, so its known
+ * CVEs are still present too — they were just not re-queried this run (OSV/NVD
+ * run against direct observations only, to save tokens). We therefore bump
+ * `lastSeenScanRunId` on the component's still-open (non-terminal) SCA issues as
+ * well. Without this, the later SCA auto-fix sweep — which marks any issue not
+ * seen this run as `fixed` — would FALSELY resolve every CVE of a component the
+ * scan just confirmed is present. Terminal issues (operator decisions / already
+ * resolved) are left untouched so we never resurrect a real resolution.
  */
 export async function materializeRecoveredComponents(
   recoveredScopeComponentIds: string[],
   scanRunId: string,
-): Promise<{ updated: number }> {
-  if (recoveredScopeComponentIds.length === 0) return { updated: 0 };
+): Promise<{ updated: number; scaCarried: number }> {
+  if (recoveredScopeComponentIds.length === 0) return { updated: 0, scaCarried: 0 };
+
+  const now = new Date();
+  // Identify the recovered components so we can match their SCA issues. SCA
+  // issues link to components by (scopeId, packageName) — the same name-based
+  // linkage the SBOM builder and the per-row "linked issues" UI use.
+  const recovered = await prisma.scopeComponent.findMany({
+    where: { id: { in: recoveredScopeComponentIds } },
+    select: { scopeId: true, name: true },
+  });
 
   await prisma.scopeComponent.updateMany({
     where: { id: { in: recoveredScopeComponentIds } },
     data: {
       lastSeenScanRunId: scanRunId,
-      lastSeenAt: new Date(),
+      lastSeenAt: now,
     },
   });
 
+  // Group recovered component names by scope (usually one scope per call) and
+  // carry their open SCA issues forward in lockstep with the component.
+  const namesByScope = new Map<string, Set<string>>();
+  for (const r of recovered) {
+    let set = namesByScope.get(r.scopeId);
+    if (!set) { set = new Set(); namesByScope.set(r.scopeId, set); }
+    set.add(r.name);
+  }
+  let scaCarried = 0;
+  for (const [scopeId, names] of namesByScope) {
+    const res = await prisma.scaIssue.updateMany({
+      where: {
+        scopeId,
+        packageName: { in: [...names] },
+        lastSeenScanRunId: { not: scanRunId },
+        dismissedStatus: { notIn: TERMINAL_SCA_STATUSES },
+      },
+      data: { lastSeenScanRunId: scanRunId, lastSeenAt: now },
+    });
+    scaCarried += res.count;
+  }
+
   logger.info(
-    { scanRunId, updated: recoveredScopeComponentIds.length },
-    "[scopeComponentService] materializeRecoveredComponents: scope_components.lastSeenScanRunId bumped",
+    { scanRunId, updated: recoveredScopeComponentIds.length, scaCarried },
+    "[scopeComponentService] materializeRecoveredComponents: scope_components + open SCA issues carried forward",
   );
 
-  return { updated: recoveredScopeComponentIds.length };
+  return { updated: recoveredScopeComponentIds.length, scaCarried };
 }
 
 // ---------------------------------------------------------------------------

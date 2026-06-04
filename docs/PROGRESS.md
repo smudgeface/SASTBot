@@ -4,6 +4,63 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
+## 2026-06-04 — 0.24.0: SCA auto-fix false-fix bug
+
+**What shipped.** A correctness fix for the SCA auto-fix sweep falsely
+resolving real CVEs, found while investigating the FSS scope (operator
+noticed all CUDA CVEs showing `fixed` in grey/strikethrough yet
+un-findable on the SCA tab even with the Fixed filter).
+
+- **Root cause.** Component detection is non-deterministic for
+  generic/LLM-augmented libs (e.g. vendored `extern/Cuda`). When such a
+  component flakes out of one scan's *direct* detection, the
+  `llm_sbom_recheck` phase recovers it (keeps it present in
+  `scope_components`) — but recovered components deliberately skip the
+  OSV/NVD re-query, so their `sca_issues.lastSeenScanRunId` stayed at the
+  prior scan. The SCA auto-fix sweep (`lastSeenScanRunId != currentScan`
+  → `fixed`) then resolved every CVE of a component the scan had just
+  confirmed present. The sweep's degenerate guard only trips on *zero*
+  total detections, so a *partial* miss slipped through. Net: Components
+  tab shows the component present while all its CVEs read `fixed`; and
+  because they're fixed-AND-stale, the SCA tab (which pins to
+  `lastSeenScanRunId = latest`) hid them under every status filter.
+- **The fix (lockstep CVE recovery).** `materializeRecoveredComponents`
+  now carries a recovered component's still-open (non-terminal) SCA
+  issues forward in lockstep — bumping their `lastSeenScanRunId` so the
+  later sweep can't false-fix them. Terminal/operator decisions are left
+  untouched. Single source of truth for the terminal set:
+  `TERMINAL_SCA_STATUSES` (exported from `scaAutoFix.ts`).
+- **Data heal.** `backfillReopenFalseFixedScaIssues` (idempotent worker
+  boot hook) reopens auto-`fixed` issues (`dismissed_at IS NULL`) whose
+  component is still active+present in the scope's latest scan. Ran the
+  equivalent SQL against local dev: **239 CVEs reopened across 4 scopes,
+  0 false-fixes remaining**. The backfill heals prod on next deploy (a
+  re-scan would NOT — the sweep never touches terminal rows and recovered
+  components skip OSV/NVD).
+- **VEX preserved.** Per operator call, the curated SBOM keeps ALL issues
+  (resolved included) with their CycloneDX VEX `analysis.state`, and the
+  per-component "linked issues" UI list matches it. `analysisState` now
+  maps `confirmed`/`planned` → `exploitable` (was `in_triage`) so the
+  full VEX vocabulary is emitted.
+- **Verified.** Backend 589 tests (+2 for lockstep recovery) + tsc green;
+  frontend tsc green; `npm ci --dry-run` clean. End-to-end via the
+  running app: FSS CUDA now 42 open, CVE-2024-53876 visible on the SCA
+  tab with `in_triage` in the SBOM; scope vuln states 174 in_triage + 84
+  resolved (the 84 are legitimate — components genuinely gone).
+- **Version.** 0.23.0 → 0.24.0 (MINOR — operator-visible: false-fixed
+  CVEs reappear, SBOM VEX states change, new backfill). No schema
+  migration.
+
+**What we learned.** Two independent lifecycles (component-presence vs
+CVE-presence) that can disagree about the same scan are a latent
+false-data source. When a scan "recovers" or carries forward one entity,
+every dependent entity must move in lockstep — otherwise a downstream
+sweep keyed on staleness silently resolves real findings. The degenerate
+guard caught the all-or-nothing case but not partial misses; the
+structural fix (lockstep) is more robust than widening the guard.
+
+---
+
 ## 2026-06-03 — 0.23.0 (in development)
 
 Post-0.22.0 fixes accumulating toward the next release. Version bumped to
