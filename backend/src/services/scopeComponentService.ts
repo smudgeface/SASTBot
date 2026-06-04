@@ -1,7 +1,7 @@
 /**
  * scopeComponentService.ts — scope-level component state.
  *
- * The two exports of note:
+ * The key exports:
  *   - `persistScanComponentsToScopeState`: the in-flight scan writer. Called
  *     after Stage 2 (LLM augmentation) by the worker. Uses the deterministic
  *     componentMatch chain to match each emitted sbom_component against
@@ -9,8 +9,11 @@
  *     inserting on miss.
  *   - `materializeRecoveredComponents`: scope-only; bumps lastSeenScanRunId
  *     on the scope_components rows that the recheck marked "still_present".
- *     After E1, this function no longer writes to sbom_components — the
- *     per-scan audit table is immutable post-ingest.
+ *   - `synthesizeRecoveredSbomComponents`: writes sbom_components rows for
+ *     recovered scope_components (tagged discoveryMethod="recheck_recovery")
+ *     so the vulnerability-lookup stage (OSV/NVD/EOL) processes direct AND
+ *     recovered components uniformly. Called immediately after
+ *     materializeRecoveredComponents in the worker, before the OSV phase.
  *
  * The bootstrap backfill that previously ran on every worker boot
  * (backfillScopeComponentsFromLatestScans) was removed: it predated the
@@ -22,13 +25,13 @@
 import { pino } from "pino";
 import { prisma } from "../db.js";
 import { loadConfig } from "../config.js";
+import { Prisma } from "@prisma/client";
 import type { SbomComponent } from "@prisma/client";
 import {
   matchComponent,
   type ComponentIdentity,
   type MatchResult,
 } from "./componentMatch.js";
-import { TERMINAL_SCA_STATUSES } from "./scaAutoFix.js";
 
 const logger = pino({ level: loadConfig().logLevel, name: "scopeComponentService" });
 
@@ -383,41 +386,26 @@ export async function persistScanComponentsToScopeState(
 }
 
 // ---------------------------------------------------------------------------
-// E1: Scope-only recovery — bump lastSeenScanRunId on recovered components.
+// Recheck recovery — bump lastSeenScanRunId and synthesize sbom_components rows.
 // ---------------------------------------------------------------------------
 
 /**
  * After llmSbomRecheckService marks components as "still_present" (recovered),
  * update scope_components.lastSeenScanRunId = scanRunId for each recovered row.
  *
- * E1: this is now scope-only — no sbom_components writes. The per-scan audit
- * table (sbom_components) is immutable after ingestSbomFromArtifact runs.
- * Downstream OSV / NVD passes use the ingest-produced rows (direct observations
- * only); recovered components carry forward via scope_components for future scans.
- *
- * Lockstep SCA recovery: a recovered component is still present, so its known
- * CVEs are still present too — they were just not re-queried this run (OSV/NVD
- * run against direct observations only, to save tokens). We therefore bump
- * `lastSeenScanRunId` on the component's still-open (non-terminal) SCA issues as
- * well. Without this, the later SCA auto-fix sweep — which marks any issue not
- * seen this run as `fixed` — would FALSELY resolve every CVE of a component the
- * scan just confirmed is present. Terminal issues (operator decisions / already
- * resolved) are left untouched so we never resurrect a real resolution.
+ * This is scope-state only. The per-scan sbom_components rows for these
+ * components are written separately by synthesizeRecoveredSbomComponents, which
+ * must be called immediately after this function. Together they ensure the
+ * vulnerability-lookup stage (OSV/NVD/EOL) processes recovered components in
+ * the same pass as direct-observation components.
  */
 export async function materializeRecoveredComponents(
   recoveredScopeComponentIds: string[],
   scanRunId: string,
-): Promise<{ updated: number; scaCarried: number }> {
-  if (recoveredScopeComponentIds.length === 0) return { updated: 0, scaCarried: 0 };
+): Promise<{ updated: number }> {
+  if (recoveredScopeComponentIds.length === 0) return { updated: 0 };
 
   const now = new Date();
-  // Identify the recovered components so we can match their SCA issues. SCA
-  // issues link to components by (scopeId, packageName) — the same name-based
-  // linkage the SBOM builder and the per-row "linked issues" UI use.
-  const recovered = await prisma.scopeComponent.findMany({
-    where: { id: { in: recoveredScopeComponentIds } },
-    select: { scopeId: true, name: true },
-  });
 
   await prisma.scopeComponent.updateMany({
     where: { id: { in: recoveredScopeComponentIds } },
@@ -427,34 +415,89 @@ export async function materializeRecoveredComponents(
     },
   });
 
-  // Group recovered component names by scope (usually one scope per call) and
-  // carry their open SCA issues forward in lockstep with the component.
-  const namesByScope = new Map<string, Set<string>>();
-  for (const r of recovered) {
-    let set = namesByScope.get(r.scopeId);
-    if (!set) { set = new Set(); namesByScope.set(r.scopeId, set); }
-    set.add(r.name);
-  }
-  let scaCarried = 0;
-  for (const [scopeId, names] of namesByScope) {
-    const res = await prisma.scaIssue.updateMany({
-      where: {
-        scopeId,
-        packageName: { in: [...names] },
-        lastSeenScanRunId: { not: scanRunId },
-        dismissedStatus: { notIn: TERMINAL_SCA_STATUSES },
-      },
-      data: { lastSeenScanRunId: scanRunId, lastSeenAt: now },
-    });
-    scaCarried += res.count;
-  }
-
   logger.info(
-    { scanRunId, updated: recoveredScopeComponentIds.length, scaCarried },
-    "[scopeComponentService] materializeRecoveredComponents: scope_components + open SCA issues carried forward",
+    { scanRunId, updated: recoveredScopeComponentIds.length },
+    "[scopeComponentService] materializeRecoveredComponents: scope_components lastSeenScanRunId bumped",
   );
 
-  return { updated: recoveredScopeComponentIds.length, scaCarried };
+  return { updated: recoveredScopeComponentIds.length };
+}
+
+/**
+ * Synthesize sbom_components rows for components that the SBOM recheck
+ * confirmed are still present (recovered scope_components). Each row is tagged
+ * discoveryMethod="recheck_recovery" so the provenance is queryable but the
+ * vulnerability-lookup stage (OSV/NVD/EOL) needs no special-casing — it
+ * iterates sbom_components uniformly.
+ *
+ * Must be called AFTER materializeRecoveredComponents and BEFORE the OSV phase.
+ * The worker re-reads the components list after this call so OSV/NVD/EOL see
+ * the full set (direct + recovered).
+ *
+ * skipDuplicates guards the (scanRunId, purl) unique index: a recovered
+ * component should not already be in sbom_components for this scan run (it
+ * wasn't emitted by cdxgen/LLM augmentation), but the guard ensures safety
+ * if there is any purl collision.
+ */
+export async function synthesizeRecoveredSbomComponents(
+  recoveredScopeComponentIds: string[],
+  scanRunId: string,
+): Promise<{ inserted: number }> {
+  if (recoveredScopeComponentIds.length === 0) return { inserted: 0 };
+
+  const recoveredRows = await prisma.scopeComponent.findMany({
+    where: { id: { in: recoveredScopeComponentIds } },
+    select: {
+      name: true,
+      version: true,
+      purl: true,
+      ecosystem: true,
+      latestLicenses: true,
+      latestComponentType: true,
+      scope: true,
+      isDevOnly: true,
+      manifestFile: true,
+      componentRoot: true,
+      cpe: true,
+      evidence: true,
+      llmEvidence: true,
+    },
+  });
+
+  if (recoveredRows.length === 0) return { inserted: 0 };
+
+  const data = recoveredRows.map((sc) => ({
+    scanRunId,
+    name: sc.name,
+    version: sc.version ?? null,
+    purl: sc.purl,
+    ecosystem: sc.ecosystem ?? null,
+    licenses: sc.latestLicenses.length > 0 ? sc.latestLicenses : [],
+    componentType: sc.latestComponentType ?? "library",
+    scope: sc.scope ?? null,
+    isDevOnly: sc.isDevOnly,
+    manifestFile: sc.manifestFile ?? null,
+    discoveryMethod: "recheck_recovery" as const,
+    componentRoot: sc.componentRoot ?? null,
+    cpe: sc.cpe ?? null,
+    evidence: sc.evidence ?? [],
+    // Prisma requires Prisma.JsonNull (not JS null) for nullable JSON columns
+    // in createMany — otherwise TypeScript rejects the assignment.
+    llmEvidence: sc.llmEvidence ?? Prisma.JsonNull,
+    occurrences: [] as Prisma.InputJsonValue,
+  }));
+
+  const result = await prisma.sbomComponent.createMany({
+    data,
+    skipDuplicates: true,
+  });
+
+  logger.info(
+    { scanRunId, inserted: result.count, candidates: recoveredRows.length },
+    "[scopeComponentService] synthesizeRecoveredSbomComponents: sbom_components rows written for recovered components",
+  );
+
+  return { inserted: result.count };
 }
 
 // ---------------------------------------------------------------------------

@@ -3,10 +3,8 @@ import { type Prisma, type PrismaClient } from "@prisma/client";
 type Tx = PrismaClient | Prisma.TransactionClient;
 
 /** Statuses the auto-fix sweep must never overwrite — they're operator/terminal
- *  decisions. `fixed` is included so a re-run doesn't churn already-resolved rows.
- *  Exported so the scope-only component-recovery path (which carries a recovered
- *  component's still-open SCA issues forward in lockstep) uses the same set. */
-export const TERMINAL_SCA_STATUSES = ["fixed", "suppressed", "false_positive"];
+ *  decisions. `fixed` is included so a re-run doesn't churn already-resolved rows. */
+const TERMINAL_SCA_STATUSES = ["fixed", "suppressed", "false_positive"];
 
 export interface ScaSweepDecision {
   /** True when the sweep ran and marked the targeted findings "fixed". */

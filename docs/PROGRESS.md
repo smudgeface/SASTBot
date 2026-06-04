@@ -4,60 +4,59 @@ Chronological record of milestones. Each entry is dated and covers two things: *
 
 ---
 
-## 2026-06-04 — 0.24.0: SCA auto-fix false-fix bug
+## 2026-06-04 — 0.24.0: SCA auto-fix false-fix bug + SBOM stage-contract realignment
 
 **What shipped.** A correctness fix for the SCA auto-fix sweep falsely
 resolving real CVEs, found while investigating the FSS scope (operator
 noticed all CUDA CVEs showing `fixed` in grey/strikethrough yet
-un-findable on the SCA tab even with the Fixed filter).
+un-findable on the SCA tab even with the Fixed filter). Supersedes the
+lockstep band-aid from the initial 0.24.0 commit (`791f9a8`) with a
+structurally correct fix.
 
 - **Root cause.** Component detection is non-deterministic for
   generic/LLM-augmented libs (e.g. vendored `extern/Cuda`). When such a
   component flakes out of one scan's *direct* detection, the
   `llm_sbom_recheck` phase recovers it (keeps it present in
-  `scope_components`) — but recovered components deliberately skip the
-  OSV/NVD re-query, so their `sca_issues.lastSeenScanRunId` stayed at the
-  prior scan. The SCA auto-fix sweep (`lastSeenScanRunId != currentScan`
-  → `fixed`) then resolved every CVE of a component the scan had just
-  confirmed present. The sweep's degenerate guard only trips on *zero*
-  total detections, so a *partial* miss slipped through. Net: Components
-  tab shows the component present while all its CVEs read `fixed`; and
-  because they're fixed-AND-stale, the SCA tab (which pins to
-  `lastSeenScanRunId = latest`) hid them under every status filter.
-- **The fix (lockstep CVE recovery).** `materializeRecoveredComponents`
-  now carries a recovered component's still-open (non-terminal) SCA
-  issues forward in lockstep — bumping their `lastSeenScanRunId` so the
-  later sweep can't false-fix them. Terminal/operator decisions are left
-  untouched. Single source of truth for the terminal set:
-  `TERMINAL_SCA_STATUSES` (exported from `scaAutoFix.ts`).
+  `scope_components`) — but the prior approach (lockstep SCA carry-forward)
+  still skipped the OSV/NVD re-query for recovered components. The
+  structural problem: provenance (how a component was discovered) was
+  leaking into stage 2 (vuln lookup), which should only care about what the
+  SBOM says is present.
+- **The fix (SBOM stage-contract realignment).** The SBOM is the full stage
+  contract. After `materializeRecoveredComponents` bumps
+  `scope_components.lastSeenScanRunId`, the new
+  `synthesizeRecoveredSbomComponents` writes `sbom_components` rows for
+  each recovered component tagged `discoveryMethod="recheck_recovery"`. The
+  worker then re-reads the `components` list before the OSV phase — so
+  OSV/NVD/EOL process direct + recovered uniformly, `sca_issues.lastSeenScanRunId`
+  advances naturally, and the auto-fix sweep structurally cannot false-fix
+  them. The lockstep SCA carry-forward (`scaCarried` block in
+  `materializeRecoveredComponents`) is removed — it was a band-aid that
+  masked the root cause. No schema migration: `discoveryMethod` already
+  exists on `sbom_components`.
 - **Data heal.** `backfillReopenFalseFixedScaIssues` (idempotent worker
-  boot hook) reopens auto-`fixed` issues (`dismissed_at IS NULL`) whose
-  component is still active+present in the scope's latest scan. Ran the
-  equivalent SQL against local dev: **239 CVEs reopened across 4 scopes,
-  0 false-fixes remaining**. The backfill heals prod on next deploy (a
-  re-scan would NOT — the sweep never touches terminal rows and recovered
-  components skip OSV/NVD).
+  boot hook, retained) reopens auto-`fixed` issues (`dismissed_at IS NULL`)
+  whose component is still active+present in the scope's latest scan. Ran
+  the equivalent SQL against local dev: **239 CVEs reopened across 4 scopes,
+  0 false-fixes remaining**. The backfill heals pre-0.24.0 data on next
+  deploy; future scans are healed structurally.
 - **VEX preserved.** Per operator call, the curated SBOM keeps ALL issues
   (resolved included) with their CycloneDX VEX `analysis.state`, and the
   per-component "linked issues" UI list matches it. `analysisState` now
   maps `confirmed`/`planned` → `exploitable` (was `in_triage`) so the
   full VEX vocabulary is emitted.
-- **Verified.** Backend 589 tests (+2 for lockstep recovery) + tsc green;
-  frontend tsc green; `npm ci --dry-run` clean. End-to-end via the
-  running app: FSS CUDA now 42 open, CVE-2024-53876 visible on the SCA
-  tab with `in_triage` in the SBOM; scope vuln states 174 in_triage + 84
-  resolved (the 84 are legitimate — components genuinely gone).
-- **Version.** 0.23.0 → 0.24.0 (MINOR — operator-visible: false-fixed
-  CVEs reappear, SBOM VEX states change, new backfill). No schema
-  migration.
+- **Verified.** Backend 593 tests + tsc green; frontend tsc green; real-DB
+  round-trip of `synthesizeRecoveredSbomComponents` confirmed (discoveryMethod
+  tag, JSON fields, skipDuplicates) and no `discoveryMethod` branching anywhere
+  in the OSV/NVD/EOL path. No version re-bump (stays 0.24.0).
 
-**What we learned.** Two independent lifecycles (component-presence vs
-CVE-presence) that can disagree about the same scan are a latent
-false-data source. When a scan "recovers" or carries forward one entity,
-every dependent entity must move in lockstep — otherwise a downstream
-sweep keyed on staleness silently resolves real findings. The degenerate
-guard caught the all-or-nothing case but not partial misses; the
-structural fix (lockstep) is more robust than widening the guard.
+**What we learned.** Provenance (how you found something) must be *data*
+on the artifact — a `discoveryMethod` tag — never *control flow* in
+downstream stages. When we made the vuln-lookup stage branch on
+"was this a recheck recovery?", we inadvertently turned provenance into
+observable behavior that could produce wrong results. The fix is to ensure
+every stage reads only from the stage's input artifact (the SBOM), not from
+side-channels.
 
 ---
 
