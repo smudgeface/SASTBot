@@ -47,7 +47,7 @@ import {
   cleanupSbomTmp,
   runSbomAugmentation,
 } from "./services/llmSbomService.js";
-import { persistScanComponentsToScopeState, materializeRecoveredComponents } from "./services/scopeComponentService.js";
+import { persistScanComponentsToScopeState, materializeRecoveredComponents, synthesizeRecoveredSbomComponents } from "./services/scopeComponentService.js";
 import { runSbomRecheck } from "./services/llmSbomRecheckService.js";
 import { hasErrorWarnings } from "./services/scanWarnings.js";
 import type { ScanWarning } from "./schemas.js";
@@ -1647,27 +1647,38 @@ const worker = new Worker<ScanJobData>(
           "[worker] SBOM component recheck finished",
         );
 
-        // E1: scope-only recovery — bump scope_components.lastSeenScanRunId
-        // only. No sbom_components writes; no in-memory list extension.
-        // OSV / NVD phases run against direct-observation components only
-        // (what this scan actually found via cdxgen + LLM augmentation).
+        // Recovery: bump scope_components.lastSeenScanRunId, then synthesize
+        // sbom_components rows tagged discoveryMethod="recheck_recovery" so the
+        // vulnerability-lookup stage (OSV/NVD/EOL) processes recovered
+        // components uniformly alongside direct-observation components.
+        // The `components` list is re-read after synthesis (below) so OSV/NVD
+        // sees the full set.
         if (recheckResult.recovered.length > 0) {
           try {
-            const { updated, scaCarried } = await materializeRecoveredComponents(
+            const { updated } = await materializeRecoveredComponents(
+              recheckResult.recovered,
+              scanRunId,
+            );
+            const { inserted } = await synthesizeRecoveredSbomComponents(
               recheckResult.recovered,
               scanRunId,
             );
             log.info(
-              { updated, scaCarried },
-              "[worker] recovered components: scope_components + open SCA issues carried forward (scope-only)",
+              { updated, inserted },
+              "[worker] recovered components: scope_components bumped + sbom_components synthesized",
             );
           } catch (err) {
             log.error(
               { err: (err as Error).message },
-              "[worker] failed to bump lastSeenScanRunId on recovered components",
+              "[worker] failed to materialize/synthesize recovered components",
             );
           }
         }
+
+        // Re-read the components list so OSV/NVD/EOL see both direct-observation
+        // and recheck-recovered rows. Safe no-op if nothing was recovered
+        // (re-read just returns the same direct-only list).
+        components = await prisma.sbomComponent.findMany({ where: { scanRunId } });
 
         if (recheckResult.capped > 0) {
           const devExcludedNote = recheckResult.excludedDevOnly > 0

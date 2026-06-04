@@ -304,34 +304,23 @@ describe("upsertScaIssueFromDetection — worker sticky cascade (M14)", () => {
   });
 });
 
-describe("materializeRecoveredComponents — lockstep SCA recovery", () => {
-  it("carries a recovered component's open SCA issues forward so the sweep can't false-fix them", async () => {
+describe("materializeRecoveredComponents", () => {
+  it("bumps lastSeenScanRunId on recovered scope_components and returns updated count", async () => {
     const { prisma } = await import("../src/db.js");
     const SCAN_RUN = "11111111-2222-4333-8444-555555555555";
 
-    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValueOnce([
-      { scopeId: "scope-1", name: "cuda-runtime" },
-      { scopeId: "scope-1", name: "OpenGL" },
-    ] as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>);
     vi.spyOn(prisma.scopeComponent, "updateMany").mockResolvedValueOnce({ count: 2 });
-    const scaUpdate = vi
-      .spyOn(prisma.scaIssue, "updateMany")
-      .mockResolvedValueOnce({ count: 59 });
 
     const { materializeRecoveredComponents } = await import("../src/services/scopeComponentService.js");
     const res = await materializeRecoveredComponents(["sc-a", "sc-b"], SCAN_RUN);
 
-    expect(res).toEqual({ updated: 2, scaCarried: 59 });
-    // The SCA carry-forward must target the recovered components by name,
-    // only touch issues NOT already seen this run, and never overwrite a
-    // terminal (operator/resolved) decision.
-    const where = scaUpdate.mock.calls[0]![0].where as Record<string, unknown>;
-    expect(where.scopeId).toBe("scope-1");
-    expect(where.packageName).toEqual({ in: ["cuda-runtime", "OpenGL"] });
-    expect(where.lastSeenScanRunId).toEqual({ not: SCAN_RUN });
-    expect(where.dismissedStatus).toEqual({ notIn: ["fixed", "suppressed", "false_positive"] });
-    const data = scaUpdate.mock.calls[0]![0].data as Record<string, unknown>;
-    expect(data.lastSeenScanRunId).toBe(SCAN_RUN);
+    expect(res).toEqual({ updated: 2 });
+    expect(prisma.scopeComponent.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: ["sc-a", "sc-b"] } },
+        data: expect.objectContaining({ lastSeenScanRunId: SCAN_RUN }),
+      }),
+    );
 
     vi.restoreAllMocks();
   });
@@ -339,6 +328,106 @@ describe("materializeRecoveredComponents — lockstep SCA recovery", () => {
   it("is a no-op when nothing was recovered", async () => {
     const { materializeRecoveredComponents } = await import("../src/services/scopeComponentService.js");
     const res = await materializeRecoveredComponents([], "scan-x");
-    expect(res).toEqual({ updated: 0, scaCarried: 0 });
+    expect(res).toEqual({ updated: 0 });
+  });
+});
+
+describe("synthesizeRecoveredSbomComponents", () => {
+  const SCAN_RUN = "22222222-3333-4444-8555-666666666666";
+  const SCOPE_COMPONENT_ID_A = "aaaaaaaa-1111-4000-8000-aaaaaaaaaaaa";
+  const SCOPE_COMPONENT_ID_B = "bbbbbbbb-2222-4000-8000-bbbbbbbbbbbb";
+
+  function makeRecoveredScopeComponent(overrides: Record<string, unknown> = {}) {
+    return {
+      name: "cuda-runtime",
+      version: "11.0.0",
+      purl: "pkg:generic/cuda-runtime@11.0.0",
+      ecosystem: "generic",
+      latestLicenses: ["MIT"],
+      latestComponentType: "library",
+      scope: null,
+      isDevOnly: false,
+      manifestFile: null,
+      componentRoot: "extern/Cuda",
+      cpe: "cpe:2.3:a:nvidia:cuda:11.0.0:*:*:*:*:*:*:*",
+      evidence: [{ path: "extern/Cuda" }],
+      llmEvidence: null,
+      ...overrides,
+    };
+  }
+
+  it("inserts one sbom_components row per recovered scope_component tagged recheck_recovery", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValueOnce([
+      makeRecoveredScopeComponent(),
+    ] as unknown as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>);
+    vi.spyOn(prisma.sbomComponent, "createMany").mockResolvedValueOnce({ count: 1 });
+
+    const { synthesizeRecoveredSbomComponents } = await import("../src/services/scopeComponentService.js");
+    const res = await synthesizeRecoveredSbomComponents([SCOPE_COMPONENT_ID_A], SCAN_RUN);
+
+    expect(res).toEqual({ inserted: 1 });
+    const createManyCall = (prisma.sbomComponent.createMany as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      data: Record<string, unknown>[];
+      skipDuplicates: boolean;
+    };
+    expect(createManyCall.skipDuplicates).toBe(true);
+    expect(createManyCall.data).toHaveLength(1);
+    const row = createManyCall.data[0]!;
+    expect(row.scanRunId).toBe(SCAN_RUN);
+    expect(row.discoveryMethod).toBe("recheck_recovery");
+    expect(row.name).toBe("cuda-runtime");
+    expect(row.purl).toBe("pkg:generic/cuda-runtime@11.0.0");
+    expect(row.cpe).toBe("cpe:2.3:a:nvidia:cuda:11.0.0:*:*:*:*:*:*:*");
+    expect(row.componentRoot).toBe("extern/Cuda");
+    expect(row.occurrences).toEqual([]);
+
+    vi.restoreAllMocks();
+  });
+
+  it("inserts one row per recovered component when multiple are recovered", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValueOnce([
+      makeRecoveredScopeComponent({ name: "cuda-runtime", purl: "pkg:generic/cuda-runtime@11.0.0" }),
+      makeRecoveredScopeComponent({ name: "OpenGL", purl: "pkg:generic/OpenGL@4.6", componentRoot: "extern/OpenGL", cpe: null }),
+    ] as unknown as Awaited<ReturnType<typeof prisma.scopeComponent.findMany>>);
+    vi.spyOn(prisma.sbomComponent, "createMany").mockResolvedValueOnce({ count: 2 });
+
+    const { synthesizeRecoveredSbomComponents } = await import("../src/services/scopeComponentService.js");
+    const res = await synthesizeRecoveredSbomComponents([SCOPE_COMPONENT_ID_A, SCOPE_COMPONENT_ID_B], SCAN_RUN);
+
+    expect(res).toEqual({ inserted: 2 });
+    const createManyCall = (prisma.sbomComponent.createMany as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      data: Record<string, unknown>[];
+      skipDuplicates: boolean;
+    };
+    expect(createManyCall.data).toHaveLength(2);
+    expect(createManyCall.data.every((r) => r["discoveryMethod"] === "recheck_recovery")).toBe(true);
+
+    vi.restoreAllMocks();
+  });
+
+  it("is a no-op when no IDs are provided", async () => {
+    const { synthesizeRecoveredSbomComponents } = await import("../src/services/scopeComponentService.js");
+    const res = await synthesizeRecoveredSbomComponents([], SCAN_RUN);
+    expect(res).toEqual({ inserted: 0 });
+  });
+
+  it("returns inserted: 0 when no scope_component rows are found for the given IDs", async () => {
+    const { prisma } = await import("../src/db.js");
+
+    vi.spyOn(prisma.scopeComponent, "findMany").mockResolvedValueOnce([]);
+    const createManySpy = vi.spyOn(prisma.sbomComponent, "createMany");
+
+    const { synthesizeRecoveredSbomComponents } = await import("../src/services/scopeComponentService.js");
+    const res = await synthesizeRecoveredSbomComponents(["missing-id"], SCAN_RUN);
+
+    expect(res).toEqual({ inserted: 0 });
+    // createMany should not be called at all
+    expect(createManySpy).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
   });
 });
