@@ -69,8 +69,17 @@ backend/config.local.yaml
 Screencaps/
 SASTBot Initial Prompt.txt
 
-# Local Claude Code session state (settings, screenshots, worktrees) — never commit
-.claude/
+# Claude Code: TRACK .claude/ (shared skills + settings.json) but keep per-user
+# and machine-local state out of the repo. Any "*.local.md" file is local-only
+# and never committed — use it for sensitive sidecars (e.g. a skill's prod
+# connection target at .claude/skills/<name>/target.local.md, read via
+# ${CLAUDE_SKILL_DIR}). Also covers root CLAUDE.local.md.
+*.local.md
+.claude/settings.local.json
+.claude/*.local.json
+.claude/*.png
+.claude/*.lock
+.claude/worktrees/
 
 # Sensitive reference material — real customer/firmware audit findings, NOT part of
 # this product's source. Contains plaintext credentials; must never enter the repo.
