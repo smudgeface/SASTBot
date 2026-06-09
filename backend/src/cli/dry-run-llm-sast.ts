@@ -14,6 +14,7 @@ import { parseArgs } from "node:util";
 import path from "node:path";
 
 import { prisma } from "../db.js";
+import { buildThirdPartyPaths } from "../services/thirdPartyPaths.js";
 import {
   applyRecheckVerdicts,
   cleanupTmp,
@@ -29,7 +30,6 @@ async function main(): Promise<void> {
     options: {
       "scope-id": { type: "string" },
       "clone-dir": { type: "string" },
-      "token-budget": { type: "string" },
       "max-sca-hints": { type: "string" },
       // When set, the orchestrator persists results into a real ScanRun row
       // instead of just logging them. The new run is created up-front so we
@@ -50,12 +50,11 @@ async function main(): Promise<void> {
   if (!scopeId) {
     // eslint-disable-next-line no-console
     console.error(
-      "Usage: dry-run-llm-sast --scope-id <id> [--clone-dir /path] [--token-budget 300000] [--max-sca-hints 50]",
+      "Usage: dry-run-llm-sast --scope-id <id> [--clone-dir /path] [--max-sca-hints 50]",
     );
     process.exit(2);
   }
 
-  const tokenBudget = Number(values["token-budget"] ?? "300000");
   const maxScaHints = Number(values["max-sca-hints"] ?? "50");
 
   const scope = await prisma.scanScope.findUnique({
@@ -105,7 +104,6 @@ async function main(): Promise<void> {
 
   // ── --recheck-only branch ──────────────────────────────────────────────
   if (values["recheck-only"]) {
-    const recheckBudget = Number(values["token-budget"] ?? "50000");
     const maxRecheckIssues = Number(values["max-recheck-issues"] ?? "200");
 
     // Pull active SastIssues for the scope (the same set the worker would
@@ -131,7 +129,7 @@ async function main(): Promise<void> {
     const fakeScanRunId = `recheck-${Date.now().toString(36)}`;
     // eslint-disable-next-line no-console
     console.error(
-      `[dry-run] recheck-only: scope=${scope.id} cloneDir=${cloneDir} issues=${issues.length} budget=${recheckBudget}`,
+      `[dry-run] recheck-only: scope=${scope.id} cloneDir=${cloneDir} issues=${issues.length}`,
     );
 
     try {
@@ -143,7 +141,6 @@ async function main(): Promise<void> {
         // Dry-run is verdict-only; we don't exercise the duplicate_of merge
         // path here (no DB writes happen anyway). Leave the target list empty.
         duplicateTargets: [],
-        tokenBudget: recheckBudget,
         effortLevel: scope.repo.llmRecheckEffort,
         orgId: scope.repo.orgId ?? null,
       });
@@ -174,6 +171,8 @@ async function main(): Promise<void> {
             finishedAt: new Date(),
             llmInputTokens: result.usage.inputTokens,
             llmOutputTokens: result.usage.outputTokens,
+            llmCacheReadTokens: result.usage.cacheReadInputTokens,
+            llmCacheWriteTokens: result.usage.cacheCreationInputTokens,
             llmRequestCount: result.usage.requestCount,
           },
         });
@@ -227,9 +226,26 @@ async function main(): Promise<void> {
     scanRunId = `dryrun-${Date.now().toString(36)}`;
   }
 
+  // Third-party exclusion: union of configured vendoredDirs and the SBOM
+  // component roots. The dry-run doesn't produce its own SBOM, so source the
+  // component roots from the scope's most recent scan run that has them.
+  const configuredVendoredDirs =
+    scope.repo.vendoredDirs?.length > 0
+      ? scope.repo.vendoredDirs
+      : ["extern/", "third-party/", "vendor/"];
+  const sbomSourceRun = await prisma.scanRun.findFirst({
+    where: { scopeId: scope.id, components: { some: { componentRoot: { not: null } } } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  const thirdPartyPaths = await buildThirdPartyPaths(
+    sbomSourceRun?.id ?? scanRunId,
+    configuredVendoredDirs,
+  );
+
   // eslint-disable-next-line no-console
   console.error(
-    `[dry-run] scope=${scope.id} repo=${scope.repo.name}@${scope.repo.defaultBranch} cloneDir=${cloneDir} scaHints=${scaHints.length} budget=${tokenBudget} persist=${values.persist} scanRunId=${scanRunId}`,
+    `[dry-run] scope=${scope.id} repo=${scope.repo.name}@${scope.repo.defaultBranch} cloneDir=${cloneDir} scaHints=${scaHints.length} thirdPartyPaths=${thirdPartyPaths.length} (sbomRun=${sbomSourceRun?.id ?? "none"}) persist=${values.persist} scanRunId=${scanRunId}`,
   );
 
   try {
@@ -240,8 +256,8 @@ async function main(): Promise<void> {
       repoName: scope.repo.name,
       repoBranch: scope.repo.defaultBranch,
       ignorePaths: scope.repo.ignorePaths as string[],
+      thirdPartyPaths,
       scaHints,
-      tokenBudget,
       effortLevel: scope.repo.llmSastEffort,
       orgId: scope.repo.orgId ?? null,
     });
@@ -284,6 +300,8 @@ async function main(): Promise<void> {
           finishedAt: new Date(),
           llmInputTokens: result.usage.inputTokens,
           llmOutputTokens: result.usage.outputTokens,
+          llmCacheReadTokens: result.usage.cacheReadInputTokens,
+          llmCacheWriteTokens: result.usage.cacheCreationInputTokens,
           llmRequestCount: result.usage.requestCount,
         },
       });

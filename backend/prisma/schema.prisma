@@ -126,15 +126,9 @@ model Repo {
   sourceUrlTemplate   String?   @map("source_url_template")
   isActive            Boolean   @default(true) @map("is_active")
   // M6: SAST is performed by a single Claude Code CLI agentic pass which
-  // also covers reachability + vendored-library detection. The four budgets
-  // bound the SBOM augmentation, SBOM recheck, SAST detection, and SAST
-  // recheck passes respectively. NULL → worker falls back to the compiled-in
-  // default (200k / 50k / 300k / 50k). Set per-repo when a codebase is
-  // unusually large or trivially small and the default wastes / exhausts tokens.
-  llmSbomTokenBudget       Int?    @map("llm_sbom_token_budget")
-  llmSbomRecheckTokenBudget Int?   @map("llm_sbom_recheck_token_budget")
-  llmSastTokenBudget        Int?   @map("llm_sast_token_budget")
-  llmRecheckTokenBudget     Int?   @map("llm_recheck_token_budget")
+  // also covers reachability + vendored-library detection. Per-pass token
+  // budgets were removed in v0.25.0 — the model self-paces and the wall-clock
+  // cap is the runaway backstop; progress is reported as raw token counts.
   // Effort level passed to `claude -p --effort`. Detection is open-ended
   // search and benefits from xhigh on Opus 4.7 (per docs guidance for
   // coding/agentic work). Recheck is narrow verification and is fine at
@@ -235,6 +229,11 @@ model ScanRun {
   warnings                Json      @default("[]")
   llmInputTokens          Int       @default(0) @map("llm_input_tokens")
   llmOutputTokens         Int       @default(0) @map("llm_output_tokens")
+  // Raw cache-token counts (claude prompt caching). Stored separately so the
+  // cost-weighted "effective token" metric is computed at read time and the
+  // weights stay tunable without re-scanning. See services/tokenCost.ts.
+  llmCacheReadTokens      Int       @default(0) @map("llm_cache_read_tokens")
+  llmCacheWriteTokens     Int       @default(0) @map("llm_cache_write_tokens")
   llmRequestCount         Int       @default(0) @map("llm_request_count")
   sastFindingCount        Int       @default(0) @map("sast_finding_count")
   confirmedReachableCount Int       @default(0) @map("confirmed_reachable_count")

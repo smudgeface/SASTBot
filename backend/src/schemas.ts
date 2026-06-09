@@ -311,18 +311,6 @@ export const RepoCreateSchema = z.object({
   llm_sbom_effort: LlmEffortSchema.default("medium"),
   /** SBOM Component Recheck Stage 2: effort level for the recheck pass. */
   llm_sbom_recheck_effort: LlmEffortSchema.default("medium"),
-  /** Per-repo token budget for the LLM SBOM augmentation pass. NULL = use
-   *  the worker's compiled-in default (200 000). Must be > 0 when set. */
-  llm_sbom_token_budget: z.number().int().min(1).nullable().optional(),
-  /** Per-repo token budget for the SBOM component recheck pass. NULL = use
-   *  the worker's compiled-in default (50 000). Must be > 0 when set. */
-  llm_sbom_recheck_token_budget: z.number().int().min(1).nullable().optional(),
-  /** Per-repo token budget for the LLM SAST detection pass. NULL = use
-   *  the worker's compiled-in default (300 000). Must be > 0 when set. */
-  llm_sast_token_budget: z.number().int().min(1).nullable().optional(),
-  /** Per-repo token budget for the SAST recheck pass. NULL = use
-   *  the worker's compiled-in default (50 000). Must be > 0 when set. */
-  llm_recheck_token_budget: z.number().int().min(1).nullable().optional(),
   credential_id: UuidSchema.nullable().optional(),
   // NOTE: the contract names the inline field `credential`, NOT `new_credential`.
   credential: CredentialCreateSchema.nullable().optional(),
@@ -349,10 +337,6 @@ export const RepoUpdateSchema = z.object({
   vendored_dirs: z.array(z.string()).optional(),
   llm_sbom_effort: LlmEffortSchema.optional(),
   llm_sbom_recheck_effort: LlmEffortSchema.optional(),
-  llm_sbom_token_budget: z.number().int().min(1).nullable().optional(),
-  llm_sbom_recheck_token_budget: z.number().int().min(1).nullable().optional(),
-  llm_sast_token_budget: z.number().int().min(1).nullable().optional(),
-  llm_recheck_token_budget: z.number().int().min(1).nullable().optional(),
   credential_id: UuidSchema.nullable().optional(),
   credential: CredentialCreateSchema.nullable().optional(),
 });
@@ -385,11 +369,6 @@ export const RepoOutSchema = z.object({
   llm_sbom_effort: LlmEffortSchema,
   /** SBOM Component Recheck Stage 2: effort for the recheck pass. */
   llm_sbom_recheck_effort: LlmEffortSchema,
-  /** Per-repo token budgets. NULL means the worker uses its compiled-in default. */
-  llm_sbom_token_budget: z.number().int().nullable(),
-  llm_sbom_recheck_token_budget: z.number().int().nullable(),
-  llm_sast_token_budget: z.number().int().nullable(),
-  llm_recheck_token_budget: z.number().int().nullable(),
   /** Live disk truth: a real cached clone exists on the clone volume right now.
    *  Computed per-request by stat-ing CLONE_CACHE_DIR/<repoId> — NOT persisted.
    *  This is the source of truth for the "cached" badge and whether "Purge

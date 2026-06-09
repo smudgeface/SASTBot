@@ -316,8 +316,15 @@ export interface RunDetectionInput {
   repoName: string;
   repoBranch: string;
   ignorePaths: string[];
+  /**
+   * Repo-relative paths to treat as third-party / vendored and exclude from SAST
+   * analysis — third-party code is covered by SCA/CVE, so spending detection
+   * budget auditing it is waste. Matched as a path segment anywhere in the tree,
+   * not just at the root. Built by `buildThirdPartyPaths()` — the union of the
+   * repo's configured `vendoredDirs` and the SBOM's per-component roots.
+   */
+  thirdPartyPaths: string[];
   scaHints: ScaHintInput[];
-  tokenBudget: number;
   /** Effort level for `claude -p --effort`. */
   effortLevel: string;
   orgId: string | null;
@@ -818,9 +825,17 @@ async function spawnClaudeAndStream(input: SpawnClaudeInput): Promise<SpawnClaud
     };
 
     proc.stdout.setEncoding("utf8");
+    // Opt-in full-stream tee for diagnostics — set SASTBOT_RAW_STDOUT_DUMP=<file>
+    // to capture the verbatim claude stream-json (tool_use Read/Grep events
+    // included). Unlike SASTBOT_RAW_STREAM_DUMP (emitted findings only), this
+    // shows which files the model actually opened. Off by default.
+    const rawStdoutDumpPath = process.env.SASTBOT_RAW_STDOUT_DUMP;
     proc.stdout.on("data", (chunk: string) => {
       // Any stdout activity resets the staleness countdown.
       resetStalenessTimer();
+      if (rawStdoutDumpPath) {
+        try { fsAppendSync(rawStdoutDumpPath, chunk); } catch { /* best-effort */ }
+      }
       stdoutBuf += chunk;
       const lines = stdoutBuf.split("\n");
       stdoutBuf = lines.pop() ?? "";
@@ -881,6 +896,9 @@ export async function runDetection(input: RunDetectionInput): Promise<RunDetecti
   const ignorePathsBlock = input.ignorePaths.length > 0
     ? input.ignorePaths.map((p) => `  - ${p}`).join("\n")
     : "  (none)";
+  const thirdPartyPathsBlock = input.thirdPartyPaths.length > 0
+    ? input.thirdPartyPaths.map((p) => `  - ${p}`).join("\n")
+    : "  (none)";
   const systemPrompt = loadPrompt("sast_system", {
     OUTPUT_SCHEMA: JSON.stringify(buildDetectionRecordSchema(), null, 2),
   });
@@ -889,7 +907,7 @@ export async function runDetection(input: RunDetectionInput): Promise<RunDetecti
     REPO_NAME: input.repoName,
     REPO_BRANCH: input.repoBranch,
     IGNORE_PATHS: ignorePathsBlock,
-    TOKEN_BUDGET: String(input.tokenBudget),
+    THIRD_PARTY_PATHS: thirdPartyPathsBlock,
     SCA_INPUT_PATH: scaInputPath,
   });
 
@@ -897,7 +915,6 @@ export async function runDetection(input: RunDetectionInput): Promise<RunDetecti
     {
       scanRunId: input.scanRunId,
       scopeDir: input.scopeDir,
-      tokenBudget: input.tokenBudget,
       scaHintCount: input.scaHints.length,
       model: modelName,
       baseUrl,
@@ -1125,7 +1142,6 @@ export interface RunRecheckInput {
    *  valid merge targets. Paths are repo-rooted; runRecheck translates them
    *  before writing the prompt input file. */
   duplicateTargets: RecheckDuplicateTarget[];
-  tokenBudget: number;
   /** Effort level for `claude -p --effort`. Recheck is narrow verification
    *  and typically wants a lower effort than detection. */
   effortLevel: string;
@@ -1219,7 +1235,6 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
   });
   const userPrompt = loadPrompt("sast_recheck", {
     SCOPE_PATH: input.scopeDir,
-    TOKEN_BUDGET: String(input.tokenBudget),
     ISSUES_INPUT_PATH: issuesInputPath,
     DUPLICATE_TARGETS_PATH: duplicateTargetsPath,
     DUPLICATE_TARGETS_COUNT: String(targetsForModel.length),
@@ -1229,7 +1244,6 @@ export async function runRecheck(input: RunRecheckInput): Promise<RunRecheckResu
     {
       scanRunId: input.scanRunId,
       issueCount: input.issues.length,
-      tokenBudget: input.tokenBudget,
       model: modelName,
     },
     "[llmSastService] starting recheck",

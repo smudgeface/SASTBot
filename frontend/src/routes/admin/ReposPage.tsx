@@ -435,19 +435,6 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
   const [llmSastEffort, setLlmSastEffort] = useState<LlmEffort>(repo?.llm_sast_effort ?? "xhigh");
   const [llmRecheckEffort, setLlmRecheckEffort] = useState<LlmEffort>(repo?.llm_recheck_effort ?? "medium");
   const [llmSbomEffort, setLlmSbomEffort] = useState<LlmEffort>(repo?.llm_sbom_effort ?? "medium");
-  // Token budgets: empty string = null (use default). Stored as strings for input binding.
-  const [llmSbomTokenBudget, setLlmSbomTokenBudget] = useState<string>(
-    repo?.llm_sbom_token_budget != null ? String(repo.llm_sbom_token_budget) : "",
-  );
-  const [llmSbomRecheckTokenBudget, setLlmSbomRecheckTokenBudget] = useState<string>(
-    repo?.llm_sbom_recheck_token_budget != null ? String(repo.llm_sbom_recheck_token_budget) : "",
-  );
-  const [llmSastTokenBudget, setLlmSastTokenBudget] = useState<string>(
-    repo?.llm_sast_token_budget != null ? String(repo.llm_sast_token_budget) : "",
-  );
-  const [llmRecheckTokenBudget, setLlmRecheckTokenBudget] = useState<string>(
-    repo?.llm_recheck_token_budget != null ? String(repo.llm_recheck_token_budget) : "",
-  );
   const [firstPartyNamespacesText, setFirstPartyNamespacesText] = useState<string>(
     (repo?.first_party_namespaces ?? []).join(", "),
   );
@@ -499,12 +486,6 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    // Parse token budget inputs: empty → null (use default), positive int → override.
-    const parseBudget = (s: string): number | null => {
-      const n = parseInt(s.trim(), 10);
-      return !isNaN(n) && n > 0 ? n : null;
-    };
-
     const payload: RepoUpsertInput = {
       name: name.trim(),
       url: url.trim(),
@@ -521,10 +502,6 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
       first_party_namespaces,
       vendored_dirs,
       llm_sbom_effort: llmSbomEffort,
-      llm_sbom_token_budget: parseBudget(llmSbomTokenBudget),
-      llm_sbom_recheck_token_budget: parseBudget(llmSbomRecheckTokenBudget),
-      llm_sast_token_budget: parseBudget(llmSastTokenBudget),
-      llm_recheck_token_budget: parseBudget(llmRecheckTokenBudget),
       source_url_template: sourceUrlTemplate.trim() || null,
     };
 
@@ -842,78 +819,6 @@ function RepoFormDialog({ open, onOpenChange, repo }: RepoFormDialogProps) {
               <code>medium</code>. <code>xhigh</code> is Opus-only — Sonnet silently degrades it.
             </p>
           </div>
-
-          <details className="space-y-1.5">
-            <summary className="cursor-pointer text-sm font-medium select-none">
-              Token budgets{" "}
-              <span className="text-xs text-muted-foreground font-normal">
-                (optional — leave blank to use defaults)
-              </span>
-            </summary>
-            <div className="mt-2 grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label htmlFor="llm-sbom-token-budget" className="text-xs text-muted-foreground">
-                  SBOM augmentation (default 200 000)
-                </Label>
-                <Input
-                  id="llm-sbom-token-budget"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={llmSbomTokenBudget}
-                  onChange={(e) => setLlmSbomTokenBudget(e.target.value)}
-                  placeholder="200000"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="llm-sbom-recheck-token-budget" className="text-xs text-muted-foreground">
-                  SBOM recheck (default 50 000)
-                </Label>
-                <Input
-                  id="llm-sbom-recheck-token-budget"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={llmSbomRecheckTokenBudget}
-                  onChange={(e) => setLlmSbomRecheckTokenBudget(e.target.value)}
-                  placeholder="50000"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="llm-sast-token-budget" className="text-xs text-muted-foreground">
-                  SAST detection (default 300 000)
-                </Label>
-                <Input
-                  id="llm-sast-token-budget"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={llmSastTokenBudget}
-                  onChange={(e) => setLlmSastTokenBudget(e.target.value)}
-                  placeholder="300000"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="llm-recheck-token-budget" className="text-xs text-muted-foreground">
-                  SAST recheck (default 50 000)
-                </Label>
-                <Input
-                  id="llm-recheck-token-budget"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={llmRecheckTokenBudget}
-                  onChange={(e) => setLlmRecheckTokenBudget(e.target.value)}
-                  placeholder="50000"
-                />
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Maximum tokens the LLM may consume per phase per scan. Empty = use the system
-              default. Raise for very large repos; lower to cap cost on simple ones. The
-              live-progress bar in the scopes list reflects these caps.
-            </p>
-          </details>
 
           <div className="space-y-1.5">
             <Label htmlFor="first-party-namespaces">First-party namespaces</Label>

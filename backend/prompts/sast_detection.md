@@ -9,8 +9,20 @@ findings. This is the primary SAST pass; you replace Opengrep entirely.
 - **Repo:** `{{REPO_NAME}}` on branch `{{REPO_BRANCH}}`
 - **Ignore paths** (relative to scope; never report findings inside these):
 {{IGNORE_PATHS}}
-- **Token budget:** `{{TOKEN_BUDGET}}` total (input + output). Self-pace; stop
-  early and emit a `complete` record if you sense you're approaching the limit.
+- **Third-party / vendored paths** (path fragments — match anywhere in the
+  tree, e.g. a nested `.../some/deep/path/extern/<lib>/` counts):
+{{THIRD_PARTY_PATHS}}
+  **Do NOT spend analysis budget auditing code under these paths, and do not
+  report SAST findings inside them.** Vendored third-party code is covered by
+  the SCA / CVE pipeline (Goal 2), not by this pass. You MAY open a vendored
+  file briefly *only* to learn an affected API's signature for reachability —
+  never to hunt for first-party-style findings there. Your SAST findings (Goal
+  1) are about **first-party code** — the code this team wrote and ships.
+- **No fixed token budget.** Self-pace to complete the untrusted-data-flow
+  audit (see Methodology step 3 and the "Untrusted-data-flow audit" section).
+  A wall-clock cap exists as a backstop; if you must stop early, name the
+  files/functions you did not reach in your `complete` summary. Skipping
+  vendored paths (above) is what lets you do this properly.
 - **Known dependency vulnerabilities** — high+critical entries from cdxgen +
   OSV.dev, already persisted in the SASTBot database. **Do NOT re-report
   these.** Use them only for reachability analysis (Goal 2 below). Read this
@@ -242,14 +254,79 @@ present" — not for restating per-line findings in a different shape.
 ## Methodology
 
 1. Start with `find . -type f` and a quick `ls` to map the project layout.
+   Note the **first-party** trees (the code this team wrote) and set the
+   vendored / third-party paths aside — you are not auditing those (see Inputs).
 2. Run targeted `grep` / `rg` passes for known-dangerous identifiers
    (`strcpy`, `eval(`, `password\s*=`, `#define\s+\w*PASSWORD`, `innerHTML`,
-   etc.). Read matching files in full when context warrants.
-3. Cross-reference call sites against the SCA input file as you encounter
+   etc.). Read matching files in full when context warrants. Grep is a *starting
+   point*, not the method — the worst bugs have no dangerous-named call.
+3. **Run the untrusted-data-flow audit (step below) — mandatory, and NOT
+   covered by the grep pass.** The highest-severity bugs (an integer overflow on
+   an attacker-supplied length, a missing bounds check before a copy, a tainted
+   value used as an array index) reach an ordinary `memcpy` / `alloc` / `read` /
+   `[]` with attacker-influenced data. Grep can't see these; only following the
+   data can.
+4. Cross-reference call sites against the SCA input file as you encounter
    them — don't do a separate dedicated reachability pass.
-4. Emit findings as you confirm them. Don't buffer everything to the end; the
+5. Emit findings as you confirm them. Don't buffer everything to the end; the
    orchestrator streams your output and persists incrementally.
-5. When you've covered the major attack surfaces or you sense you're
-   approaching the token budget, emit `kind: "complete"` and stop.
+6. **Do NOT emit `kind: "complete"` until you have traced the codebase's major
+   untrusted-input sources to their sinks** (step below) across first-party
+   code. "I covered the major attack surfaces" / "I ran the grep passes" is not
+   sufficient on its own. If the wall-clock cap forces you to stop early, emit
+   `complete` with a `summary` that names the sources/files you did NOT get to,
+   so the next pass can prioritize them.
+
+## Untrusted-data-flow audit (mandatory)
+
+The worst memory-safety and injection bugs share one shape: **data the attacker
+controls reaches a dangerous operation without being validated first.** They are
+invisible to a grep-for-dangerous-identifiers sweep because the dangerous line
+is ordinary code — `alloc(n)`, `memcpy(d, s, n)`, `buf[i]`, `read(fd, p, n)` —
+made dangerous only by *where `n` / `i` / `s` came from*. You find these by
+following the data, not by matching strings. The bug below happened to live in
+an HTTP request parser, but **this audit is over the whole first-party codebase,
+not a list of "parsers"** — apply it wherever untrusted data flows.
+
+1. **Map the untrusted-input sources.** Find every place external /
+   attacker-influenced data enters the first-party code: network reads, HTTP
+   request bodies / headers / query / form fields, socket and protocol handlers,
+   deserialization, file / config / env parsing, IPC and shared memory, message
+   queues, and device input. Any value *derived* from one of these is also
+   tainted. (Functions named `*Parse*` / `*Decode*` / `*HandleRequest*` /
+   `*OnData*` are common loci — but treat them as hints, not the boundary of the
+   search.)
+2. **Follow the taint to its sinks.** From each source, trace the value through
+   assignments, casts, arithmetic, struct fields, and across function calls to
+   wherever it is finally *used*. The use may be in a different function or file
+   than the source — chase it there. At each sink, ask "is this value bounded /
+   validated on every path that reaches here?" Dangerous sinks for tainted data:
+   - **Size / length / count arithmetic** → integer overflow, underflow, or
+     truncation: `(narrowType)len`, `len + k`, `len * n`, `a - b` underflow.
+     (`alloc(len + 1)` with `len == SIZE_MAX` allocates 0 bytes; the next copy
+     overflows.) — CWE-190/191/197/680
+   - **Allocation sizes** and **buffer copies / writes** with no verified upper
+     bound: `alloc`, `memcpy`, `memmove`, `*_Read`, `strcpy`/`strcat`, manual
+     copy loops. — CWE-120/787/125/805
+   - **Array indices, offsets, pointer arithmetic, loop bounds** driven by a
+     tainted value. — CWE-129/823/125/787
+   - **NULL / error returns** dereferenced without a check (e.g.
+     `strncmp(FindHeader(req, "X"), …)` where the lookup may return NULL). —
+     CWE-476/252
+   - **String construction** that flows into a command, path, SQL, format
+     string, URL, or markup. — CWE-77/78/22/89/134/79/918
+   Report at the **sink line** (the cast, the size math, the unchecked copy, the
+   index), and name the source in `reasoning` (which input field it came from).
+3. **The pattern, worked once** (generalize it — do not just look for this exact
+   code): a length read from input → narrowing cast → `+1` → undersized
+   allocation → full-length copy is one instance of "tainted size, unchecked
+   sink." A tainted offset indexing a fixed array, a tainted count driving a
+   loop, a tainted string passed to `system()` are the *same class* in different
+   clothes. Hunt the class, everywhere.
+4. **Confidence for this class:** the "prefer false negatives" rule is relaxed.
+   When a value is demonstrably attacker-influenced and you cannot find a
+   validating bound on the path to a dangerous sink, emit the finding at moderate
+   confidence (e.g. `0.6`) rather than dropping it. The recheck pass prunes false
+   positives; a silently-dropped overflow ships.
 
 Begin.

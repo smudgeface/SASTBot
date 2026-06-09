@@ -19,8 +19,11 @@ import type { ActiveScan } from "@/api/types";
 import { SCAN_PHASE_LABELS, SCAN_PHASE_UNITS, SCAN_PHASE_CAPS } from "@/api/types";
 
 function ActiveScanCell({ scan }: { scan: ActiveScan }) {
+  // Always show the phase name. The token-count detail (set only by the LLM
+  // phases) renders below it, prefixed "Tokens:"; other phases show the
+  // done/total bar text.
   const phaseLabel = scan.current_phase
-    ? (scan.phase_progress?.label ?? SCAN_PHASE_LABELS[scan.current_phase])
+    ? SCAN_PHASE_LABELS[scan.current_phase]
     : "Starting…";
   const progress = scan.phase_progress;
   const unit = scan.current_phase ? SCAN_PHASE_UNITS[scan.current_phase] : undefined;
@@ -31,12 +34,14 @@ function ActiveScanCell({ scan }: { scan: ActiveScan }) {
         <Loader2 className="h-3 w-3 animate-spin" />
         {phaseLabel}
       </span>
-      {progress && progress.total > 0 && (
+      {progress?.label ? (
+        <span className="text-[10px] text-muted-foreground">Tokens: {progress.label}</span>
+      ) : progress && progress.total > 0 ? (
         <span className="text-[10px] text-muted-foreground">
           {progress.done}/{progress.total}{unit ? ` ${unit}` : ""}
           {isCap ? " (max)" : ` · ${Math.round((progress.done / progress.total) * 100)}%`}
         </span>
-      )}
+      ) : null}
     </div>
   );
 }

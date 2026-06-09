@@ -93,9 +93,9 @@ import { HighSeverityCallout } from "@/components/HighSeverityCallout";
 
 function ScanProgressBanner({ scan }: { scan: ScanRunSummary }) {
   const phase = scan.current_phase;
-  const phaseLabel = phase
-    ? (scan.phase_progress?.label ?? SCAN_PHASE_LABELS[phase])
-    : "Starting…";
+  // Always show the phase name; token-count detail (LLM phases) renders beside
+  // it prefixed "Tokens:", other phases show the done/total counter.
+  const phaseLabel = phase ? SCAN_PHASE_LABELS[phase] : "Starting…";
   const progress = scan.phase_progress;
   const unit = phase ? SCAN_PHASE_UNITS[phase] : undefined;
   const isCap = phase ? SCAN_PHASE_CAPS.has(phase) : false;
@@ -108,12 +108,14 @@ function ScanProgressBanner({ scan }: { scan: ScanRunSummary }) {
         <span className="font-medium text-amber-700 dark:text-amber-300">
           {phaseLabel}
         </span>
-        {progress && progress.total > 0 && (
+        {progress?.label ? (
+          <span className="text-xs text-muted-foreground">Tokens: {progress.label}</span>
+        ) : progress && progress.total > 0 ? (
           <span className="text-xs text-muted-foreground">
             {progress.done} of {progress.total}{unit ? ` ${unit}` : ""}
             {isCap ? " (max)" : ` · ${Math.round(pct ?? 0)}%`}
           </span>
-        )}
+        ) : null}
       </div>
       {pct !== null && (
         <div className="h-1.5 rounded bg-muted overflow-hidden">

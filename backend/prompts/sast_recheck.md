@@ -10,8 +10,7 @@ no new findings.
 ## Inputs
 
 - **Scope path:** `{{SCOPE_PATH}}` (this is your working directory)
-- **Token budget:** `{{TOKEN_BUDGET}}` (focused pass — should be a fraction of
-  the detection budget)
+- **No fixed token budget.** Self-pace; a wall-clock cap is the backstop.
 - **Issues to verify** — read from this file:
 
       {{ISSUES_INPUT_PATH}}
