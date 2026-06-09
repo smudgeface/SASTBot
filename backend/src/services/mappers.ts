@@ -211,10 +211,6 @@ export function repoToOut(repo: Repo, clonePresent: boolean): RepoOut {
     vendored_dirs: repo.vendoredDirs,
     llm_sbom_effort: repo.llmSbomEffort as "low" | "medium" | "high" | "xhigh" | "max",
     llm_sbom_recheck_effort: repo.llmSbomRecheckEffort as "low" | "medium" | "high" | "xhigh" | "max",
-    llm_sbom_token_budget: repo.llmSbomTokenBudget ?? null,
-    llm_sbom_recheck_token_budget: repo.llmSbomRecheckTokenBudget ?? null,
-    llm_sast_token_budget: repo.llmSastTokenBudget ?? null,
-    llm_recheck_token_budget: repo.llmRecheckTokenBudget ?? null,
     last_cloned_at: repo.lastClonedAt ? repo.lastClonedAt.toISOString() : null,
     created_at: repo.createdAt.toISOString(),
   };

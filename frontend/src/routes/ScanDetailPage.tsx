@@ -1089,11 +1089,14 @@ export default function ScanDetailPage() {
             <CardHeader>
               <CardTitle className="text-base">
                 {s.current_phase
-                  ? (s.phase_progress?.label ?? SCAN_PHASE_LABELS[s.current_phase])
+                  ? SCAN_PHASE_LABELS[s.current_phase]
                   : "Scan in progress…"}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
+              {s.phase_progress?.label && (
+                <div className="text-xs text-muted-foreground">Tokens: {s.phase_progress.label}</div>
+              )}
               {s.phase_progress && s.phase_progress.total > 0 && (() => {
                 const unit = s.current_phase ? SCAN_PHASE_UNITS[s.current_phase] : undefined;
                 const isCap = s.current_phase ? SCAN_PHASE_CAPS.has(s.current_phase) : false;

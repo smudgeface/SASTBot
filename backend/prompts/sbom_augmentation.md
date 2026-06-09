@@ -144,11 +144,11 @@ If the component has a known version, fill it in; otherwise use `*`.
 Omit the `cpe` field entirely for npm/pypi/maven/nuget components and for
 any C/C++ library whose canonical CPE you don't already know.
 
-## Token budget
+## Pacing
 
-Target output tokens: `{{TOKEN_BUDGET}}` total for this session. Self-pace.
-If you're approaching the limit, stop after finishing the current step and
-emit what you have so far. Partial coverage is better than no output.
+No fixed token budget. Self-pace; a wall-clock cap is the backstop.
+If you must stop early, finish the current step and emit what you have so far.
+Partial coverage is better than no output.
 
 ## Output
 

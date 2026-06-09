@@ -177,7 +177,6 @@ export interface RunSbomAugmentationInput {
   components: CdxComponent[];
   firstPartyNamespaces: string[];
   vendoredDirs: string[];
-  tokenBudget: number;
   effortLevel: string;
   orgId: string | null;
   onProgress?: (usage: TokenUsage) => void;
@@ -491,7 +490,6 @@ export async function runSbomAugmentation(
     SCOPE_PATH_LABEL: input.scopePath === "/" || input.scopePath === "" ? "/" : input.scopePath,
     FIRST_PARTY_NAMESPACES: firstPartyBlock,
     VENDORED_DIRS: vendoredDirsBlock,
-    TOKEN_BUDGET: String(input.tokenBudget),
   });
 
   logger.info(
@@ -501,7 +499,6 @@ export async function runSbomAugmentation(
       componentCount: input.components.length,
       firstPartyNamespaces: input.firstPartyNamespaces,
       vendoredDirs: input.vendoredDirs,
-      tokenBudget: input.tokenBudget,
       model: modelName,
       baseUrl,
     },

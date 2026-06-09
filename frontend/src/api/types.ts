@@ -171,11 +171,6 @@ export interface Repo {
   llm_sbom_effort: LlmEffort;
   /** SBOM Component Recheck Stage 2: effort for the recheck pass. */
   llm_sbom_recheck_effort: LlmEffort;
-  /** Per-repo token budgets. null = use the worker's compiled-in default. */
-  llm_sbom_token_budget: number | null;
-  llm_sbom_recheck_token_budget: number | null;
-  llm_sast_token_budget: number | null;
-  llm_recheck_token_budget: number | null;
   source_url_template: string | null;
   /** Live disk truth: a cached clone exists on the server right now. Source of
    *  truth for the "cached" badge — last_cloned_at is just an informational
@@ -207,11 +202,6 @@ export interface RepoUpsertInput {
   llm_sbom_effort?: LlmEffort;
   /** SBOM Component Recheck Stage 2: effort for the recheck pass. */
   llm_sbom_recheck_effort?: LlmEffort;
-  /** Per-repo token budgets. null/omitted = use the worker's compiled-in default. */
-  llm_sbom_token_budget?: number | null;
-  llm_sbom_recheck_token_budget?: number | null;
-  llm_sast_token_budget?: number | null;
-  llm_recheck_token_budget?: number | null;
   source_url_template?: string | null;
   /** Existing credential to link. Ignored if `credential` (inline) is supplied. */
   credential_id?: string | null;

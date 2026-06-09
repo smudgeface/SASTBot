@@ -130,7 +130,7 @@ are preserved.
 
 | Key (env form) | YAML form | CLI form | Default | Description |
 |----------------|-----------|----------|---------|-------------|
-| `CLAUDE_DETECTION_TIMEOUT_MS` | `claude_detection_timeout_ms` | `--claude-detection-timeout-ms` | `3600000` (60 min) | Wall-clock cap on the SAST detection subprocess. Raise for very large monorepos. The token-budget `--effort` flag normally stops the model first; this is a safety net. |
+| `CLAUDE_DETECTION_TIMEOUT_MS` | `claude_detection_timeout_ms` | `--claude-detection-timeout-ms` | `3600000` (60 min) | Wall-clock cap on the SAST detection subprocess. Raise for very large monorepos. The model normally self-paces and stops first; this is the runaway safety net. |
 | `CLAUDE_RECHECK_TIMEOUT_MS` | `claude_recheck_timeout_ms` | `--claude-recheck-timeout-ms` | `1800000` (30 min) | Wall-clock cap on the recheck subprocess (a narrower pass than detection). |
 | `CLAUDE_STDOUT_STALENESS_MS` | `claude_stdout_staleness_ms` | `--claude-stdout-staleness-ms` | `300000` (5 min) | Kill the subprocess if no stdout arrives for this many ms. Guards against an endpoint that accepted the connection but stopped producing data. |
 
@@ -160,25 +160,16 @@ server) and `tar`; no extra configuration is required for backup or restore.
 envelope. Omitting the params applies the defaults; a page beyond the last
 returns an empty `items` array (not an error).
 
-## Per-repo LLM token budgets
+## LLM pacing (no token budgets)
 
-Each repository can override the default token budget for the four LLM phases
-that consume Claude Code CLI tokens. These are DB-level settings configured via
-the **Edit repository** dialog (the "Token budgets" section, below "LLM effort").
-
-| Field | Phase | System default |
-|-------|-------|---------------|
-| SBOM augmentation | `llm_sbom` — adds vendored libs cdxgen missed, drops first-party noise | 200 000 |
-| SBOM recheck | `llm_sbom_recheck` — confirms known components still present | 50 000 |
-| SAST detection | `llm_detection` — open-ended agentic SAST pass | 300 000 |
-| SAST recheck | `llm_recheck` — narrow per-issue recheck for findings not re-emitted | 50 000 |
-
-**When to override:** raise SAST detection for large monorepos that need more
-exploration; lower it on trivially small repos to cap cost; raise SBOM
-augmentation for repos with large vendored (`extern/`) trees. The recheck
-budgets rarely need adjustment. The budget is a cap, not a target — the LLM
-stops when it reaches it. Clearing a field (empty input) resets it to NULL =
-the compiled-in default. Budgets are per-repo only; there is no per-org override.
+There are no per-repo token budgets (removed in v0.25.0). Token counts on this
+setup do not predict cost, so a token "budget" was not a meaningful cost control.
+Instead, each LLM pass **self-paces** — the model decides when it has covered the
+work — and the **wall-clock cap** (`CLAUDE_DETECTION_TIMEOUT_MS`, default 60 min)
+is the runaway backstop. During a scan, the LLM phases report **live token
+counts** (input / output / cache-hit / cache-new) as the progress signal rather
+than a percentage-of-budget bar. Per-repo `--effort` still tunes how hard the
+detection and recheck passes work.
 
 ## Validation errors
 

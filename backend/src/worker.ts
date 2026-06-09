@@ -11,6 +11,7 @@ import { SCAN_QUEUE_NAME, type ScanJobData } from "./queue/scanQueue.js";
 import { APP_VERSION } from "./routes/version.js";
 import { cloneOrRefresh, RemoteUnreachableError } from "./services/repoCache.js";
 import { GitCloneError } from "./services/gitClone.js";
+import { buildThirdPartyPaths } from "./services/thirdPartyPaths.js";
 import {
   extractCleanedComponents,
   runCdxgen,
@@ -264,14 +265,17 @@ async function setPhase(
 }
 
 // ---------------------------------------------------------------------------
-// LLM token-budget defaults. Per-repo overrides are stored as nullable Int?
-// columns; NULL means "use this default".
+// Token-count progress helpers (no fixed budget — raw token counts reported)
 // ---------------------------------------------------------------------------
 
-const DEFAULT_LLM_SBOM_TOKEN_BUDGET = 200_000;
-const DEFAULT_LLM_SBOM_RECHECK_TOKEN_BUDGET = 50_000;
-const DEFAULT_LLM_SAST_TOKEN_BUDGET = 300_000;
-const DEFAULT_LLM_RECHECK_TOKEN_BUDGET = 50_000;
+function abbrevTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 100_000 ? 0 : 1)}k`;
+  return String(n);
+}
+function tokenCountLabel(u: { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }): string {
+  return `↓${abbrevTokens(u.inputTokens)} in · ↑${abbrevTokens(u.outputTokens)} out · cache ${abbrevTokens(u.cacheReadInputTokens)} hit / ${abbrevTokens(u.cacheCreationInputTokens)} new`;
+}
 
 // ---------------------------------------------------------------------------
 // LLM-mode SAST pipeline (M6 — runs when repo.sastEngine === "llm")
@@ -283,8 +287,7 @@ interface LlmSastPipelineInput {
     name: string;
     defaultBranch: string;
     ignorePaths: unknown;
-    llmSastTokenBudget: number | null;
-    llmRecheckTokenBudget: number | null;
+    vendoredDirs: string[];
     llmSastEffort: string;
     llmRecheckEffort: string;
     reachabilityEnabled: boolean;
@@ -357,9 +360,17 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
     }
 
     // 2. Detection pass.
-    const sastTokenBudget = repo.llmSastTokenBudget ?? DEFAULT_LLM_SAST_TOKEN_BUDGET;
-    log.info({ scaHintCount: scaHints.length, budget: sastTokenBudget, effort: repo.llmSastEffort }, "[worker] LLM detection start");
-    await setPhase(scanRunId, "llm_detection", { done: 0, total: sastTokenBudget });
+    // Third-party exclusion = configured vendoredDirs ∪ this run's SBOM component
+    // roots (sbom_components persisted by the earlier sbom_persist phase). The
+    // SBOM pins vendored libs precisely, including ones outside extern/ etc.
+    const configuredVendoredDirs =
+      repo.vendoredDirs?.length > 0 ? repo.vendoredDirs : ["extern/", "third-party/", "vendor/"];
+    const thirdPartyPaths = await buildThirdPartyPaths(scanRunId, configuredVendoredDirs);
+    log.info(
+      { scaHintCount: scaHints.length, effort: repo.llmSastEffort, thirdPartyPathCount: thirdPartyPaths.length },
+      "[worker] LLM detection start",
+    );
+    await setPhase(scanRunId, "llm_detection", { done: 0, total: 0 });
     // Throttle live progress writes to once every 2s — matches the
     // useScanDetail / useScopes refetch cadence so the UI sees an update on
     // every poll without burying the DB in updates during a long claude-p run.
@@ -371,8 +382,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       repoName: repo.name,
       repoBranch: repo.defaultBranch,
       ignorePaths: Array.isArray(repo.ignorePaths) ? (repo.ignorePaths as string[]) : [],
+      thirdPartyPaths,
       scaHints,
-      tokenBudget: sastTokenBudget,
       effortLevel: repo.llmSastEffort,
       orgId: run.orgId,
       wallClockTimeoutMs: config.claudeDetectionTimeoutMs,
@@ -383,7 +394,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         lastProgressAt = now;
         void setPhase(scanRunId, "llm_detection", {
           done: usage.inputTokens + usage.outputTokens,
-          total: sastTokenBudget,
+          total: 0,
+          label: tokenCountLabel(usage),
         });
       },
     });
@@ -612,13 +624,11 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         cwe: t.latestCweIds[0] ?? "CWE-UNKNOWN",
         summary: t.latestLlmSummary ?? t.latestRuleMessage ?? "",
       }));
-      const recheckBudget = repo.llmRecheckTokenBudget ?? DEFAULT_LLM_RECHECK_TOKEN_BUDGET;
-      log.info({ count: recheckIssues.length, budget: recheckBudget, effort: repo.llmRecheckEffort }, "[worker] LLM recheck start");
-      // Use tokens-against-budget for live progress: verdicts arrive batched
-      // at the end of the claude-p run, so done=verdictCount only flips from
-      // 0 to N right before the phase ends and the user sees no movement.
-      // Token usage advances per LLM round-trip (~20 over a recheck run).
-      await setPhase(scanRunId, "llm_recheck", { done: 0, total: recheckBudget });
+      log.info({ count: recheckIssues.length, effort: repo.llmRecheckEffort }, "[worker] LLM recheck start");
+      // Use token counts for live progress: verdicts arrive batched at the end
+      // of the claude-p run, so done=verdictCount only flips from 0 to N right
+      // before the phase ends and the user sees no movement.
+      await setPhase(scanRunId, "llm_recheck", { done: 0, total: 0 });
       let lastRecheckProgressAt = 0;
       const recheck = await runRecheck({
         scanRunId,
@@ -626,7 +636,6 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         scopePath,
         issues: recheckIssues,
         duplicateTargets,
-        tokenBudget: recheckBudget,
         effortLevel: repo.llmRecheckEffort,
         orgId: run.orgId,
         wallClockTimeoutMs: config.claudeRecheckTimeoutMs,
@@ -637,7 +646,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
           lastRecheckProgressAt = now;
           void setPhase(scanRunId, "llm_recheck", {
             done: usage.inputTokens + usage.outputTokens,
-            total: recheckBudget,
+            total: 0,
+            label: tokenCountLabel(usage),
           });
         },
       });
@@ -713,6 +723,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
         data: {
           llmInputTokens: { increment: recheck.usage.inputTokens },
           llmOutputTokens: { increment: recheck.usage.outputTokens },
+          llmCacheReadTokens: { increment: recheck.usage.cacheReadInputTokens },
+          llmCacheWriteTokens: { increment: recheck.usage.cacheCreationInputTokens },
           llmRequestCount: { increment: recheck.usage.requestCount },
         },
       });
@@ -724,6 +736,8 @@ async function runLlmSastPipeline(input: LlmSastPipelineInput): Promise<void> {
       data: {
         llmInputTokens: { increment: detection.usage.inputTokens },
         llmOutputTokens: { increment: detection.usage.outputTokens },
+        llmCacheReadTokens: { increment: detection.usage.cacheReadInputTokens },
+        llmCacheWriteTokens: { increment: detection.usage.cacheCreationInputTokens },
         llmRequestCount: { increment: detection.usage.requestCount },
       },
     });
@@ -1448,13 +1462,9 @@ const worker = new Worker<ScanJobData>(
       let sbomCpeMap = new Map<string, string>();
       let sbomIdentityMap = new Map<string, { componentRoot: string | null; evidence: Array<{ path: string; line: number | null }> }>();
       let augmentationFailed = false;
-      const sbomTokenBudget = repo.llmSbomTokenBudget ?? DEFAULT_LLM_SBOM_TOKEN_BUDGET;
 
       try {
-        await setPhase(scanRunId, "llm_sbom", {
-          done: 0,
-          total: sbomTokenBudget,
-        });
+        await setPhase(scanRunId, "llm_sbom", { done: 0, total: 0 });
         const augResult = await runSbomAugmentation({
           scanRunId,
           scopeDir: scanDir,
@@ -1465,13 +1475,13 @@ const worker = new Worker<ScanJobData>(
             repo.vendoredDirs?.length > 0
               ? repo.vendoredDirs
               : ["extern/", "third-party/", "vendor/"],
-          tokenBudget: sbomTokenBudget,
           effortLevel: repo.llmSbomEffort ?? "medium",
           orgId: run.orgId,
           onProgress: (usage) => {
             void setPhase(scanRunId, "llm_sbom", {
               done: usage.inputTokens + usage.outputTokens,
-              total: sbomTokenBudget,
+              total: 0,
+              label: tokenCountLabel(usage),
             });
           },
         });
@@ -1609,22 +1619,21 @@ const worker = new Worker<ScanJobData>(
       // per-scan sbom_components table is NOT modified — it stays immutable
       // post-ingest and contains direct observations only.
       try {
-        const sbomRecheckTokenBudget = repo.llmSbomRecheckTokenBudget ?? DEFAULT_LLM_SBOM_RECHECK_TOKEN_BUDGET;
         const recheckEffort = repo.llmSbomRecheckEffort ?? "medium";
-        await setPhase(scanRunId, "llm_sbom_recheck", { done: 0, total: sbomRecheckTokenBudget });
+        await setPhase(scanRunId, "llm_sbom_recheck", { done: 0, total: 0 });
 
         const recheckResult = await runSbomRecheck({
           scanRunId,
           scopeId: run.scopeId,
           scopeDir: scanDir,
           effortLevel: recheckEffort,
-          tokenBudget: sbomRecheckTokenBudget,
           orgId: run.orgId,
           includeDevDeps: repo.includeDevDeps,
           onProgress: (usage) => {
             void setPhase(scanRunId, "llm_sbom_recheck", {
               done: usage.inputTokens + usage.outputTokens,
-              total: sbomRecheckTokenBudget,
+              total: 0,
+              label: tokenCountLabel(usage),
             });
           },
         });
@@ -1730,6 +1739,8 @@ const worker = new Worker<ScanJobData>(
             data: {
               llmInputTokens: { increment: recheckResult.usage.inputTokens },
               llmOutputTokens: { increment: recheckResult.usage.outputTokens },
+              llmCacheReadTokens: { increment: recheckResult.usage.cacheReadInputTokens },
+              llmCacheWriteTokens: { increment: recheckResult.usage.cacheCreationInputTokens },
               llmRequestCount: { increment: recheckResult.usage.requestCount },
             },
           });

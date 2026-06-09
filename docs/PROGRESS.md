@@ -4488,3 +4488,66 @@ compatible). All three surfaces moved together per policy.
   fetch-path bug would have passed every unit test but produced a
   blank API reference page in production. The same lesson keeps
   coming up — keep building this muscle.
+
+## 2026-06-05 — SAST coverage investigation + cost-weighted token accounting (v0.25.0)
+
+**What shipped.** Investigated why the LLM SAST pass missed a real memory-safety
+bug (an attacker-controlled length reaching an allocation/copy without
+validation, plus a NULL-return dereference) in a customer C/C++ codebase's HTTP
+request parser. Confirmed by instrumented reproduction (added an off-by-default
+`SASTBOT_RAW_STDOUT_DUMP` tee in `llmSastService.ts` capturing claude `tool_use`
+events): detection read 4 of ~6 files in the offending directory, **0 reads of
+the file itself**, ended on a clean `complete` at 22 of 60 min, covering <1% of
+files. Root cause = grep/category-anchored breadth sweep with a stop criterion
+("covered the major attack surfaces") that fires before input parsers are
+deep-read; the bug has no greppable identifier. (Customer-specific writeup kept
+local — not in the tracked tree.)
+
+Fixes:
+- `prompts/sast_detection.md` — generalized to a bug-*class* hunt, not a parser
+  checklist. Mandatory **"Untrusted-data-flow audit"**: map untrusted-input
+  sources, follow the taint across functions/files, flag wherever it reaches an
+  unvalidated dangerous sink (size arithmetic, alloc, copy, index, NULL deref,
+  command/path/SQL/format construction) — anywhere in **first-party** code.
+  Stop criterion: cannot `complete` until major sources are traced to sinks.
+  Plus **vendored/third-party exclusion** (`THIRD_PARTY_PATHS` block) so the
+  model stops burning budget on third-party code (covered by SCA/CVE). The
+  exclusion set (`services/thirdPartyPaths.ts`) is the **union** of the repo's
+  configured `vendoredDirs` and the SCA SBOM's per-component `componentRoot`s for
+  the run (`sbom_components`, persisted before `llm_detection`) — the SBOM pins
+  vendored libs precisely, including ones outside `extern/`. False-negative bias
+  relaxed for this class.
+- **Token budgets removed.** Started as "the gauge excludes cache reads"
+  (true: `llm_input_tokens` undercounted ~50×), briefly became a cost-weighted
+  effective-token scheme, then — once two real runs showed cost ~equal *despite
+  2–4× different token usage* (cost doesn't track tokens on this gateway; the
+  CLI's `total_cost_usd` is itself accurate, matching gateway billing) — ended in
+  removing per-pass token budgets entirely (migration
+  `20260608044716_drop_llm_token_budgets`; `tokenCost.ts` deleted). The model
+  self-paces, the wall-clock cap is the backstop, and live progress reports raw
+  token counts (input/output/cache-hit/cache-new). Kept the raw cache-token
+  columns (migration `20260607044235`) for that display, not cost.
+
+**Verification — and an open problem.** An instrumented detection-only dry-run
+with the new prompt found the bug (plus two related ones) and stopped reading
+vendored trees. But a subsequent full real scan with the **identical** prompt
+(verified: one prompt file, byte-identical host↔container, loader reads fresh —
+no second/stale prompt) did **not** reproduce those findings. So the miss is
+**detection non-determinism**: a single agentic pass has variable recall for any
+specific bug, even with a mandatory-audit instruction. Reliable recall likely
+needs ensemble / multiple passes — tracked as open. Distinguishing
+"didn't-read" vs "read-but-silent" on the production path needs the worker run
+with `SASTBOT_RAW_STDOUT_DUMP`.
+
+**What we learned.** (1) The token "budget" never constrained anything — the
+model self-paces on judgment, not the number. (2) Token counts don't predict
+cost on this gateway (cost stayed flat across 2–4× token swings), so no
+token-weighting scheme is a valid cost control; the CLI's `total_cost_usd` is
+accurate, and a real cap belongs at the gateway (LiteLLM per-key budget), not in
+token math. (3) A grep-seeded methodology systematically misses memory-safety
+bugs whose sink (`alloc`/`memcpy`/`read`/index with an attacker-derived value)
+carries no dangerous-named identifier — forcing taint→sink tracing helps, but
+(4) one agentic pass is not a reliable detector for any *specific* bug.
+
+Version: 0.24.0 → 0.25.0. Migrations: `20260607044235_add_cache_token_counts`,
+`20260608044716_drop_llm_token_budgets`.

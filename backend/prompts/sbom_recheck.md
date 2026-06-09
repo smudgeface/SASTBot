@@ -13,8 +13,8 @@ Grep, Read, and Bash to explore freely.
 
 You have two tasks in this session. Complete **Task 1 first**, then **Task 2**.
 
-**Token budget:** {{TOKEN_BUDGET}} tokens across both tasks. Work through
-candidates in order. Stop emitting verdicts if you approach the budget.
+**Pacing:** No fixed token budget. Self-pace; a wall-clock cap is the backstop.
+Work through candidates in order.
 
 ---
 

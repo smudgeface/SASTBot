@@ -79,8 +79,9 @@ Drilling into a scan run gives you:
 - **Phase timeline** — every phase with its start/end timestamps.
 - **Warnings panel** — every `scan_warnings` row in chronological
   order, with severity chip. The full warning body is shown inline.
-- **Token usage** — per-pass input/output tokens, request count,
-  estimated cost.
+- **Token usage** — per-pass input/output tokens, cache read/write
+  tokens, and request count. (No cost estimate — token counts don't
+  predict cost on a gateway; consult your LLM gateway for actual spend.)
 - **Tabs**: Components (per-scan SBOM), Findings (combined SCA + SAST
   list as seen by this scan), SAST view, and SBOM / SARIF viewers.
 

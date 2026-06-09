@@ -358,7 +358,6 @@ export interface RunSbomRecheckInput {
   scopeId: string;
   scopeDir: string;
   effortLevel: string;
-  tokenBudget: number;
   orgId: string | null;
   /** When false, dev-only components are out of scope for this repo and are
    *  excluded from the recheck entirely (they don't appear in the GUI, OSV, or
@@ -615,7 +614,6 @@ export async function runSbomRecheck(input: RunSbomRecheckInput): Promise<RunSbo
     const systemPrompt = loadPrompt("sbom_recheck_system", {});
     const userPrompt = loadPrompt("sbom_recheck", {
       SCOPE_PATH: input.scopeDir,
-      TOKEN_BUDGET: String(input.tokenBudget),
       CANDIDATES_PATH: candidatesPath,
       ALL_COMPONENTS_PATH: allComponentsPath,
     });
