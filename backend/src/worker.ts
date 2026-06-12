@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -2098,8 +2099,41 @@ worker.on("failed", (job, err) => {
 
 worker.on("ready", () => logger.info("[worker] ready"));
 
+// ---------------------------------------------------------------------------
+// Liveness heartbeat
+//
+// The worker shares the backend image, whose baked HEALTHCHECK probes the HTTP
+// /healthz endpoint. The worker serves no HTTP, so that probe always fails and
+// the container reports "unhealthy" even though the BullMQ process is fine.
+// Instead, touch a heartbeat file on an event-loop-driven timer; the
+// compose-level worker healthcheck checks the file's freshness. A dead process
+// or a synchronously-blocked event loop lets the file go stale → unhealthy,
+// which is the liveness signal we actually want. (Long `claude -p` subprocess
+// awaits keep the loop free, so the heartbeat stays fresh during a scan — the
+// worker is genuinely alive then.)
+//
+// WORKER_HEARTBEAT_PATH is mirrored in the worker `healthcheck:` block in
+// docker/compose/*.yml — keep the two in sync.
+// ---------------------------------------------------------------------------
+
+export const WORKER_HEARTBEAT_PATH = "/tmp/sastbot-worker.heartbeat";
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
+function touchHeartbeat(): void {
+  try {
+    writeFileSync(WORKER_HEARTBEAT_PATH, String(Date.now()));
+  } catch (err) {
+    logger.warn({ err }, "[worker] failed to write liveness heartbeat");
+  }
+}
+
+touchHeartbeat(); // write once at boot so the first healthcheck can pass
+const heartbeatTimer = setInterval(touchHeartbeat, HEARTBEAT_INTERVAL_MS);
+heartbeatTimer.unref(); // never keep the process alive solely for the heartbeat
+
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, "[worker] shutting down");
+  clearInterval(heartbeatTimer);
   try {
     await worker.close();
   } catch (err) {
