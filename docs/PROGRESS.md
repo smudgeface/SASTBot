@@ -4551,3 +4551,37 @@ carries no dangerous-named identifier — forcing taint→sink tracing helps, bu
 
 Version: 0.24.0 → 0.25.0. Migrations: `20260607044235_add_cache_token_counts`,
 `20260608044716_drop_llm_token_budgets`.
+
+## 2026-06-12 — worker liveness healthcheck + prod-deploy skill hardening (v0.25.1)
+
+**What shipped.** (1) The `worker` container reported **unhealthy** in `docker ps`
+(prod, and no health signal at all in dev) despite a perfectly fine BullMQ
+process. Root cause: the worker shares the backend image, whose baked
+`HEALTHCHECK` probes HTTP `/healthz` — but the worker serves no HTTP, so the
+probe always failed. Fix: the worker now touches a liveness heartbeat file
+(`/tmp/sastbot-worker.heartbeat`) every 15s from an event-loop `setInterval`
+(`backend/src/worker.ts`), and each compose flavour gives the `worker` service a
+healthcheck that checks the file's freshness via a portable shell mtime test
+(`docker-compose.yml`, `.prod.yml`, `.proxmox.yml`). This overrides the image's
+HTTP probe for the worker only; the backend keeps `/healthz`. A dead or
+synchronously-blocked event loop lets the file go stale → unhealthy, which is the
+real liveness signal we wanted. Verified in dev: worker → `healthy`, heartbeat
+refreshing, `tsc --noEmit` clean. (2) Encoded the 2026-06-12 registry-auth gotcha
+into the committed `sastbot-update-prod` SKILL.md, generically: a `docker login`
+is per-OS-user, so `sudo docker compose pull` (as root) reads root's empty config
+and fails `Authentication required` when a dedicated deploy user owns the
+deploy files + the registry login. The skill now splits privileges — `${SUDO}`
+for the `.env` edit, `${DOCKER}` (run-as the registry-authenticated `DOCKER_USER`
+read from the gitignored sidecar) for all docker commands — and notes that a
+personal API token may not authenticate to the OCI registry. Template +
+local sidecar updated to carry `DOCKER_USER`/`DOCKER_HOME`.
+
+**What we learned.** A baked image-level `HEALTHCHECK` is correct for the
+primary service but silently wrong for any sibling that reuses the image with a
+different command — override it per-service rather than disabling. A heartbeat
+file is a more honest worker-liveness signal than either a process check
+(process can hang with the loop blocked) or a Redis ping (checks the dependency,
+not the worker), and a pure-shell mtime check stays portable across the dev
+(`tsx`) and prod (`node dist`) images with no extra tooling.
+
+Version: 0.25.0 → 0.25.1. No schema migration (image/compose + skill docs only).
